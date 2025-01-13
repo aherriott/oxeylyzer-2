@@ -11,6 +11,7 @@ pub struct Stats {
     pub unweighted_finger_distance: [f64; 10],
     pub sfbs: f64,
     pub sfs: f64,
+    pub stretches: f64,
     pub trigrams: TrigramStats,
 }
 
@@ -50,6 +51,7 @@ impl Analyzer {
 
         let sfbs = self.sfbs(&cache) as f64 / self.data.char_total;
         let sfs = self.sfs(&cache) as f64 / self.data.bigram_total;
+        let stretches = self.stretches(&cache) as f64 / self.data.bigram_total / 100.0;
 
         let trigrams = self.trigram_stats(self.trigrams(&cache));
 
@@ -60,6 +62,7 @@ impl Analyzer {
             unweighted_finger_distance,
             sfbs,
             sfs,
+            stretches,
             trigrams,
         }
     }

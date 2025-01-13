@@ -241,7 +241,7 @@ pub struct CorpusCleanerIterator<'a, I> {
     use_window: bool,
 }
 
-impl<'a, I> Iterator for CorpusCleanerIterator<'a, I>
+impl<I> Iterator for CorpusCleanerIterator<'_, I>
 where
     I: Iterator<Item = char>,
 {

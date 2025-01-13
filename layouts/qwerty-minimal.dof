@@ -1,13 +1,12 @@
 {
-    "name": "q",
+    "name": "Qwerty Minimal",
     "board": "ansi",
     "layers": {
         "main": [
             "q w e r t  y u i o p  ",
             "a s d f g  h j k l ; '",
-            "z x c v b  n m , . /  ",
-            " ~ ~   spc   ]        "
+            "z x c v b  n m , . /  "
         ]
     },
-    "fingering": "angle"
+    "fingering": "traditional"
 }

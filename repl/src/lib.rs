@@ -8,8 +8,9 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::Write as _,
+    io::{stdout, Write as _},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use thiserror::Error;
 
@@ -94,13 +95,14 @@ impl Repl {
 
         println!(
             concat!(
-                "score:   {}\n\n",
-                "sfbs:    {:.3}%\n",
-                "sfs:     {:.3}%\n",
+                "score:     {}\n\n",
+                "sfbs:      {:+.3}%\n",
+                "sfs:       {:+.3}%\n",
+                "stretches: {:+.3}%\n",
                 "finger usage:\n{}\n",
                 "finger sfbs:\n{}\n"
             ),
-            score, stats.sfbs, stats.sfs, finger_use, finger_sfbs,
+            score, stats.sfbs, stats.sfs, stats.stretches, finger_use, finger_sfbs,
         );
 
         self.trigrams(name)
@@ -126,15 +128,27 @@ impl Repl {
         };
 
         let start = std::time::Instant::now();
+        let iteration = AtomicUsize::new(0);
 
         let mut layouts = Vec::with_capacity(count);
         (0..count)
             .into_par_iter()
             .map(|_| {
                 let l = layout.random_with_pins(&pins);
-                self.a.alternative_d3(l, &pins)
+                let res = self.a.alternative_d3(l, &pins);
                 // self.a.greedy_depth2_improve(l)
                 // .annealing_improve(starting_layout, 20_500_000_000_000.0, 0.987, 5000)
+
+                iteration.fetch_add(1, Ordering::Relaxed);
+
+                print!(
+                    "\rgenerated {}/{}",
+                    iteration.load(Ordering::Relaxed),
+                    count
+                );
+                stdout().flush().unwrap();
+
+                res
             })
             .collect_into_vec(&mut layouts);
 
@@ -188,6 +202,40 @@ impl Repl {
         Ok(())
     }
 
+    fn stretches(&self, name: &str, count: Option<usize>) -> Result<()> {
+        let layout = self.layout(name)?;
+        let cache = self.a.cached_layout(layout.clone(), &[]);
+        let count = count.unwrap_or(10);
+
+        cache
+            .stretch_bigrams
+            .all_pairs
+            .iter()
+            .flat_map(
+                |BigramPair {
+                     pair: PosPair(a, b),
+                     dist,
+                 }| {
+                    let u1 = cache.keys[*a as usize];
+                    let u2 = cache.keys[*b as usize];
+
+                    let c1 = self.a.mapping().get_c(u1);
+                    let c2 = self.a.mapping().get_c(u2);
+
+                    let f = self.a.data.get_bigram_u([u1, u2]) as f64 / self.a.data.bigram_total;
+                    let f2 = self.a.data.get_bigram_u([u2, u1]) as f64 / self.a.data.bigram_total;
+                    let dist = *dist as f64;
+
+                    [([c1, c2], f * dist), ([c2, c1], f2 * dist)]
+                },
+            )
+            .sorted_by(|(_, f1), (_, f2)| f2.total_cmp(f1))
+            .take(count)
+            .for_each(|([c1, c2], f)| println!("{c1}{c2}: {f:.3}"));
+
+        Ok(())
+    }
+
     pub fn trigrams(&self, name: &str) -> Result<()> {
         let layout = self.layout(name)?;
         let trigram_stats = self.a.stats(layout).trigrams;
@@ -226,6 +274,19 @@ impl Repl {
         Ok(())
     }
 
+    pub fn similarity(&self, name: &str) -> Result<()> {
+        let layout = self.layout(name)?;
+
+        self.layouts
+            .values()
+            .filter(|cmp| cmp.name.to_lowercase() != name.to_lowercase())
+            .map(|cmp| (cmp.name.as_str(), self.a.similarity(layout, cmp)))
+            .sorted_by(|(_, s1), (_, s2)| s2.cmp(s1))
+            .for_each(|(n, s)| println!("{n:<15} {:.3}", s as f64 / self.a.data.char_total));
+
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         let new = Self::with_config(&self.config_path)?;
 
@@ -251,7 +312,9 @@ impl Repl {
             OxeylyzerCmd::Rank(_) => self.rank(),
             OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.count, g.pins)?,
             OxeylyzerCmd::Sfbs(s) => self.sfbs(&s.name, s.count)?,
+            OxeylyzerCmd::Stretches(s) => self.stretches(&s.name, s.count)?,
             OxeylyzerCmd::Trigrams(t) => self.trigrams(&t.name)?,
+            OxeylyzerCmd::Similarity(s) => self.similarity(&s.name)?,
             OxeylyzerCmd::R(_) => self.reload()?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
@@ -322,7 +385,7 @@ pub fn pin_positions(layout: &Layout, pin_chars: String) -> Vec<usize> {
             let find = &pin_chars.chars().next().unwrap();
 
             match layout.keys.iter().position(|c| find == c) {
-                Some(i) => vec![i],
+                Some(i) => Vec::from([i]),
                 None => vec![],
             }
         }

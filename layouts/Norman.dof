@@ -1,0 +1,19 @@
+
+
+  {
+	"name": "Norman",
+	"authors": [
+		"David Norman"
+	],
+	"board": "ansi",
+	"year": 2013,
+	"link": "https://normanlayout.info/",
+	"layers": {
+		"main": [
+			"q w d f k  j u r l ;  ",
+            "a s e t g  y n i o h '",
+            "z x c v b  p m , . /  "
+		]
+	},
+	"fingering": "traditional"
+}

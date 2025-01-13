@@ -16,7 +16,7 @@ impl Analyzer {
 
             for &pair in swaps.iter() {
                 cache.swap(pair);
-                let score = self.score_cached_swap(&cache, pair);
+                let score = self.score_cached_swap(&mut cache, pair);
 
                 if score > best_score {
                     best_loop_score = score;
@@ -249,14 +249,14 @@ impl Analyzer {
 mod tests {
     use super::*;
 
-    fn analyzer_layout() -> (Analyzer, Layout) {
-        let data = crate::prelude::Data::load("../data/shai.json").expect("this should exist");
+    fn analyzer_layout(name: &str) -> (Analyzer, Layout) {
+        let data = crate::prelude::Data::load("../data/english.json").expect("this should exist");
 
         let weights = crate::weights::dummy_weights();
 
         let analyzer = Analyzer::new(data, weights);
 
-        let layout = Layout::load("../layouts/rstn-oxey.dof")
+        let layout = Layout::load(format!("../layouts/{name}.dof"))
             .expect("this layout is valid and exists, soooo");
 
         (analyzer, layout)
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn cache_intact() {
-        let (analyzer, layout) = analyzer_layout();
+        let (analyzer, layout) = analyzer_layout("rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
         let reference = cache.clone();
 
@@ -279,5 +279,23 @@ mod tests {
         analyzer.best_swap_depth3(&mut cache);
 
         assert_eq!(cache, reference);
+    }
+
+    #[test]
+    fn strectch_cache_integrity() {
+        let (analyzer, layout) = analyzer_layout("rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+
+        println!("stretches before swap: {}", analyzer.stretches(&cache));
+
+        match analyzer.best_swap(&mut cache) {
+            Some((pair, score)) => {
+                println!("pair: {:?}, score: {}", pair, score);
+                analyzer.update_cache(&mut cache, pair);
+                cache.swap(pair);
+                println!("stretches after swap: {}", analyzer.stretches(&cache));
+            }
+            None => println!("No improvement found"),
+        }
     }
 }

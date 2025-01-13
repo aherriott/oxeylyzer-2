@@ -1,3 +1,4 @@
+use fxhash::FxHashSet as HashSet;
 use itertools::Itertools;
 use libdof::dofinitions::Finger;
 
@@ -30,6 +31,7 @@ pub struct Analyzer {
     pub data: AnalyzerData,
     pub weights: Weights,
     pub analyze_bigrams: bool,
+    pub analyze_stretches: bool,
     pub analyze_trigrams: bool,
 }
 
@@ -37,12 +39,14 @@ impl Analyzer {
     pub fn new(data: Data, weights: Weights) -> Self {
         let data = AnalyzerData::new(data, &weights);
         let analyze_bigrams = weights.has_bigram_weights();
+        let analyze_stretches = weights.has_stretch_weights();
         let analyze_trigrams = weights.has_trigram_weights();
 
         Self {
             data,
             weights,
             analyze_bigrams,
+            analyze_stretches,
             analyze_trigrams,
         }
     }
@@ -55,7 +59,7 @@ impl Analyzer {
 
     pub fn score_cache(&self, cache: &CachedLayout) -> i64 {
         // more metrics will obviously also go here
-        cache.weighted_bigrams.total
+        cache.weighted_bigrams.total + cache.stretch_bigrams.total
     }
 
     pub fn mapping(&self) -> &CharMapping {
@@ -84,7 +88,7 @@ impl Analyzer {
         let unweighted_sfb_indices =
             SfbIndices::new(&fingers, &keyboard, &FingerWeights::default());
         let weighted_sfb_indices = SfbIndices::new(&fingers, &keyboard, &self.weights.fingers);
-        let stretch_indices = Default::default(); //StretchIndices::new(&layout.keys, &fingers, &keyboard);
+        let stretch_cache = StretchCache::new(&layout.keys, &fingers, &keyboard, &self.data);
 
         let mut cache = CachedLayout {
             name,
@@ -94,11 +98,10 @@ impl Analyzer {
             possible_swaps,
             weighted_sfb_indices,
             unweighted_sfb_indices,
-            stretch_indices,
+            stretch_bigrams: stretch_cache,
             shape,
             char_mapping,
             weighted_bigrams: Default::default(),
-            // stretch_bigrams: Default::default(),
         };
 
         let per_finger = Box::new(Finger::FINGERS.map(|f| self.finger_weighted_bigrams(&cache, f)));
@@ -135,6 +138,7 @@ impl Analyzer {
                 cache.swap(pair);
                 let score = self.score_cached_swap(cache, pair);
                 cache.swap(pair);
+
                 (pair, score)
             })
             .max_by(|(_, s1), (_, s2)| s1.cmp(s2));
@@ -142,6 +146,32 @@ impl Analyzer {
         cache.possible_swaps = swaps;
 
         res
+    }
+
+    pub fn keypair_stretch(&self, cache: &CachedLayout, pair: PosPair) -> i64 {
+        cache
+            .stretch_bigrams
+            .per_keypair
+            .get(&pair)
+            .map(|pairs| {
+                pairs
+                    .iter()
+                    .map(
+                        |BigramPair {
+                             pair: PosPair(a, b),
+                             dist,
+                         }| {
+                            let u1 = cache.keys[*b as usize];
+                            let u2 = cache.keys[*a as usize];
+
+                            (self.data.get_stretch_weighted_bigram_u([u1, u2])
+                                + self.data.get_stretch_weighted_bigram_u([u2, u1]))
+                                * dist
+                        },
+                    )
+                    .sum()
+            })
+            .unwrap_or_default()
     }
 
     pub fn finger_weighted_bigrams(&self, cache: &CachedLayout, f: Finger) -> i64 {
@@ -157,8 +187,8 @@ impl Analyzer {
                     let u1 = cache.keys[*a as usize];
                     let u2 = cache.keys[*b as usize];
 
-                    (self.data.get_weighted_bigram_u([u1, u2])
-                        + self.data.get_weighted_bigram_u([u2, u1]))
+                    (self.data.get_same_finger_weighted_bigram_u([u1, u2])
+                        + self.data.get_same_finger_weighted_bigram_u([u2, u1]))
                         * dist
                 },
             )
@@ -178,8 +208,8 @@ impl Analyzer {
                     let u1 = cache.keys[*a as usize];
                     let u2 = cache.keys[*b as usize];
 
-                    (self.data.get_weighted_bigram_u([u1, u2])
-                        + self.data.get_weighted_bigram_u([u2, u1]))
+                    (self.data.get_same_finger_weighted_bigram_u([u1, u2])
+                        + self.data.get_same_finger_weighted_bigram_u([u2, u1]))
                         * dist
                 },
             )
@@ -193,6 +223,10 @@ impl Analyzer {
 
         if self.analyze_bigrams {
             self.update_cache_weighted_bigrams(cache, swap);
+        }
+
+        if self.analyze_stretches {
+            self.update_cache_stretches(cache, swap);
         }
     }
 
@@ -220,16 +254,26 @@ impl Analyzer {
         }
     }
 
-    pub fn score_cached_swap(&self, cache: &CachedLayout, swap: PosPair) -> i64 {
-        self.score_swap_weighted_bigrams(cache, swap)
+    pub fn update_cache_stretches(&self, cache: &mut CachedLayout, pair: PosPair) {
+        cache.swap(pair);
+        let stretch_new = self.keypair_stretch(cache, pair);
+
+        cache.swap(pair);
+        let stretch_old = self.keypair_stretch(cache, pair);
+
+        cache.stretch_bigrams.total += stretch_old - stretch_new;
     }
 
-    fn score_swap_weighted_bigrams(&self, cache: &CachedLayout, PosPair(a, b): PosPair) -> i64 {
-        if self.weights.sfbs == 0 {
+    pub fn score_cached_swap(&self, cache: &mut CachedLayout, swap: PosPair) -> i64 {
+        self.score_swap_weighted_bigrams(cache, swap) + self.score_swap_stretch_bigrams(cache, swap)
+    }
+
+    pub fn score_swap_weighted_bigrams(&self, cache: &CachedLayout, PosPair(a, b): PosPair) -> i64 {
+        if !self.analyze_bigrams {
             return 0;
         }
         if a == b {
-            return cache.weighted_bigrams.total * self.weights.sfbs;
+            return cache.weighted_bigrams.total;
         }
 
         let f1 = cache.fingers[a as usize];
@@ -250,6 +294,23 @@ impl Analyzer {
 
             cache.weighted_bigrams.total + b1 + b2 - cache1 - cache2
         }
+    }
+
+    pub fn score_swap_stretch_bigrams(&self, cache: &mut CachedLayout, pair: PosPair) -> i64 {
+        if !self.analyze_stretches {
+            return 0;
+        }
+        if pair.0 == pair.1 {
+            return cache.stretch_bigrams.total;
+        }
+
+        cache.swap(pair);
+        let stretch_new = self.keypair_stretch(cache, pair);
+
+        cache.swap(pair);
+        let stretch_old = self.keypair_stretch(cache, pair);
+
+        cache.stretch_bigrams.total + stretch_old - stretch_new
     }
 
     pub fn sfbs(&self, cache: &CachedLayout) -> i64 {
@@ -285,6 +346,27 @@ impl Analyzer {
                     let u2 = cache.keys[*b as usize];
 
                     self.data.get_skipgram_u([u1, u2]) + self.data.get_skipgram_u([u2, u1])
+                },
+            )
+            .sum()
+    }
+
+    pub fn stretches(&self, cache: &CachedLayout) -> i64 {
+        cache
+            .stretch_bigrams
+            .all_pairs
+            .iter()
+            .map(
+                |BigramPair {
+                     pair: PosPair(a, b),
+                     dist,
+                 }| {
+                    let u1 = cache.keys[*a as usize];
+                    let u2 = cache.keys[*b as usize];
+
+                    (self.data.get_stretch_weighted_bigram_u([u1, u2])
+                        + self.data.get_stretch_weighted_bigram_u([u2, u1]))
+                        * dist
                 },
             )
             .sum()
@@ -363,6 +445,38 @@ impl Analyzer {
 
         trigrams
     }
+
+    pub fn similarity(&self, layout1: &Layout, layout2: &Layout) -> i64 {
+        let _key_sim = layout1
+            .keys
+            .iter()
+            .zip(&layout2.keys)
+            .filter(|&(c1, c2)| (c1 == c2))
+            .map(|(c1, _)| self.data.get_char(*c1))
+            .sum::<i64>();
+
+        let per_column = Finger::FINGERS
+            .into_iter()
+            .map(|f| {
+                let col1 = layout1
+                    .keys
+                    .iter()
+                    .zip(&layout1.fingers)
+                    .filter_map(|(c1, f1)| (f == *f1).then_some(*c1))
+                    .collect::<HashSet<_>>();
+
+                layout2
+                    .keys
+                    .iter()
+                    .zip(&layout1.fingers)
+                    .filter(|&(c2, f2)| (f == *f2 && col1.contains(c2)))
+                    .map(|(c2, _)| self.data.get_char(*c2))
+                    .sum::<i64>()
+            })
+            .sum::<i64>();
+
+        per_column
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -372,14 +486,14 @@ mod tests {
 
     use super::*;
 
-    fn analyzer_layout() -> (Analyzer, Layout) {
-        let data = Data::load("../data/shai.json").expect("this should exist");
+    fn analyzer_layout(layout_name: &str) -> (Analyzer, Layout) {
+        let data = Data::load("../data/english.json").expect("this should exist");
 
         let weights = dummy_weights();
 
         let analyzer = Analyzer::new(data, weights);
 
-        let layout = Layout::load("../layouts/rstn-oxey.dof")
+        let layout = Layout::load(format!("../layouts/{layout_name}.dof"))
             .expect("this layout is valid and exists, soooo");
 
         (analyzer, layout)
@@ -387,7 +501,7 @@ mod tests {
 
     #[test]
     fn update_cache_bigrams() {
-        let (analyzer, layout) = analyzer_layout();
+        let (analyzer, layout) = analyzer_layout("rstn-oxey");
 
         let mut cache = analyzer.cached_layout(layout, &[]);
         let reference = cache.clone();
@@ -408,5 +522,39 @@ mod tests {
             assert_eq!(initial, returned, "iteration {i}: ");
             assert_eq!(cache, reference, "iteration {i}: ");
         }
+    }
+
+    #[test]
+    fn stretch_cache_consistency() {
+        let (analyzer, layout) = analyzer_layout("qwerty-minimal");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+        let swap = PosPair(0, 8);
+
+        let total = cache.stretch_bigrams.total;
+        let stretches = analyzer.stretches(&cache);
+
+        assert_eq!(total, stretches);
+
+        dbg!(total);
+
+        analyzer.update_cache(&mut cache, swap);
+        cache.swap(swap);
+        analyzer.update_cache(&mut cache, swap);
+        cache.swap(swap);
+
+        let total2 = cache.stretch_bigrams.total;
+
+        println!("total stretch cache: {total}");
+        println!("diff after swaps:    {}", total - total2);
+
+        // println!("{:#?}", cache.stretch_cache.all_pairs);
+
+        // cache.stretch_cache.per_keypair.get(&swap).unwrap().iter()
+        //     .for_each(|pair| {
+        //         let [p1, p2] = [pair.pair.0, pair.pair.1];
+        //         let [c1, c2] = [cache.char(p1).unwrap(), cache.char(p2).unwrap()];
+
+        //         println!("{c1}{c2}: {}", pair.dist);
+        //     })
     }
 }
