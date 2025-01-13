@@ -1,5 +1,5 @@
 corpus = "./data/english.json"
-layouts = "./layouts" # can be an array of folders
+layouts = ["./core/test-layouts", "./layouts"] # can be an array of folders
 
 [weights]
 sfbs = -7
