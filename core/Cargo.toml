@@ -24,4 +24,4 @@ toml ={ workspace = true }
 gloo-net = "0.6.0"
 
 [dev-dependencies]
-assert_approx_eq = "1.1.0"
+approx = "0.5"
