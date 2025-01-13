@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Weights {
     pub sfbs: i64,
     pub sfs: i64,
+    pub stretches: i64,
     pub sft: i64,
     pub inroll: i64,
     pub outroll: i64,
@@ -30,6 +31,10 @@ impl Weights {
             || self.onehandin != 0
             || self.onehandout != 0
             || self.thumb != 0
+    }
+
+    pub const fn has_stretch_weights(&self) -> bool {
+        self.stretches != 0
     }
 }
 
@@ -88,6 +93,7 @@ pub fn dummy_weights() -> Weights {
     Weights {
         sfbs: -7,
         sfs: -1,
+        stretches: -3,
         sft: -12,
         inroll: 5,
         outroll: 4,

@@ -23,8 +23,19 @@ xflags::xflags! {
             /// Amount of sfbs to show. 10 by default.
             optional -c, --count count: usize
         }
+        /// Shows the top n stretches on a layout.
+        cmd stretches {
+            /// Name of the layout to show stretches of.
+            required name: String
+            /// Amount of stretches to show. 10 by default.
+            optional -c, --count count: usize
+        }
         /// Shows every trigram stat of a layout.
         cmd trigrams t {
+            required name: String
+        }
+        /// Shows layouts most similar to a reference layout.
+        cmd similarity similar sim {
             required name: String
         }
         /// Reload the analyzer config file

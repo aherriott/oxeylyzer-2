@@ -20,28 +20,31 @@ mod bench {
         //     list![generate_data, collect_s],
         //     [100, 1000, 10000, 100_000, 1_000_000, 10_000_000],
         // );
-        // bench.register(generate_real_data, ["monkeyracer", "shai"]);
-        bench.register(find_best_swap, ["rstn-oxey"]);
-        bench.register(analyze_swap, swaps);
-        bench.register(init_cached_layout, ["rstn-oxey", "colemak-dh", "sturdy"]);
-        bench.register(
-            optimize,
-            [
-                OptimizationMethod::Greedy,
-                OptimizationMethod::GreedyDepth2,
-                OptimizationMethod::GreedyDepth3,
-                // OptimizationMethod::GreedyDepth4,
-                OptimizationMethod::GreedyAlternative,
-                OptimizationMethod::GreedyAlternativeD3,
-            ],
+        // bench.register(generate_real_data, ["monkeyracer", "english"]);
+        // bench.register(find_best_swap, ["rstn-oxey"]);
+        bench.register_many(
+            list![analyze_swap_bigrams, analyze_swap_stretches, analyze_swap],
+            swaps,
         );
+        // bench.register(init_cached_layout, ["rstn-oxey", "colemak-dh", "sturdy"]);
+        // bench.register(
+        //     optimize,
+        //     [
+        //         OptimizationMethod::Greedy,
+        //         OptimizationMethod::GreedyDepth2,
+        //         OptimizationMethod::GreedyDepth3,
+        //         // OptimizationMethod::GreedyDepth4,
+        //         OptimizationMethod::GreedyAlternative,
+        //         OptimizationMethod::GreedyAlternativeD3,
+        //     ],
+        // );
 
         bench.run()?;
         Ok(())
     }
 
     fn optimize(bencher: Bencher, method: OptimizationMethod) {
-        let (analyzer, layout) = util::analyzer_layout("shai", "rstn-oxey");
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let layout = layout.random();
 
         bencher.bench(|| {
@@ -50,7 +53,7 @@ mod bench {
     }
 
     fn init_cached_layout(bencher: Bencher, layout_name: &str) {
-        let (analyzer, layout) = util::analyzer_layout("shai", layout_name);
+        let (analyzer, layout) = util::analyzer_layout("english", layout_name);
 
         bencher.bench(|| {
             black_box(analyzer.cached_layout(layout.clone(), &[]));
@@ -58,10 +61,26 @@ mod bench {
     }
 
     fn analyze_swap(bencher: Bencher, swap: PosPair) {
-        let (analyzer, layout) = util::analyzer_layout("shai", "rstn-oxey");
-        let cache = analyzer.cached_layout(layout, &[]);
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
 
-        bencher.bench(|| black_box(analyzer.score_cached_swap(&cache, black_box(swap))))
+        bencher.bench(|| black_box(analyzer.score_cached_swap(&mut cache, black_box(swap))))
+    }
+
+    fn analyze_swap_bigrams(bencher: Bencher, swap: PosPair) {
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+
+        bencher
+            .bench(|| black_box(analyzer.score_swap_weighted_bigrams(&mut cache, black_box(swap))))
+    }
+
+    fn analyze_swap_stretches(bencher: Bencher, swap: PosPair) {
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+
+        bencher
+            .bench(|| black_box(analyzer.score_swap_stretch_bigrams(&mut cache, black_box(swap))))
     }
 
     fn generate_data(bencher: Bencher, length: usize) {
@@ -100,7 +119,7 @@ mod bench {
     }
 
     fn find_best_swap(bencher: Bencher, layout_name: &str) {
-        let (analyzer, layout) = util::analyzer_layout("shai", layout_name);
+        let (analyzer, layout) = util::analyzer_layout("english", layout_name);
 
         let mut cache = analyzer.cached_layout(layout, &[]);
 

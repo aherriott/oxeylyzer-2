@@ -2,12 +2,12 @@ use indexmap::IndexMap;
 
 use crate::{REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharMapping(IndexMap<char, u8>);
 
-impl CharMapping {
-    pub fn new() -> Self {
-        let mut map = Self::default();
+impl Default for CharMapping {
+    fn default() -> Self {
+        let mut map = Self(Default::default());
 
         map.push(REPLACEMENT_CHAR);
         map.push(SHIFT_CHAR);
@@ -18,6 +18,10 @@ impl CharMapping {
 }
 
 impl CharMapping {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn push(&mut self, c: char) {
         if !self.0.contains_key(&c) {
             self.0.insert(c, self.len() as u8);

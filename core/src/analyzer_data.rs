@@ -9,7 +9,8 @@ pub struct AnalyzerData {
     bigrams: Box<[i64]>,
     skipgrams: Box<[i64]>,
     trigrams: Box<[i64]>,
-    weighted_bigrams: Box<[i64]>,
+    same_finger_weighted_bigrams: Box<[i64]>,
+    stretch_weighted_bigrams: Box<[i64]>,
     pub char_total: f64,
     pub bigram_total: f64,
     pub skipgram_total: f64,
@@ -74,10 +75,17 @@ impl AnalyzerData {
             trigrams[i] = (f * trigram_total) as i64;
         }
 
-        let weighted_bigrams = bigrams
+        let same_finger_weighted_bigrams = bigrams
             .iter()
             .zip(&skipgrams)
             .map(|(&b, &s)| weights.sfbs * b + weights.sfs * s)
+            .collect::<Box<_>>();
+
+        let sfb_over_sfs = (weights.sfbs as f64) / (weights.sfs as f64);
+        let stretch_weighted_bigrams = bigrams
+            .iter()
+            .zip(&skipgrams)
+            .map(|(&b, &s)| (b + (s as f64 * sfb_over_sfs) as i64) * weights.stretches)
             .collect::<Box<_>>();
 
         let mapping = Arc::new(mapping);
@@ -88,7 +96,8 @@ impl AnalyzerData {
             bigrams: bigrams.into(),
             skipgrams: skipgrams.into(),
             trigrams: trigrams.into(),
-            weighted_bigrams,
+            same_finger_weighted_bigrams,
+            stretch_weighted_bigrams,
 
             char_total,
             bigram_total,
@@ -141,12 +150,20 @@ impl AnalyzerData {
         self.trigrams[i]
     }
 
-    pub fn get_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
+    pub fn get_same_finger_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
         let u1 = self.mapping.get_u(c1) as usize;
         let u2 = self.mapping.get_u(c2) as usize;
 
         let i = u1 * self.len() + u2;
-        self.weighted_bigrams[i]
+        self.same_finger_weighted_bigrams[i]
+    }
+
+    pub fn get_stretch_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
+        let u1 = self.mapping.get_u(c1) as usize;
+        let u2 = self.mapping.get_u(c2) as usize;
+
+        let i = u1 * self.len() + u2;
+        self.stretch_weighted_bigrams[i]
     }
 
     #[inline]
@@ -183,11 +200,20 @@ impl AnalyzerData {
     }
 
     #[inline]
-    pub fn get_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+    pub fn get_same_finger_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
 
         let i = u1 * self.len() + u2;
-        self.weighted_bigrams[i]
+        self.same_finger_weighted_bigrams[i]
+    }
+
+    #[inline]
+    pub fn get_stretch_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+        let u1 = c1 as usize;
+        let u2 = c2 as usize;
+
+        let i = u1 * self.len() + u2;
+        self.stretch_weighted_bigrams[i]
     }
 }

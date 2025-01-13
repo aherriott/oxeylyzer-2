@@ -25,7 +25,7 @@ impl Analyzer {
             let swap = random_swap(&cache, &mut rng);
 
             cache.swap(swap);
-            let new_score = self.score_cached_swap(&cache, swap);
+            let new_score = self.score_cached_swap(&mut cache, swap);
 
             let ap = acceptance_probability(current_score, new_score, temperature);
 
@@ -62,7 +62,7 @@ impl Analyzer {
             cache.swap(swap1);
             self.update_cache(&mut cache, swap1);
             cache.swap(swap2);
-            let new_score = self.score_cached_swap(&cache, swap2);
+            let new_score = self.score_cached_swap(&mut cache, swap2);
 
             let ap = acceptance_probability(current_score, new_score, temperature);
 
