@@ -95,9 +95,9 @@ impl Repl {
         println!(
             concat!(
                 "score:     {}\n\n",
-                "sfbs:      {:+.3}%\n",
-                "sfs:       {:+.3}%\n",
-                "stretches: {:+.3}%\n",
+                "sfbs:      {:.3}%\n",
+                "sfs:       {:.3}%\n",
+                "stretches: {:.3}\n",
                 "finger usage:\n{}\n",
                 "finger sfbs:\n{}\n"
             ),
