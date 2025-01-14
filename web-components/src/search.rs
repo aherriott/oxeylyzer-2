@@ -13,28 +13,31 @@ struct DisplaySearch(RwSignal<bool>);
 #[component]
 pub fn QuerySearch() -> impl IntoView {
     let params = use_params_map();
-    let query = move || params.with(|p| p.get("query").cloned().unwrap_or_default());
+    let search_query = move || params.with(|p| p.get("query").cloned().unwrap_or_default());
+
+    let queries = use_query_map();
+    let _search_type = move || queries.with(|q| q.get("type").cloned().unwrap_or_default());
 
     let possible_results = move || match use_context::<LayoutNames>() {
         Some(names) => names.0,
         None => embedded_names::<LayoutsFolder>(),
     };
 
-    let names = create_memo(move |_| search(&possible_results(), &query(), 24));
+    let names = create_memo(move |_| search(&possible_results(), &search_query(), 24));
 
     view! {
         <div class="mx-4">
             {move || match names().is_empty() {
                 false => {
                     view! {
-                        <p class="text-2xl text-center py-4">"Layouts matching '" {query} "'"</p>
+                        <p class="text-2xl text-center py-4">"Layouts matching '" {search_query} "'"</p>
                         <LayoutLinks names/>
                     }
                         .into_view()
                 }
                 true => {
                     view! {
-                        <p class="text-2xl text-center py-4">"No matches for '" {query} "' :("</p>
+                        <p class="text-2xl text-center py-4">"No matches for '" {search_query} "' :("</p>
                     }
                         .into_view()
                 }
