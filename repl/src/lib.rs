@@ -89,7 +89,6 @@ impl Repl {
 
         let finger_use = stats.finger_use.map(|f| format!("{f:.2}")).join(", ");
         let finger_sfbs = stats.finger_sfbs.map(|f| format!("{f:.2}")).join(", ");
-        let score = self.a.score(layout);
 
         print!("{}", layout);
 
@@ -102,7 +101,7 @@ impl Repl {
                 "finger usage:\n{}\n",
                 "finger sfbs:\n{}\n"
             ),
-            score, stats.sfbs, stats.sfs, stats.stretches, finger_use, finger_sfbs,
+            stats.score, stats.sfbs, stats.sfs, stats.stretches, finger_use, finger_sfbs,
         );
 
         self.trigrams(name)

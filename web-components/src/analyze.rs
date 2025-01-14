@@ -353,6 +353,7 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
     let sfbs = create_memo(move |_| stats_memo.with(|s| s.sfbs));
     let sfs = create_memo(move |_| stats_memo.with(|s| s.sfs));
     let stretches = create_memo(move |_| stats_memo.with(|s| s.stretches));
+    let score = create_memo(move |_| stats_memo.with(|s| s.score));
 
     let finger_use =
         create_memo(move |_| stats_memo.with(|s| s.finger_use.map(|v| create_memo(move |_| v))));
