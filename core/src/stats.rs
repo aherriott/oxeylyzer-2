@@ -52,6 +52,7 @@ impl Analyzer {
 
         let sfbs = self.sfbs(&cache) as f64 / self.data.char_total;
         let sfs = self.sfs(&cache) as f64 / self.data.bigram_total;
+        let stretches = self.stretches(&cache) as f64 / self.data.bigram_total / 100.0 / self.weights.stretches as f64;
         let score = self.score_cache(&cache);
 
         let trigrams = self.trigram_stats(self.trigrams(&cache));
