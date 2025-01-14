@@ -139,7 +139,7 @@ pub fn RenderDofAnalyzer(dof: Dof) -> impl IntoView {
 
 //     view! {
 //         <div class="br" style=format!("width: 100%; aspect-ratio: 100/{height}; font-size: {font_size}%")>
-            
+
 //         </div>
 //     }
 // }
@@ -386,8 +386,6 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
     let t_thumb = create_memo(move |_| stats_memo.with(|s| s.trigrams.thumb));
     let t_invalid = create_memo(move |_| stats_memo.with(|s| s.trigrams.invalid));
 
-    // let is_window_lg = leptos_use::use_media_query("(min-width: 1024px)");
-
     view! {
         <div class="mx-auto sm:flex text-xs sm:text-sm md:text-base lg:text-lg">
             <div class="p-4 bg-header rounded-t-xl sm:rounded-b-xl">
@@ -409,21 +407,6 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
                 </StatGroup>
                 <Stat name="score:" stat=move || score().to_string()/>
             </div>
-            // {move || {
-            // if is_window_lg() {
-            // view! {
-            // <div class="hidden lg:block">
-            // <HorizontalFingerStats stats=finger_stats/>
-            // </div>
-            // }
-            // } else {
-            // view! {
-            // <div class="lg:hidden">
-            // <VerticalFingerStats stats=finger_stats/>
-            // </div>
-            // }
-            // }
-            // }}
             <VerticalFingerStats stats=finger_stats/>
         </div>
     }
@@ -664,6 +647,9 @@ pub fn DofMetadata(dof: Dof) -> impl IntoView {
                 // <Metadata name="Board" data=board />
                 </tbody>
             </table>
+        </div>
+        <div>
+
         </div>
     }
 }

@@ -9,10 +9,7 @@ mod tools;
 
 use layouts::{HeatmapData, LayoutsFolder};
 
-use oxeylyzer_web_components::{
-    util::*,
-    *,
-};
+use oxeylyzer_web_components::{util::*, *};
 
 use leptos::*;
 use leptos_meta::provide_meta_context;
