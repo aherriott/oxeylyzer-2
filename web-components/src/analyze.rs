@@ -418,7 +418,7 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
 fn StatGroup(description: &'static str, children: Children) -> impl IntoView {
     view! {
         <p class="font-bold">{description}</p>
-        <div class="w-fit">
+        <div class="w-full">
             <table>
                 <tbody>{children()}</tbody>
             </table>
@@ -435,9 +435,10 @@ fn F64Stat(
     let stat = move || fmt_f64_stat(stat(), unit);
 
     view! {
-        <tr class="py-1">
-            <td class="text-left align-center">{name}</td>
-            <td class="pl-3">{stat}</td>
+        <tr class="py-1 w-full">
+            <td class="text-left">{name}</td>
+            <td class="w-full min-w-4"/>
+            <td class="text-right">{stat}</td>
         </tr>
     }
 }
@@ -445,7 +446,7 @@ fn F64Stat(
 #[component]
 fn Stat(name: &'static str, stat: impl Fn() -> String + 'static) -> impl IntoView {
     view! {
-        <tr class="py-1">
+        <tr class="py-1 w-full">
             <td class="text-left align-center">{name}</td>
             <td class="pl-3">{stat}</td>
         </tr>
