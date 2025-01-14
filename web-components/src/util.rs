@@ -40,6 +40,7 @@ impl Default for HeatmapTheme {
 pub struct GlobalWeights {
     pub sfbs: RwSignal<i64>,
     pub sfs: RwSignal<i64>,
+    pub stretches: RwSignal<i64>,
     pub sft: RwSignal<i64>,
     pub inroll: RwSignal<i64>,
     pub outroll: RwSignal<i64>,
@@ -70,6 +71,7 @@ impl Default for GlobalWeights {
         Self {
             sfbs: create_rw_signal(-7),
             sfs: create_rw_signal(-1),
+            stretches: create_rw_signal(-3),
             sft: create_rw_signal(-12),
             inroll: create_rw_signal(5),
             outroll: create_rw_signal(4),
@@ -99,6 +101,7 @@ impl From<GlobalWeights> for Weights {
         Self {
             sfbs: w.sfbs.get(),
             sfs: w.sfs.get(),
+            stretches: w.stretches.get(),
             sft: w.sft.get(),
             inroll: w.inroll.get(),
             outroll: w.outroll.get(),

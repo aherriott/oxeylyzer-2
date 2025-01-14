@@ -139,7 +139,7 @@ pub fn RenderDofAnalyzer(dof: Dof) -> impl IntoView {
 
 //     view! {
 //         <div class="br" style=format!("width: 100%; aspect-ratio: 100/{height}; font-size: {font_size}%")>
-            
+
 //         </div>
 //     }
 // }
@@ -352,7 +352,8 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
 
     let sfbs = create_memo(move |_| stats_memo.with(|s| s.sfbs));
     let sfs = create_memo(move |_| stats_memo.with(|s| s.sfs));
-    let score = create_memo(move |_| analyzer.with(|a| layout_memo.with(|l| a.score(l))));
+    let stretches = create_memo(move |_| stats_memo.with(|s| s.stretches));
+    let score = create_memo(move |_| stats_memo.with(|s| s.score));
 
     let finger_use =
         create_memo(move |_| stats_memo.with(|s| s.finger_use.map(|v| create_memo(move |_| v))));
@@ -386,44 +387,28 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
     let t_thumb = create_memo(move |_| stats_memo.with(|s| s.trigrams.thumb));
     let t_invalid = create_memo(move |_| stats_memo.with(|s| s.trigrams.invalid));
 
-    // let is_window_lg = leptos_use::use_media_query("(min-width: 1024px)");
-
     view! {
         <div class="mx-auto sm:flex text-xs sm:text-sm md:text-base lg:text-lg">
             <div class="p-4 bg-header rounded-t-xl sm:rounded-b-xl">
                 <StatGroup description="Bigrams">
-                    <F64Stat name="sfbs:" stat=sfbs unit="%"/>
-                    <F64Stat name="sfs:" stat=sfs unit="%"/>
+                    <F64Stat name="sfbs" stat=sfbs unit="%"/>
+                    <F64Stat name="sfs" stat=sfs unit="%"/>
+                    <F64Stat name="stretches" stat=stretches unit=""/>
                 </StatGroup>
                 <StatGroup description="Trigrams">
-                    <F64Stat name="sft:" stat=t_sft unit="%"/>
-                    <F64Stat name="sfb:" stat=t_sfb unit="%"/>
-                    <F64Stat name="inroll:" stat=t_inroll unit="%"/>
-                    <F64Stat name="outroll:" stat=t_outroll unit="%"/>
-                    <F64Stat name="alternate:" stat=t_alternate unit="%"/>
-                    <F64Stat name="redirect:" stat=t_redirect unit="%"/>
-                    <F64Stat name="onehandin:" stat=t_onehandin unit="%"/>
-                    <F64Stat name="onehandout:" stat=t_onehandout unit="%"/>
-                    <F64Stat name="thumb:" stat=t_thumb unit="%"/>
-                    <F64Stat name="invalid:" stat=t_invalid unit="%"/>
+                    <F64Stat name="sft" stat=t_sft unit="%"/>
+                    <F64Stat name="sfb" stat=t_sfb unit="%"/>
+                    <F64Stat name="inroll" stat=t_inroll unit="%"/>
+                    <F64Stat name="outroll" stat=t_outroll unit="%"/>
+                    <F64Stat name="alternate" stat=t_alternate unit="%"/>
+                    <F64Stat name="redirect" stat=t_redirect unit="%"/>
+                    <F64Stat name="onehandin" stat=t_onehandin unit="%"/>
+                    <F64Stat name="onehandout" stat=t_onehandout unit="%"/>
+                    <F64Stat name="thumb" stat=t_thumb unit="%"/>
+                    <F64Stat name="invalid" stat=t_invalid unit="%"/>
                 </StatGroup>
                 <Stat name="score:" stat=move || score().to_string()/>
             </div>
-            // {move || {
-            // if is_window_lg() {
-            // view! {
-            // <div class="hidden lg:block">
-            // <HorizontalFingerStats stats=finger_stats/>
-            // </div>
-            // }
-            // } else {
-            // view! {
-            // <div class="lg:hidden">
-            // <VerticalFingerStats stats=finger_stats/>
-            // </div>
-            // }
-            // }
-            // }}
             <VerticalFingerStats stats=finger_stats/>
         </div>
     }
@@ -433,7 +418,7 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
 fn StatGroup(description: &'static str, children: Children) -> impl IntoView {
     view! {
         <p class="font-bold">{description}</p>
-        <div class="w-fit">
+        <div class="w-full">
             <table>
                 <tbody>{children()}</tbody>
             </table>
@@ -450,9 +435,10 @@ fn F64Stat(
     let stat = move || fmt_f64_stat(stat(), unit);
 
     view! {
-        <tr class="py-1">
-            <td class="text-left align-center">{name}</td>
-            <td class="pl-3">{stat}</td>
+        <tr class="py-1 w-full">
+            <td class="text-left">{name}</td>
+            <td class="w-full min-w-4"/>
+            <td class="text-right">{stat}</td>
         </tr>
     }
 }
@@ -460,7 +446,7 @@ fn F64Stat(
 #[component]
 fn Stat(name: &'static str, stat: impl Fn() -> String + 'static) -> impl IntoView {
     view! {
-        <tr class="py-1">
+        <tr class="py-1 w-full">
             <td class="text-left align-center">{name}</td>
             <td class="pl-3">{stat}</td>
         </tr>
@@ -664,6 +650,9 @@ pub fn DofMetadata(dof: Dof) -> impl IntoView {
                 // <Metadata name="Board" data=board />
                 </tbody>
             </table>
+        </div>
+        <div>
+
         </div>
     }
 }

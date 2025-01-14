@@ -348,8 +348,12 @@ fn CharsInput(affect: RwSignal<String>) -> impl IntoView {
         <textarea
             on:input=move |ev| {
                 let value = event_target_value(&ev);
-                if let Ok(val) = value.parse::<String>() {
-                    affect.set(val);
+                let len = affect.with(|a| a.len());
+
+                if value.len() > len {
+                    affect.update(|a| a.push(value.chars().last().unwrap()))
+                } else {
+                    affect.update(|a| { a.pop(); })
                 }
             }
 
