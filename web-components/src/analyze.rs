@@ -352,7 +352,7 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
 
     let sfbs = create_memo(move |_| stats_memo.with(|s| s.sfbs));
     let sfs = create_memo(move |_| stats_memo.with(|s| s.sfs));
-    let score = create_memo(move |_| analyzer.with(|a| layout_memo.with(|l| a.score(l))));
+    let stretches = create_memo(move |_| stats_memo.with(|s| s.stretches));
 
     let finger_use =
         create_memo(move |_| stats_memo.with(|s| s.finger_use.map(|v| create_memo(move |_| v))));
@@ -390,20 +390,21 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
         <div class="mx-auto sm:flex text-xs sm:text-sm md:text-base lg:text-lg">
             <div class="p-4 bg-header rounded-t-xl sm:rounded-b-xl">
                 <StatGroup description="Bigrams">
-                    <F64Stat name="sfbs:" stat=sfbs unit="%"/>
-                    <F64Stat name="sfs:" stat=sfs unit="%"/>
+                    <F64Stat name="sfbs" stat=sfbs unit="%"/>
+                    <F64Stat name="sfs" stat=sfs unit="%"/>
+                    <F64Stat name="stretches" stat=stretches unit=""/>
                 </StatGroup>
                 <StatGroup description="Trigrams">
-                    <F64Stat name="sft:" stat=t_sft unit="%"/>
-                    <F64Stat name="sfb:" stat=t_sfb unit="%"/>
-                    <F64Stat name="inroll:" stat=t_inroll unit="%"/>
-                    <F64Stat name="outroll:" stat=t_outroll unit="%"/>
-                    <F64Stat name="alternate:" stat=t_alternate unit="%"/>
-                    <F64Stat name="redirect:" stat=t_redirect unit="%"/>
-                    <F64Stat name="onehandin:" stat=t_onehandin unit="%"/>
-                    <F64Stat name="onehandout:" stat=t_onehandout unit="%"/>
-                    <F64Stat name="thumb:" stat=t_thumb unit="%"/>
-                    <F64Stat name="invalid:" stat=t_invalid unit="%"/>
+                    <F64Stat name="sft" stat=t_sft unit="%"/>
+                    <F64Stat name="sfb" stat=t_sfb unit="%"/>
+                    <F64Stat name="inroll" stat=t_inroll unit="%"/>
+                    <F64Stat name="outroll" stat=t_outroll unit="%"/>
+                    <F64Stat name="alternate" stat=t_alternate unit="%"/>
+                    <F64Stat name="redirect" stat=t_redirect unit="%"/>
+                    <F64Stat name="onehandin" stat=t_onehandin unit="%"/>
+                    <F64Stat name="onehandout" stat=t_onehandout unit="%"/>
+                    <F64Stat name="thumb" stat=t_thumb unit="%"/>
+                    <F64Stat name="invalid" stat=t_invalid unit="%"/>
                 </StatGroup>
                 <Stat name="score:" stat=move || score().to_string()/>
             </div>

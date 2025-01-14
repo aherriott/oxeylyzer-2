@@ -48,6 +48,7 @@ pub fn WeightSettings() -> impl IntoView {
     let GlobalWeights {
         sfbs,
         sfs,
+        stretches,
         sft,
         inroll,
         outroll,
@@ -77,6 +78,7 @@ pub fn WeightSettings() -> impl IntoView {
                 <SettingGroup header="Weights">
                     <ValueSetting description="sfbs:" affect=sfbs/>
                     <ValueSetting description="sfs:" affect=sfs/>
+                    <ValueSetting description="stretches:" affect=stretches/>
                     <ValueSetting description="sft:" affect=sft/>
                     <ValueSetting description="inroll:" affect=inroll/>
                     <ValueSetting description="outroll:" affect=outroll/>
