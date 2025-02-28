@@ -102,6 +102,7 @@ impl Analyzer {
             shape,
             char_mapping,
             weighted_bigrams: Default::default(),
+            magic_cache: Default::default(),
         };
 
         let per_finger = Box::new(Finger::FINGERS.map(|f| self.finger_weighted_bigrams(&cache, f)));

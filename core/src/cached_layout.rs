@@ -23,6 +23,7 @@ pub struct CachedLayout {
     pub unweighted_sfb_indices: SfbIndices,
     pub weighted_bigrams: BigramCache,
     pub stretch_bigrams: StretchCache,
+    pub magic_cache: HashMap<u8, [u8; 2]>,
 }
 
 impl CachedLayout {

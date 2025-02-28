@@ -1,0 +1,251 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'oxeylyzer_core'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=oxeylyzer-core"
+                ],
+                "filter": {
+                    "name": "oxeylyzer_core",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'oxeylyzer-web'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=oxeylyzer-web",
+                    "--package=oxeylyzer-web"
+                ],
+                "filter": {
+                    "name": "oxeylyzer-web",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'oxeylyzer-web'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=oxeylyzer-web",
+                    "--package=oxeylyzer-web"
+                ],
+                "filter": {
+                    "name": "oxeylyzer-web",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'oxeylyzer_web_components'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=oxeylyzer-web-components"
+                ],
+                "filter": {
+                    "name": "oxeylyzer_web_components",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'oxeylyzer_repl'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=oxeylyzer-repl"
+                ],
+                "filter": {
+                    "name": "oxeylyzer_repl",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'main'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=main",
+                    "--package=oxeylyzer-repl"
+                ],
+                "filter": {
+                    "name": "main",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'main'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=main",
+                    "--package=oxeylyzer-repl"
+                ],
+                "filter": {
+                    "name": "main",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'data-csv'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=data-csv",
+                    "--package=data-csv"
+                ],
+                "filter": {
+                    "name": "data-csv",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'data-csv'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=data-csv",
+                    "--package=data-csv"
+                ],
+                "filter": {
+                    "name": "data-csv",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'repl'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=repl",
+                    "--package=oxeylyzer-2"
+                ],
+                "filter": {
+                    "name": "repl",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'repl'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=repl",
+                    "--package=oxeylyzer-2"
+                ],
+                "filter": {
+                    "name": "repl",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug benchmark 'benchmarks'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bench=benchmarks",
+                    "--package=oxeylyzer-2"
+                ],
+                "filter": {
+                    "name": "benchmarks",
+                    "kind": "bench"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug benchmark 'util'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bench=util",
+                    "--package=oxeylyzer-2"
+                ],
+                "filter": {
+                    "name": "util",
+                    "kind": "bench"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

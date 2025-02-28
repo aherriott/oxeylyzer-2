@@ -12,7 +12,6 @@ pub enum CorpusError {}
 pub struct CorpusCleaner {
     map: HashMap<char, Vec<char>>,
     shift_key: Option<char>,
-    repeat_key: bool,
     raw: bool,
 }
 
@@ -21,7 +20,6 @@ impl Default for CorpusCleaner {
         Self {
             map: HashMap::default(),
             shift_key: Some(SHIFT_CHAR),
-            repeat_key: false,
             raw: true,
         }
     }
@@ -34,7 +32,6 @@ impl CorpusCleaner {
             chars: HashSet::default(),
             shifted_chars: HashMap::default(),
             mappings: HashMap::default(),
-            repeat_key: false,
         }
     }
 
@@ -49,7 +46,6 @@ pub struct CorpusCleanerBuilder {
     chars: HashSet<char>,
     shifted_chars: HashMap<char, char>,
     mappings: HashMap<char, Vec<char>>,
-    repeat_key: bool,
 }
 
 impl CorpusCleanerBuilder {
@@ -88,12 +84,6 @@ impl CorpusCleanerBuilder {
 
     pub fn with_chars(&mut self, chars: impl IntoIterator<Item = char>) -> &mut Self {
         chars.into_iter().for_each(|c| self.with_char(c));
-
-        self
-    }
-
-    pub fn repeat_key(&mut self, enable: bool) -> &mut Self {
-        self.repeat_key = enable;
 
         self
     }
@@ -215,13 +205,11 @@ impl CorpusCleanerBuilder {
             .collect();
 
         let shift_key = self.shift_char;
-        let repeat_key = self.repeat_key;
         let raw = false;
 
         CorpusCleaner {
             map,
             shift_key,
-            repeat_key,
             raw,
         }
     }
@@ -251,10 +239,6 @@ where
 
         if self.use_window {
             self.window.push(c);
-
-            if self.cleaner.repeat_key && self.window[0] == self.window[1] {
-                return Some(vec![REPEAT_KEY]);
-            }
         }
 
         if let Some(sk) = self.cleaner.shift_key {
@@ -336,10 +320,7 @@ pub trait CleanCorpus: Iterator {
         Self: Iterator<Item = char>,
         Self: Sized,
     {
-        let window = match cleaner.repeat_key {
-            true => SlidingWindow::new(2, REPLACEMENT_CHAR),
-            false => SlidingWindow::new(1, REPLACEMENT_CHAR),
-        };
+        let window = SlidingWindow::new(1, REPLACEMENT_CHAR);
         let iter = self;
 
         CorpusCleanerIterator {
@@ -347,7 +328,7 @@ pub trait CleanCorpus: Iterator {
             iter,
             window,
             shift_pressed: false,
-            use_window: cleaner.repeat_key,
+            use_window: false,
         }
     }
 }
