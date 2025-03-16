@@ -167,7 +167,7 @@ mod bench {
         let mut cache = analyzer.cached_layout(layout, &[]);
 
         bencher.bench(|| {
-            analyzer.best_swap(&mut cache);
+            analyzer.best_neighbor(&mut cache);
         })
     }
 }

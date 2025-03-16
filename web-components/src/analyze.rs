@@ -75,6 +75,7 @@ pub fn RenderDofAnalyzer(dof: Dof) -> impl IntoView {
         fingers,
         keyboard,
         shape,
+        ..
     } = Layout::from(dof.clone());
 
     let keys = keys
@@ -346,6 +347,7 @@ fn RenderAnalysis(data: Data, weights: impl Fn() -> GlobalWeights + 'static) -> 
         fingers: phys.fingers.clone(),
         keyboard: phys.keyboard.clone(),
         shape: phys.shape.clone(),
+        magic: Default::default(),
     });
 
     let stats_memo = create_memo(move |_| analyzer.with(|a| layout_memo.with(|l| a.stats(l))));

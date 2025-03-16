@@ -170,6 +170,7 @@ pub fn RenderDof(dof: Dof) -> impl IntoView {
         fingers,
         keyboard,
         shape,
+        ..
     } = Layout::from(dof);
 
     let keys = LayoutKeys(

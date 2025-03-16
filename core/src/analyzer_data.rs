@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{char_mapping::CharMapping, data::Data, weights::Weights};
+use crate::{char_mapping::CharMapping, data::Data};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalyzerData {
@@ -9,8 +9,6 @@ pub struct AnalyzerData {
     bigrams: Box<[i64]>,
     skipgrams: Box<[i64]>,
     trigrams: Box<[i64]>,
-    same_finger_weighted_bigrams: Box<[i64]>,
-    stretch_weighted_bigrams: Box<[i64]>,
     pub char_total: f64,
     pub bigram_total: f64,
     pub skipgram_total: f64,
@@ -19,7 +17,7 @@ pub struct AnalyzerData {
 }
 
 impl AnalyzerData {
-    pub fn new(data: Data, weights: &Weights) -> Self {
+    pub fn new(data: Data) -> Self {
         let mut chars = vec![0; data.chars.len() + 2];
         let mut mapping = CharMapping::new();
 
@@ -75,18 +73,21 @@ impl AnalyzerData {
             trigrams[i] = (f * trigram_total) as i64;
         }
 
-        let same_finger_weighted_bigrams = bigrams
-            .iter()
-            .zip(&skipgrams)
-            .map(|(&b, &s)| weights.sfbs * b + weights.sfs * s)
-            .collect::<Box<_>>();
+        // // Pre-weight the bigrams and skipgrams for quicker compute later
+        // let same_finger_weighted_bigrams = bigrams
+        //     .iter()
+        //     .zip(&skipgrams)
+        //     .map(|(&b, &s)| weights.sfbs * b + weights.sfs * s)
+        //     .collect::<Box<_>>();
 
-        let sfb_over_sfs = (weights.sfbs as f64) / (weights.sfs as f64);
-        let stretch_weighted_bigrams = bigrams
-            .iter()
-            .zip(&skipgrams)
-            .map(|(&b, &s)| (b + (s as f64 * sfb_over_sfs) as i64) * weights.stretches)
-            .collect::<Box<_>>();
+        // // TODO: sfb / sfs makes no sense to me here. If you weight sfbs more, the skipgrams instead get weighted more here.
+        // // Should it be the other way around?
+        // let sfb_over_sfs = (weights.sfbs as f64) / (weights.sfs as f64);
+        // let stretch_weighted_bigrams = bigrams
+        //     .iter()
+        //     .zip(&skipgrams)
+        //     .map(|(&b, &s)| (b + (s as f64 * sfb_over_sfs) as i64) * weights.stretches)
+        //     .collect::<Box<_>>();
 
         let mapping = Arc::new(mapping);
 
@@ -96,9 +97,8 @@ impl AnalyzerData {
             bigrams: bigrams.into(),
             skipgrams: skipgrams.into(),
             trigrams: trigrams.into(),
-            same_finger_weighted_bigrams,
-            stretch_weighted_bigrams,
-
+            // same_finger_weighted_bigrams,
+            // stretch_weighted_bigrams,
             char_total,
             bigram_total,
             skipgram_total,
@@ -150,21 +150,21 @@ impl AnalyzerData {
         self.trigrams[i]
     }
 
-    pub fn get_same_finger_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
-        let u1 = self.mapping.get_u(c1) as usize;
-        let u2 = self.mapping.get_u(c2) as usize;
+    // pub fn get_same_finger_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
+    //     let u1 = self.mapping.get_u(c1) as usize;
+    //     let u2 = self.mapping.get_u(c2) as usize;
 
-        let i = u1 * self.len() + u2;
-        self.same_finger_weighted_bigrams[i]
-    }
+    //     let i = u1 * self.len() + u2;
+    //     self.same_finger_weighted_bigrams[i]
+    // }
 
-    pub fn get_stretch_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
-        let u1 = self.mapping.get_u(c1) as usize;
-        let u2 = self.mapping.get_u(c2) as usize;
+    // pub fn get_stretch_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
+    //     let u1 = self.mapping.get_u(c1) as usize;
+    //     let u2 = self.mapping.get_u(c2) as usize;
 
-        let i = u1 * self.len() + u2;
-        self.stretch_weighted_bigrams[i]
-    }
+    //     let i = u1 * self.len() + u2;
+    //     self.stretch_weighted_bigrams[i]
+    // }
 
     #[inline]
     pub fn get_char_u(&self, c: u8) -> i64 {
@@ -199,21 +199,21 @@ impl AnalyzerData {
         self.trigrams[i]
     }
 
-    #[inline]
-    pub fn get_same_finger_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
-        let u1 = c1 as usize;
-        let u2 = c2 as usize;
+    // #[inline]
+    // pub fn get_same_finger_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+    //     let u1 = c1 as usize;
+    //     let u2 = c2 as usize;
 
-        let i = u1 * self.len() + u2;
-        self.same_finger_weighted_bigrams[i]
-    }
+    //     let i = u1 * self.len() + u2;
+    //     self.same_finger_weighted_bigrams[i]
+    // }
 
-    #[inline]
-    pub fn get_stretch_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
-        let u1 = c1 as usize;
-        let u2 = c2 as usize;
+    // #[inline]
+    // pub fn get_stretch_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+    //     let u1 = c1 as usize;
+    //     let u2 = c2 as usize;
 
-        let i = u1 * self.len() + u2;
-        self.stretch_weighted_bigrams[i]
-    }
+    //     let i = u1 * self.len() + u2;
+    //     self.stretch_weighted_bigrams[i]
+    // }
 }

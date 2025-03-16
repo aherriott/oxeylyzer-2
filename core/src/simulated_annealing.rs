@@ -1,10 +1,6 @@
-use nanorand::{RandomGen, Rng, WyRand};
+use nanorand::{RandomGen, WyRand};
 
-use crate::{
-    analyze::Analyzer,
-    cached_layout::CachedLayout,
-    layout::{Layout, PosPair},
-};
+use crate::{analyze::Analyzer, layout::Layout};
 // use plotters::prelude::*;
 
 impl Analyzer {
@@ -46,12 +42,10 @@ impl Analyzer {
         // let mut scores = Vec::<i64>::new();
 
         for _ in 0..max_iterations {
-            let swap = random_swap(&cache, &mut rng);
+            let diff = self.random_neighbor(&cache, &mut rng);
 
             // Test the swap
-            cache.swap(swap);
-            self.update_cache(&mut cache, swap);
-            let new_score = self.score_cache(&cache);
+            let new_score = self.test_neighbor(&mut cache, diff);
 
             if new_score < worst_score {
                 worst_score = new_score;
@@ -66,10 +60,7 @@ impl Analyzer {
 
             if ap > f64::random(&mut rng) {
                 current_score = new_score;
-            } else {
-                // Undo the swap
-                cache.swap(swap);
-                self.update_cache(&mut cache, swap);
+                self.apply_neighbor(&mut cache, diff);
             }
             // scores.push(current_score);
 
@@ -109,11 +100,6 @@ impl Analyzer {
 //     // Save the plot
 //     Ok(())
 // }
-
-#[inline]
-fn random_swap(cache: &CachedLayout, rng: &mut WyRand) -> PosPair {
-    cache.possible_swaps[rng.generate_range(0..(cache.possible_swaps.len()))]
-}
 
 #[inline]
 fn acceptance_probability(
@@ -170,12 +156,19 @@ mod tests {
         let layout = Layout::load(format!("../layouts/sturdy.dof"))
             .expect("this layout is valid and exists, soooo");
         let pins = vec![];
-        let initial_temperature = 0.0001;
-        let max_iterations = 1000;
+        // Tempertaures set to exploit to speed up the test
+        let initial_temperature = 1E-4;
+        let final_temperature = 1E-7;
+        let max_iterations = 10_000;
 
         let qwerty_score = analyzer.score(&layout);
-        let (new_layout, score) =
-            analyzer.annealing_improve(layout, &pins, initial_temperature, 0.95, max_iterations);
+        let (new_layout, score) = analyzer.annealing_improve(
+            layout,
+            &pins,
+            initial_temperature,
+            final_temperature,
+            max_iterations,
+        );
         assert_eq!(score, analyzer.score(&new_layout));
 
         // After 1000 iterations, this better have made it better

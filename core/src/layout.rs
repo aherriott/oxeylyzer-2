@@ -1,8 +1,11 @@
+use fxhash::FxHashMap as HashMap;
+use libdof::magic::MagicKey;
 use libdof::prelude::{Dof, Finger, Keyboard, PhysicalKey, Shape};
 use nanorand::{tls_rng, Rng as _};
 
 use crate::{
-    cached_layout::CachedLayout, Result, REPEAT_KEY, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR,
+    cached_layout::CachedLayout, Result, MAGIC_CHARS, REPEAT_KEY, REPLACEMENT_CHAR, SHIFT_CHAR,
+    SPACE_CHAR,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,6 +14,16 @@ pub struct PosPair(pub u8, pub u8);
 impl<U: Into<u8>> From<(U, U)> for PosPair {
     fn from((p1, p2): (U, U)) -> Self {
         Self(p1.into(), p2.into())
+    }
+}
+
+// magic_key, leader, output
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MagicRule(pub u8, pub u8, pub u8);
+
+impl<U: Into<u8>> From<(U, U, U)> for MagicRule {
+    fn from((p1, p2, p3): (U, U, U)) -> Self {
+        Self(p1.into(), p2.into(), p3.into())
     }
 }
 
@@ -52,6 +65,7 @@ pub struct Layout {
     pub fingers: Box<[Finger]>,
     pub keyboard: Box<[PhysicalKey]>,
     pub shape: Shape,
+    pub magic: HashMap<char, MagicKey>,
 }
 
 #[inline]
@@ -106,6 +120,7 @@ impl Layout {
             fingers,
             keyboard,
             shape,
+            magic: HashMap::default(),
         }
     }
 }
@@ -114,6 +129,8 @@ impl From<Dof> for Layout {
     fn from(dof: Dof) -> Self {
         use libdof::prelude::{Key, SpecialKey};
 
+        let mut magic: HashMap<char, MagicKey> = HashMap::default();
+        let mut magic_i = 0;
         let keys = dof
             .main_layer()
             .keys()
@@ -125,6 +142,13 @@ impl From<Dof> for Layout {
                     SpecialKey::Shift => SHIFT_CHAR,
                     _ => REPLACEMENT_CHAR,
                 },
+                Key::Magic { label } => {
+                    // Map magic chars to their keys
+                    let c = MAGIC_CHARS.chars().nth(magic_i);
+                    magic_i += 1;
+                    magic.insert(c.unwrap(), dof.magic_key(label).unwrap().to_owned());
+                    c.unwrap()
+                }
                 _ => REPLACEMENT_CHAR,
             })
             .collect();
@@ -140,6 +164,7 @@ impl From<Dof> for Layout {
             fingers,
             keyboard,
             shape,
+            magic,
         }
     }
 }
@@ -156,6 +181,22 @@ impl From<CachedLayout> for Layout {
             fingers: layout.fingers,
             keyboard: layout.keyboard,
             shape: layout.shape,
+            magic: layout
+                .magic
+                .rules
+                .iter()
+                .map(|(c, mk)| {
+                    let c = layout.char_mapping.get_c(*c);
+                    let mut magic_key = MagicKey::new(&c.to_string());
+                    for (leading, output) in mk.iter() {
+                        magic_key.add_rule(
+                            &layout.char_mapping.get_c(*leading).to_string(),
+                            &layout.char_mapping.get_c(*output).to_string(),
+                        );
+                    }
+                    (c, magic_key)
+                })
+                .collect(),
         }
     }
 }
@@ -178,6 +219,8 @@ impl std::fmt::Display for Layout {
             }
             writeln!(f)?;
         }
+
+        //TODO: add magic keys
 
         Ok(())
     }

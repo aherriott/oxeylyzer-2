@@ -4,8 +4,11 @@ use libdof::prelude::{Finger, PhysicalKey, Shape};
 use std::sync::Arc;
 
 use crate::{
-    analyzer_data::AnalyzerData, char_mapping::CharMapping, layout::PosPair,
-    weights::FingerWeights, REPLACEMENT_CHAR,
+    char_mapping::CharMapping,
+    layout::MagicRule,
+    layout::PosPair,
+    weights::{FingerWeights, Weights},
+    REPLACEMENT_CHAR,
 };
 
 const KEY_EDGE_OFFSET: f64 = 0.5;
@@ -18,20 +21,13 @@ pub struct CachedLayout {
     pub keyboard: Box<[PhysicalKey]>,
     pub shape: Shape,
     pub char_mapping: Arc<CharMapping>,
-    pub possible_swaps: Box<[PosPair]>,
-    pub weighted_sfb_indices: SfbIndices,
-    pub unweighted_sfb_indices: SfbIndices,
-    pub weighted_bigrams: BigramCache,
-    pub stretch_bigrams: StretchCache,
-    pub magic_cache: HashMap<u8, [u8; 2]>,
+    pub possible_neighbors: Box<[Neighbor]>,
+    pub sfb: SFBCache,
+    pub stretch: StretchCache,
+    pub magic: MagicCache,
 }
 
 impl CachedLayout {
-    #[inline]
-    pub fn swap(&mut self, PosPair(k1, k2): PosPair) {
-        self.keys.swap(k1 as usize, k2 as usize);
-    }
-
     pub fn char(&self, pos: u8) -> Option<char> {
         let u = self.keys.get(pos as usize)?;
 
@@ -95,6 +91,26 @@ impl CachedLayout {
             });
         self.stretch_bigrams.total = self.stretch_bigrams.total;
     }
+
+    // Apply a neighbor diff to the cache. Returns the diff to revert it.
+    pub fn apply_neighbor(&mut self, diff: Neighbor) -> Neighbor {
+        match diff {
+            Neighbor::KeySwap(PosPair(a, b)) => {
+                self.keys.swap(a as usize, b as usize);
+                Neighbor::KeySwap(PosPair(a, b))
+            }
+            Neighbor::MagicRule(MagicRule(key, leader, output)) => {
+                // Save the exising rule so we can revert it.
+                let revert = *self.magic.rules.get(&key).unwrap().get(&leader).unwrap();
+                self.magic
+                    .rules
+                    .get_mut(&key)
+                    .unwrap()
+                    .insert(leader, output);
+                Neighbor::MagicRule(MagicRule(key, leader, revert))
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for CachedLayout {
@@ -115,6 +131,78 @@ impl std::fmt::Display for CachedLayout {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeltaBigram {
+    pub a: u8,
+    pub b: u8,
+    pub new: i64,
+    pub old: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeltaTrigram {
+    pub a: u8,
+    pub b: u8,
+    pub c: u8,
+    pub new: i64,
+    pub old: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeltaGram {
+    Bigram(DeltaBigram),
+    Skipgram(DeltaBigram),
+    Trigram(DeltaTrigram),
+}
+
+impl Default for DeltaGram {
+    fn default() -> Self {
+        DeltaGram::Bigram(DeltaBigram::default())
+    }
+}
+
+// For now, only "simple" magic rules are supported. One leader key -> one output key.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MagicCache {
+    // magic_key -> leader -> output
+    pub rules: HashMap<u8, HashMap<u8, u8>>,
+    // Preallocate buffer for iterative score updates on rule change
+    pub affected_grams: Box<[DeltaGram]>,
+    // Buffers for magic-applied bigram/skipgram/trigram frequencies
+    pub bigrams: Box<[i64]>,
+    pub skipgrams: Box<[i64]>,
+    pub trigrams: Box<[i64]>,
+}
+
+// The difference between two neighboring layouts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Neighbor {
+    KeySwap(PosPair),
+    MagicRule(MagicRule),
+}
+
+impl Neighbor {
+    pub fn default() -> Self {
+        Neighbor::KeySwap(PosPair(0, 0))
+    }
+
+    pub fn revert(&self, cache: &CachedLayout) -> Neighbor {
+        match self {
+            Neighbor::KeySwap(_) => *self,
+            Neighbor::MagicRule(rule) => {
+                let output = cache
+                    .magic
+                    .rules
+                    .get(&rule.0)
+                    .unwrap()
+                    .get(&rule.1)
+                    .unwrap();
+                Neighbor::MagicRule(MagicRule(rule.0, rule.1, *output))
+            }
+        }
     }
 }
 
@@ -179,8 +267,10 @@ impl SfbIndices {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct BigramCache {
+pub struct SFBCache {
     pub total: i64,
+    pub weighted_sfb_indices: SfbIndices,
+    pub unweighted_sfb_indices: SfbIndices,
     pub per_finger: Box<[i64; 10]>,
 }
 
@@ -193,10 +283,11 @@ pub struct StretchCache {
 
 impl StretchCache {
     pub fn new(
-        keys: &[char],
+        keys: &[u8],
         fingers: &[Finger],
         keyboard: &[PhysicalKey],
-        data: &AnalyzerData,
+        weights: &Weights,
+        magic: &MagicCache,
     ) -> Self {
         assert!(
             fingers.len() <= u8::MAX as usize,
@@ -263,12 +354,17 @@ impl StretchCache {
                      dist,
                      pair: PosPair(a, b),
                  }| {
-                    let u1 = keys[*a as usize];
-                    let u2 = keys[*b as usize];
+                    let u1 = *a as usize;
+                    let u2 = *b as usize;
+                    let bg = magic.bigrams.get(u1 + u2 * keys.len()).unwrap()
+                        + magic.bigrams.get(u2 + u1 * keys.len()).unwrap();
+                    let sg = magic.skipgrams.get(u1 + u2 * keys.len()).unwrap()
+                        + magic.skipgrams.get(u2 + u1 * keys.len()).unwrap();
 
-                    (data.get_stretch_weighted_bigram([u1, u2])
-                        + data.get_stretch_weighted_bigram([u2, u1]))
-                        * dist
+                    // TODO: should this be sfb / sfs? If you weight sfbs more, the skipgrams instead get weighted more here.
+                    // Should it be the other way around? Would a weighted average make more sense?
+                    let sfb_over_sfs = (weights.sfbs as f64) / (weights.sfs as f64);
+                    (bg + (sg as f64 * sfb_over_sfs) as i64) * weights.stretches * dist
                 },
             )
             .sum();
@@ -378,6 +474,37 @@ fn dist(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyze::{self, Analyzer};
+    use crate::data::Data;
+    use crate::layout::Layout;
+    use crate::weights::dummy_weights;
+
+    #[test]
+    fn test_apply_revert_neighbor_cache_integrity() {
+        let data = Data::load("../data/english.json").expect("this should exist");
+        let weights = dummy_weights();
+        let analyzer = Analyzer::new(data, weights);
+        let layout = Layout::load(format!("../layouts/test/magic.dof"))
+            .expect("this layout is valid and exists, soooo");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+        let reference = cache.clone();
+
+        // Test key swap
+        let diff = Neighbor::KeySwap(PosPair(0, 1));
+        analyzer.apply_neighbor(&mut cache, diff);
+        analyzer.apply_neighbor(&mut cache, diff.revert(cache));
+        assert!(cache == reference);
+
+        // Test arbitrary magic rule
+        let diff = Neighbor::MagicRule(MagicRule(
+            *cache.magic.rules.iter().next().unwrap().0,
+            cache.char_mapping.get_u('c'),
+            cache.char_mapping.get_u('d'),
+        ));
+        analyzer.apply_neighbor(&mut cache, diff);
+        analyzer.apply_neighbor(&mut cache, diff.revert(cache));
+        assert!(cache == reference);
+    }
 
     #[test]
     fn test_key_dist() {

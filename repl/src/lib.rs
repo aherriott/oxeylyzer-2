@@ -176,6 +176,7 @@ impl Repl {
         let count = count.unwrap_or(10);
 
         cache
+            .sfb
             .weighted_sfb_indices
             .all
             .iter()
@@ -210,7 +211,7 @@ impl Repl {
         let count = count.unwrap_or(10);
 
         cache
-            .stretch_bigrams
+            .stretch
             .all_pairs
             .iter()
             .flat_map(

@@ -70,7 +70,7 @@ impl From<&CorpusDataSettings> for CorpusCleaner {
         CorpusCleaner::builder()
             .with_chars(settings.chars.get_untracked().chars())
             .with_chars(special.chars())
-            .repeat_key(settings.enable_repeat_key.get_untracked())
+            // .repeat_key(settings.enable_repeat_key.get_untracked())
             .build()
     }
 }

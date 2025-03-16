@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 
-use crate::{REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
+use crate::{MAGIC_CHARS, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharMapping(IndexMap<char, u8>);
@@ -12,6 +12,9 @@ impl Default for CharMapping {
         map.push(REPLACEMENT_CHAR);
         map.push(SHIFT_CHAR);
         map.push(SPACE_CHAR);
+        for char in MAGIC_CHARS.chars() {
+            map.push(char);
+        }
 
         map
     }

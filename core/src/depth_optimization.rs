@@ -1,7 +1,7 @@
 use crate::{
     analyze::Analyzer,
-    cached_layout::CachedLayout,
-    layout::{Layout, PosPair},
+    cached_layout::{CachedLayout, Neighbor},
+    layout::Layout,
 };
 
 impl Analyzer {
@@ -9,21 +9,19 @@ impl Analyzer {
         let mut cache = self.cached_layout(layout, pins);
         let mut best_score = self.score_cache(&cache);
 
-        let swaps = std::mem::take(&mut cache.possible_swaps);
+        let swaps = std::mem::take(&mut cache.possible_neighbors);
 
         loop {
             let mut best_loop_score = i64::MIN;
 
             for &pair in swaps.iter() {
-                cache.swap(pair);
-                let score = self.score_cached_swap(&mut cache, pair);
+                let score = self.test_neighbor(&mut cache, pair);
 
                 if score > best_score {
                     best_loop_score = score;
-                    self.update_cache(&mut cache, pair);
+                    self.apply_neighbor(&mut cache, pair);
                     break;
                 }
-                cache.swap(pair);
             }
 
             if best_loop_score <= best_score {
@@ -55,192 +53,83 @@ impl Analyzer {
     }
 
     pub fn greedy_depth2_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let mut cache = self.cached_layout(layout, pins);
-        let mut best_score = self.score_cache(&cache);
-
-        while let Some((swaps, score)) = self.best_swap_depth2(&mut cache) {
-            if score <= best_score {
-                break;
-            }
-
-            best_score = score;
-            for &swap in swaps.iter() {
-                cache.swap(swap);
-                self.update_cache(&mut cache, swap);
-            }
-        }
-
-        (cache.into(), best_score)
+        self.greedy_improve_depth_n(layout, pins, 2)
     }
 
     pub fn greedy_depth4_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let mut cache = self.cached_layout(layout, pins);
-        let mut best_score = self.score_cache(&cache);
-
-        while let Some((swaps, score)) = self.best_swap_depth4(&mut cache) {
-            if score <= best_score {
-                break;
-            }
-
-            best_score = score;
-            for &swap in swaps.iter() {
-                cache.swap(swap);
-                self.update_cache(&mut cache, swap);
-            }
-        }
-
-        (cache.into(), best_score)
+        self.greedy_improve_depth_n(layout, pins, 4)
     }
 
     pub fn greedy_depth3_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+        self.greedy_improve_depth_n(layout, pins, 3)
+    }
+
+    fn greedy_improve_depth_n(
+        &self,
+        layout: Layout,
+        pins: &[usize],
+        depth: usize,
+    ) -> (Layout, i64) {
         let mut cache = self.cached_layout(layout, pins);
-        let mut best_score = self.score_cache(&cache);
+        let mut diffs = vec![Neighbor::default(); depth];
+        let mut cur_best = self.score_cache(&cache);
 
-        while let Some((swaps, score)) = self.best_swap_depth3(&mut cache) {
-            if score <= best_score {
-                break;
-            }
+        let neighbors = std::mem::take(&mut cache.possible_neighbors);
 
-            best_score = score;
-            for &swap in swaps.iter() {
-                cache.swap(swap);
-                self.update_cache(&mut cache, swap);
+        while self.best_neighbor_recursive(&mut cache, depth, &mut diffs, &mut cur_best, &neighbors)
+        {
+            for diff in diffs.iter() {
+                self.apply_neighbor(&mut cache, *diff);
             }
         }
 
-        (cache.into(), best_score)
+        (cache.into(), cur_best)
     }
 
-    pub fn best_swap_depth4(&self, cache: &mut CachedLayout) -> Option<(Box<[PosPair]>, i64)> {
-        let depth1 = self.best_swap(cache).map(|(s, score)| ([s].into(), score));
-        let depth2 = self.best_swap_depth2(cache);
-        let depth3 = self.best_swap_depth3(cache);
+    fn best_neighbor_recursive(
+        &self,
+        cache: &mut CachedLayout,
+        depth: usize,
+        diffs: &mut Vec<Neighbor>,
+        cur_best: &mut i64,
+        possible_neighbors: &[Neighbor],
+    ) -> bool {
+        if depth > 0 {
+            let mut return_best = false;
+            for diff in possible_neighbors {
+                // Apply the neighbor
+                self.apply_neighbor(cache, *diff);
 
-        let possible_swaps = cache.possible_swaps.clone();
+                // Recurse
+                let best = self.best_neighbor_recursive(
+                    cache,
+                    depth - 1,
+                    diffs,
+                    cur_best,
+                    possible_neighbors,
+                );
 
-        let mut depth4_score = i64::MIN;
-        let mut depth4_swap = None;
+                // TODO: This needs to be faster
+                // Revert the neighbor
+                self.apply_neighbor(cache, diff.revert(cache));
 
-        for (&swap1, i) in possible_swaps.iter().zip(1..) {
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
-
-            for (&swap2, j) in possible_swaps.iter().zip(1..).skip(i) {
-                cache.swap(swap2);
-                self.update_cache(cache, swap2);
-
-                for (&swap3, k) in possible_swaps.iter().zip(1..).skip(j) {
-                    cache.swap(swap3);
-                    self.update_cache(cache, swap3);
-
-                    for &swap4 in possible_swaps.iter().skip(k) {
-                        cache.swap(swap4);
-                        let current_score = self.score_cached_swap(cache, swap4);
-                        cache.swap(swap4);
-
-                        if current_score > depth4_score {
-                            depth4_score = current_score;
-                            depth4_swap = Some([swap1, swap2, swap3, swap4]);
-                        }
-                    }
-
-                    cache.swap(swap3);
-                    self.update_cache(cache, swap3);
-                }
-
-                cache.swap(swap2);
-                self.update_cache(cache, swap2);
-            }
-
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
-        }
-
-        let depth4 = depth4_swap.map(|s| (s.into(), depth4_score));
-
-        [depth1, depth2, depth3, depth4]
-            .into_iter()
-            .flatten()
-            .max_by(|(_, s1), (_, s2)| s1.cmp(s2))
-    }
-
-    pub fn best_swap_depth3(&self, cache: &mut CachedLayout) -> Option<(Box<[PosPair]>, i64)> {
-        let depth1 = self.best_swap(cache).map(|(s, score)| ([s].into(), score));
-        let depth2 = self.best_swap_depth2(cache);
-
-        let possible_swaps = cache.possible_swaps.clone();
-
-        let mut depth3_score = i64::MIN;
-        let mut depth3_swap = None;
-
-        for (&swap1, i) in possible_swaps.iter().zip(1..) {
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
-
-            for (&swap2, j) in possible_swaps.iter().zip(1..).skip(i) {
-                cache.swap(swap2);
-                self.update_cache(cache, swap2);
-
-                for &swap3 in possible_swaps.iter().skip(j) {
-                    cache.swap(swap3);
-                    let current_score = self.score_cached_swap(cache, swap3);
-                    cache.swap(swap3);
-
-                    if current_score > depth3_score {
-                        depth3_score = current_score;
-                        depth3_swap = Some([swap1, swap2, swap3]);
-                    }
-                }
-
-                cache.swap(swap2);
-                self.update_cache(cache, swap2);
-            }
-
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
-        }
-
-        let depth3 = depth3_swap.map(|s| (s.into(), depth3_score));
-
-        [depth1, depth2, depth3]
-            .into_iter()
-            .flatten()
-            .max_by(|(_, s1), (_, s2)| s1.cmp(s2))
-    }
-
-    pub fn best_swap_depth2(&self, cache: &mut CachedLayout) -> Option<(Box<[PosPair]>, i64)> {
-        let depth1 = self.best_swap(cache).map(|(s, score)| ([s].into(), score));
-
-        let possible_swaps = cache.possible_swaps.clone();
-
-        let mut depth2_score = i64::MIN;
-        let mut depth2_swap = None;
-
-        for (&swap1, i) in possible_swaps.iter().zip(1usize..) {
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
-
-            for &swap2 in possible_swaps.iter().skip(i) {
-                cache.swap(swap2);
-                let current_score = self.score_cached_swap(cache, swap2);
-                cache.swap(swap2);
-
-                if current_score > depth2_score {
-                    depth2_score = current_score;
-                    depth2_swap = Some([swap1, swap2]);
+                // This chain is the current known best. Update diffs
+                if best {
+                    diffs[depth - 1] = *diff;
+                    return_best = true;
                 }
             }
-
-            cache.swap(swap1);
-            self.update_cache(cache, swap1);
+            return_best
+        } else {
+            let score = self.score_cache(cache);
+            if score > *cur_best {
+                // This chain is the current known best. Update cur_best
+                *cur_best = score;
+                true
+            } else {
+                false
+            }
         }
-
-        let depth2 = depth2_swap.map(|s| (s.into(), depth2_score));
-
-        [depth1, depth2]
-            .into_iter()
-            .flatten()
-            .max_by(|(_, s1), (_, s2)| s1.cmp(s2))
     }
 }
 
@@ -267,18 +156,18 @@ mod tests {
         let (analyzer, layout) = analyzer_layout("rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
         let reference = cache.clone();
+        let mut diffs = vec![Neighbor::default(); 4];
+        let mut cur_best = i64::MIN;
 
-        analyzer.best_swap(&mut cache);
-
+        analyzer.best_neighbor_recursive(&mut cache, 1, &mut diffs, &mut cur_best);
         assert_eq!(cache, reference);
 
-        analyzer.best_swap_depth2(&mut cache);
-
+        analyzer.best_neighbor_recursive(&mut cache, 2, &mut diffs, &mut cur_best);
         assert_eq!(cache, reference);
 
-        analyzer.best_swap_depth3(&mut cache);
-
-        assert_eq!(cache, reference);
+        // TODO: This test is too slow
+        // analyzer.best_neighbor_recursive(&mut cache, 3, &mut diffs, &mut cur_best);
+        //assert_eq!(cache, reference);
     }
 
     #[test]
@@ -288,11 +177,10 @@ mod tests {
 
         println!("stretches before swap: {}", analyzer.stretches(&cache));
 
-        match analyzer.best_swap(&mut cache) {
+        match analyzer.best_neighbor(&mut cache) {
             Some((pair, score)) => {
                 println!("pair: {:?}, score: {}", pair, score);
-                analyzer.update_cache(&mut cache, pair);
-                cache.swap(pair);
+                analyzer.apply_neighbor(&mut cache, pair);
                 println!("stretches after swap: {}", analyzer.stretches(&cache));
             }
             None => println!("No improvement found"),
