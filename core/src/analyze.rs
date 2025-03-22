@@ -142,14 +142,14 @@ impl Analyzer {
      **************************************
      */
 
-    pub(crate) fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
+    pub fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
         cache.possible_neighbors[rng.generate_range(0..cache.possible_neighbors.len())]
     }
 
     /**
      * Returns the best neighbor
      */
-    pub(crate) fn best_neighbor(&self, cache: &mut CachedLayout) -> Option<(Neighbor, i64)> {
+    pub fn best_neighbor(&self, cache: &mut CachedLayout) -> Option<(Neighbor, i64)> {
         let mut best_score = self.score_cache(cache);
         let mut best = None;
 
@@ -167,12 +167,12 @@ impl Analyzer {
     }
 
     // Calculates the score of a neighbor without updating the cache
-    pub(crate) fn test_neighbor(&self, cache: &mut CachedLayout, neighbor: Neighbor) -> i64 {
+    pub fn test_neighbor(&self, cache: &mut CachedLayout, neighbor: Neighbor) -> i64 {
         self.update_cache(cache, &neighbor, false)
     }
 
     // Calculates the score of a neighbor and applies it to the cache
-    pub(crate) fn apply_neighbor(&self, cache: &mut CachedLayout, neighbor: Neighbor) -> i64 {
+    pub fn apply_neighbor(&self, cache: &mut CachedLayout, neighbor: Neighbor) -> i64 {
         self.update_cache(cache, &neighbor, true)
     }
 
@@ -406,7 +406,7 @@ impl Analyzer {
      **************************************
      */
 
-    fn stretch_neighbor_update(
+    pub fn stretch_neighbor_update(
         &self,
         cache: &mut CachedLayout,
         neighbor: &Neighbor,

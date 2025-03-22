@@ -15,7 +15,12 @@ mod bench {
     const N: i32 = 10000;
 
     pub(super) fn main() -> std::io::Result<()> {
-        let swaps = [PosPair(1, 4), PosPair(5, 28), PosPair(3, 13), PosPair(7, 7)];
+        let swaps = [
+            Neighbor::KeySwap(PosPair(1, 4)),
+            Neighbor::KeySwap(PosPair(5, 28)),
+            Neighbor::KeySwap(PosPair(3, 13)),
+            Neighbor::KeySwap(PosPair(7, 7)),
+        ];
 
         let mut bench = Bench::new(BenchConfig::from_args()?);
         // bench.register_many(
@@ -68,7 +73,7 @@ mod bench {
         })
     }
 
-    fn analyze_swap(bencher: Bencher, swap: PosPair) {
+    fn analyze_swap(bencher: Bencher, swap: Neighbor) {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
@@ -79,7 +84,7 @@ mod bench {
         })
     }
 
-    fn analyze_swap_bigrams(bencher: Bencher, swap: PosPair) {
+    fn analyze_swap_bigrams(bencher: Bencher, swap: Neighbor) {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
@@ -90,7 +95,7 @@ mod bench {
         })
     }
 
-    fn analyze_swap_stretches(bencher: Bencher, swap: PosPair) {
+    fn analyze_swap_stretches(bencher: Bencher, swap: Neighbor) {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
