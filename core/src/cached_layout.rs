@@ -39,6 +39,61 @@ impl CachedLayout {
             c => Some(c),
         }
     }
+
+    /**
+     * Zero-allocation fast-copy
+     * Assumes self and other were cloned at some point, and all memory is allocated
+     */
+    pub fn fast_copy(&mut self, other: &Self) {
+        debug_assert!(
+            self.name == other.name,
+            "These should have the same name if they were cloned."
+        );
+
+        // No need to copy name
+        self.keys.copy_from_slice(&other.keys);
+        // No need to copy fingers
+        // No need to copy physical keyboard
+        // No need to copy shape
+        // No need to copy char_mapping
+        // No need to copy possible_swaps
+        let _ = self
+            .weighted_sfb_indices
+            .fingers
+            .iter_mut()
+            .zip(other.weighted_sfb_indices.fingers.iter())
+            .map(|(s, o)| s.copy_from_slice(o));
+        self.weighted_sfb_indices
+            .all
+            .copy_from_slice(&other.weighted_sfb_indices.all);
+
+        let _ = self
+            .unweighted_sfb_indices
+            .fingers
+            .iter_mut()
+            .zip(other.unweighted_sfb_indices.fingers.iter())
+            .map(|(s, o)| s.copy_from_slice(o));
+        self.unweighted_sfb_indices
+            .all
+            .copy_from_slice(&other.unweighted_sfb_indices.all);
+
+        self.weighted_bigrams
+            .per_finger
+            .copy_from_slice(&*other.weighted_bigrams.per_finger);
+        self.weighted_bigrams.total = other.weighted_bigrams.total;
+
+        self.stretch_bigrams
+            .all_pairs
+            .copy_from_slice(&other.stretch_bigrams.all_pairs);
+        let _ = self
+            .stretch_bigrams
+            .per_keypair
+            .iter_mut()
+            .map(|(pair, bg)| {
+                bg.copy_from_slice(other.stretch_bigrams.per_keypair.get(pair).unwrap())
+            });
+        self.stretch_bigrams.total = self.stretch_bigrams.total;
+    }
 }
 
 impl std::fmt::Display for CachedLayout {

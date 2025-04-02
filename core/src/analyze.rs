@@ -216,7 +216,7 @@ impl Analyzer {
             .sum()
     }
 
-    pub(crate) fn update_cache(&self, cache: &mut CachedLayout, swap: PosPair) {
+    pub fn update_cache(&self, cache: &mut CachedLayout, swap: PosPair) {
         if swap.0 == swap.1 {
             return;
         }

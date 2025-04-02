@@ -12,6 +12,8 @@ mod bench {
     use oxeylyzer_core::{optimization::*, prelude::*};
     use rand::{distributions::Alphanumeric, Rng};
 
+    const N: i32 = 10000;
+
     pub(super) fn main() -> std::io::Result<()> {
         let swaps = [PosPair(1, 4), PosPair(5, 28), PosPair(3, 13), PosPair(7, 7)];
 
@@ -23,7 +25,13 @@ mod bench {
         // bench.register(generate_real_data, ["monkeyracer", "english"]);
         // bench.register(find_best_swap, ["rstn-oxey"]);
         bench.register_many(
-            list![analyze_swap_bigrams, analyze_swap_stretches, analyze_swap],
+            list![
+                analyze_swap_bigrams,
+                analyze_swap_stretches,
+                analyze_swap,
+                update_cache_swap,
+                cache_copy,
+            ],
             swaps,
         );
         // bench.register(init_cached_layout, ["rstn-oxey", "colemak-dh", "sturdy"]);
@@ -64,23 +72,58 @@ mod bench {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
-        bencher.bench(|| black_box(analyzer.score_cached_swap(&mut cache, black_box(swap))))
+        bencher.bench(|| {
+            for _ in 1..N {
+                black_box(analyzer.score_cached_swap(&mut cache, black_box(swap)));
+            }
+        })
     }
 
     fn analyze_swap_bigrams(bencher: Bencher, swap: PosPair) {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
-        bencher
-            .bench(|| black_box(analyzer.score_swap_weighted_bigrams(&mut cache, black_box(swap))))
+        bencher.bench(|| {
+            for _ in 1..N {
+                black_box(analyzer.score_swap_weighted_bigrams(&mut cache, black_box(swap)));
+            }
+        })
     }
 
     fn analyze_swap_stretches(bencher: Bencher, swap: PosPair) {
         let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
         let mut cache = analyzer.cached_layout(layout, &[]);
 
-        bencher
-            .bench(|| black_box(analyzer.score_swap_stretch_bigrams(&mut cache, black_box(swap))))
+        bencher.bench(|| {
+            for _ in 1..N {
+                black_box(analyzer.score_swap_stretch_bigrams(&mut cache, black_box(swap)));
+            }
+        })
+    }
+
+    fn update_cache_swap(bencher: Bencher, swap: PosPair) {
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+
+        bencher.bench(|| {
+            for _ in 1..N {
+                cache.swap(black_box(swap));
+                analyzer.update_cache(&mut cache, black_box(swap));
+            }
+        })
+    }
+
+    fn cache_copy(bencher: Bencher, swap: PosPair) {
+        let (analyzer, layout) = util::analyzer_layout("english", "rstn-oxey");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+        let mut cache2 = cache.clone();
+
+        bencher.bench(|| {
+            for _ in 1..N {
+                cache.swap(black_box(swap));
+                cache2.fast_copy(black_box(&cache));
+            }
+        })
     }
 
     fn generate_data(bencher: Bencher, length: usize) {
