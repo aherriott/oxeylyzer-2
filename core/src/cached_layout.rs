@@ -55,41 +55,41 @@ impl CachedLayout {
         // No need to copy char_mapping
         // No need to copy possible_swaps
         let _ = self
+            .sfb
             .weighted_sfb_indices
             .fingers
             .iter_mut()
-            .zip(other.weighted_sfb_indices.fingers.iter())
+            .zip(other.sfb.weighted_sfb_indices.fingers.iter())
             .map(|(s, o)| s.copy_from_slice(o));
-        self.weighted_sfb_indices
+        self.sfb
+            .weighted_sfb_indices
             .all
-            .copy_from_slice(&other.weighted_sfb_indices.all);
+            .copy_from_slice(&other.sfb.weighted_sfb_indices.all);
 
         let _ = self
+            .sfb
             .unweighted_sfb_indices
             .fingers
             .iter_mut()
-            .zip(other.unweighted_sfb_indices.fingers.iter())
+            .zip(other.sfb.unweighted_sfb_indices.fingers.iter())
             .map(|(s, o)| s.copy_from_slice(o));
-        self.unweighted_sfb_indices
+        self.sfb
+            .unweighted_sfb_indices
             .all
-            .copy_from_slice(&other.unweighted_sfb_indices.all);
+            .copy_from_slice(&other.sfb.unweighted_sfb_indices.all);
 
-        self.weighted_bigrams
-            .per_finger
-            .copy_from_slice(&*other.weighted_bigrams.per_finger);
-        self.weighted_bigrams.total = other.weighted_bigrams.total;
+        self.sfb.per_finger.copy_from_slice(&*other.sfb.per_finger);
+        self.sfb.total = other.sfb.total;
 
-        self.stretch_bigrams
+        self.stretch
             .all_pairs
-            .copy_from_slice(&other.stretch_bigrams.all_pairs);
+            .copy_from_slice(&other.stretch.all_pairs);
         let _ = self
-            .stretch_bigrams
+            .stretch
             .per_keypair
             .iter_mut()
-            .map(|(pair, bg)| {
-                bg.copy_from_slice(other.stretch_bigrams.per_keypair.get(pair).unwrap())
-            });
-        self.stretch_bigrams.total = self.stretch_bigrams.total;
+            .map(|(pair, bg)| bg.copy_from_slice(other.stretch.per_keypair.get(pair).unwrap()));
+        self.stretch.total = other.stretch.total;
     }
 
     // Apply a neighbor diff to the cache. Returns the diff to revert it.
@@ -492,7 +492,8 @@ mod tests {
         // Test key swap
         let diff = Neighbor::KeySwap(PosPair(0, 1));
         analyzer.apply_neighbor(&mut cache, diff);
-        analyzer.apply_neighbor(&mut cache, diff.revert(cache));
+        let revert = diff.revert(&cache);
+        analyzer.apply_neighbor(&mut cache, revert);
         assert!(cache == reference);
 
         // Test arbitrary magic rule
@@ -502,7 +503,8 @@ mod tests {
             cache.char_mapping.get_u('d'),
         ));
         analyzer.apply_neighbor(&mut cache, diff);
-        analyzer.apply_neighbor(&mut cache, diff.revert(cache));
+        let revert = diff.revert(&cache);
+        analyzer.apply_neighbor(&mut cache, revert);
         assert!(cache == reference);
     }
 

@@ -111,7 +111,8 @@ impl Analyzer {
 
                 // TODO: This needs to be faster
                 // Revert the neighbor
-                self.apply_neighbor(cache, diff.revert(cache));
+                let revert = diff.revert(cache);
+                self.apply_neighbor(cache, revert);
 
                 // This chain is the current known best. Update diffs
                 if best {
@@ -158,11 +159,12 @@ mod tests {
         let reference = cache.clone();
         let mut diffs = vec![Neighbor::default(); 4];
         let mut cur_best = i64::MIN;
+        let neighbors = cache.possible_neighbors.clone();
 
-        analyzer.best_neighbor_recursive(&mut cache, 1, &mut diffs, &mut cur_best);
+        analyzer.best_neighbor_recursive(&mut cache, 1, &mut diffs, &mut cur_best, &neighbors);
         assert_eq!(cache, reference);
 
-        analyzer.best_neighbor_recursive(&mut cache, 2, &mut diffs, &mut cur_best);
+        analyzer.best_neighbor_recursive(&mut cache, 2, &mut diffs, &mut cur_best, &neighbors);
         assert_eq!(cache, reference);
 
         // TODO: This test is too slow

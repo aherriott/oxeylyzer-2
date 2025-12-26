@@ -73,22 +73,6 @@ impl AnalyzerData {
             trigrams[i] = (f * trigram_total) as i64;
         }
 
-        // // Pre-weight the bigrams and skipgrams for quicker compute later
-        // let same_finger_weighted_bigrams = bigrams
-        //     .iter()
-        //     .zip(&skipgrams)
-        //     .map(|(&b, &s)| weights.sfbs * b + weights.sfs * s)
-        //     .collect::<Box<_>>();
-
-        // // TODO: sfb / sfs makes no sense to me here. If you weight sfbs more, the skipgrams instead get weighted more here.
-        // // Should it be the other way around?
-        // let sfb_over_sfs = (weights.sfbs as f64) / (weights.sfs as f64);
-        // let stretch_weighted_bigrams = bigrams
-        //     .iter()
-        //     .zip(&skipgrams)
-        //     .map(|(&b, &s)| (b + (s as f64 * sfb_over_sfs) as i64) * weights.stretches)
-        //     .collect::<Box<_>>();
-
         let mapping = Arc::new(mapping);
 
         Self {
@@ -150,22 +134,6 @@ impl AnalyzerData {
         self.trigrams[i]
     }
 
-    // pub fn get_same_finger_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
-    //     let u1 = self.mapping.get_u(c1) as usize;
-    //     let u2 = self.mapping.get_u(c2) as usize;
-
-    //     let i = u1 * self.len() + u2;
-    //     self.same_finger_weighted_bigrams[i]
-    // }
-
-    // pub fn get_stretch_weighted_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
-    //     let u1 = self.mapping.get_u(c1) as usize;
-    //     let u2 = self.mapping.get_u(c2) as usize;
-
-    //     let i = u1 * self.len() + u2;
-    //     self.stretch_weighted_bigrams[i]
-    // }
-
     #[inline]
     pub fn get_char_u(&self, c: u8) -> i64 {
         self.chars[c as usize]
@@ -198,22 +166,4 @@ impl AnalyzerData {
         let i = u1 * self.len().pow(2) + u2 * self.len() + u3;
         self.trigrams[i]
     }
-
-    // #[inline]
-    // pub fn get_same_finger_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
-    //     let u1 = c1 as usize;
-    //     let u2 = c2 as usize;
-
-    //     let i = u1 * self.len() + u2;
-    //     self.same_finger_weighted_bigrams[i]
-    // }
-
-    // #[inline]
-    // pub fn get_stretch_weighted_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
-    //     let u1 = c1 as usize;
-    //     let u2 = c2 as usize;
-
-    //     let i = u1 * self.len() + u2;
-    //     self.stretch_weighted_bigrams[i]
-    // }
 }

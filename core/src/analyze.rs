@@ -176,7 +176,7 @@ impl Analyzer {
         self.update_cache(cache, &neighbor, true)
     }
 
-    // TODO: Used to be pub(crate). Safe?
+    // TODO(AI): Used to be pub(crate). Safe?
     fn update_cache(&self, cache: &mut CachedLayout, neighbor: &Neighbor, apply: bool) -> i64 {
         match neighbor {
             Neighbor::KeySwap(swap) => {
@@ -398,6 +398,202 @@ impl Analyzer {
         let sg = *magic.skipgrams.get(u1 * keys.len() + u2).unwrap();
 
         self.weights.sfbs * bg + self.weights.sfs * sg
+    }
+
+    /*
+     **************************************
+     *    Magic Frequency (On-Demand)
+     **************************************
+     */
+
+    /// Get effective bigram frequency accounting for magic key rules
+    /// This works on the premise that magic keys "steal" frequency from their non-magic counterparts
+    fn get_bigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
+        // Check if a or b are magic keys
+        let a_is_magic = cache.magic.rules.contains_key(&a);
+        let b_is_magic = cache.magic.rules.contains_key(&b);
+
+        match (a_is_magic, b_is_magic) {
+            (false, false) => {
+                // Neither is magic: check if this bigram is stolen by a magic rule
+                // Priority order: iterate magic keys in order, first match wins
+                for (magic_key, rules) in &cache.magic.rules {
+                    if let Some(&output) = rules.get(&a) {
+                        if output == b {
+                            // a -> b is fully stolen by a -> magic_key
+                            return 0;
+                        }
+                    }
+                }
+                // Not stolen, return base frequency
+                self.data.get_bigram_u([a, b])
+            }
+            (true, false) => {
+                // a is magic: return sum of tg(l,a,b) where l -> a is a magic rule
+                let mut freq = 0;
+                if let Some(rules) = cache.magic.rules.get(&a) {
+                    for (&leader, &output) in rules.iter() {
+                        if output == a {
+                            // Leader produces 'a' as magic output
+                            freq += self.data.get_trigram_u([leader, a, b]);
+                        }
+                    }
+                }
+                freq
+            }
+            (false, true) => {
+                // b is magic: check if there's a rule a -> b
+                if let Some(rules) = cache.magic.rules.get(&b) {
+                    if let Some(&output) = rules.get(&a) {
+                        if output == b {
+                            // There IS a rule a -> b
+                            let mut freq = self.data.get_bigram_u([a, b]);
+
+                            // Subtract frequency stolen by other magic keys with same rule
+                            for (other_magic, other_rules) in &cache.magic.rules {
+                                if other_magic == &b {
+                                    continue;
+                                } // Skip the current magic key
+                                if let Some(&other_output) = other_rules.get(&a) {
+                                    if other_output == b {
+                                        // Higher priority magic key with same rule - it steals all frequency
+                                        return 0;
+                                    }
+                                }
+                            }
+
+                            // Subtract tg(l,a,b) where l -> a is a magic rule
+                            for (magic_key, rules) in &cache.magic.rules {
+                                for (&leader, &output) in rules.iter() {
+                                    if output == a {
+                                        freq -= self.data.get_trigram_u([leader, a, b]);
+                                    }
+                                }
+                            }
+
+                            freq
+                        } else {
+                            // No rule a -> b
+                            0
+                        }
+                    } else {
+                        // No rule a -> b
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            (true, true) => {
+                // Both are magic: return 0
+                0
+            }
+        }
+    }
+
+    /// Get effective skipgram frequency accounting for magic key rules
+    fn get_skipgram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
+        // Check if a or b are magic keys
+        let a_is_magic = cache.magic.rules.contains_key(&a);
+        let b_is_magic = cache.magic.rules.contains_key(&b);
+
+        match (a_is_magic, b_is_magic) {
+            (false, false) => {
+                // Neither is magic: return sg(a,b) minus sum(tg(a,l,b)) where l -> b is a magic rule
+                let mut freq = self.data.get_skipgram_u([a, b]);
+
+                for (magic_key, rules) in &cache.magic.rules {
+                    if magic_key == &b {
+                        // b is the magic key, find all leaders that produce b
+                        for (&leader, &output) in rules.iter() {
+                            if output == b {
+                                // Leader produces b as magic output
+                                freq -= self.data.get_trigram_u([a, leader, b]);
+                            }
+                        }
+                    }
+                }
+
+                freq
+            }
+            (true, _) => {
+                // a is magic: return 0 (need quadgrams for precise calculation)
+                0
+            }
+            (false, true) => {
+                // b is magic: return sum(tg(a,l,b)) where l -> b is a magic rule
+                let mut freq = 0;
+                if let Some(rules) = cache.magic.rules.get(&b) {
+                    for (&leader, &output) in rules.iter() {
+                        if output == b {
+                            freq += self.data.get_trigram_u([a, leader, b]);
+                        }
+                    }
+                }
+                freq
+            }
+        }
+    }
+
+    /// Get effective trigram frequency accounting for magic key rules
+    fn get_trigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8, c: u8) -> i64 {
+        // Check which positions are magic keys
+        let a_is_magic = cache.magic.rules.contains_key(&a);
+        let b_is_magic = cache.magic.rules.contains_key(&b);
+        let c_is_magic = cache.magic.rules.contains_key(&c);
+
+        if a_is_magic {
+            // a is magic: return 0
+            return 0;
+        }
+
+        if b_is_magic && c_is_magic {
+            // Both b and c are magic: return 0
+            return 0;
+        }
+
+        if b_is_magic && !c_is_magic {
+            // b is magic, c is not: if a -> b is a magic rule, return tg(a,b,c)
+            if let Some(rules) = cache.magic.rules.get(&b) {
+                if let Some(&output) = rules.get(&a) {
+                    if output == b {
+                        return self.data.get_trigram_u([a, b, c]);
+                    }
+                }
+            }
+            return 0;
+        }
+
+        if c_is_magic {
+            // c is magic (b is not): if b -> c is a magic rule, return tg(a,b,c)
+            if let Some(rules) = cache.magic.rules.get(&c) {
+                if let Some(&output) = rules.get(&b) {
+                    if output == c {
+                        return self.data.get_trigram_u([a, b, c]);
+                    }
+                }
+            }
+            return 0;
+        }
+
+        // None are magic: check if a -> b or b -> c is a magic rule
+        for (magic_key, rules) in &cache.magic.rules {
+            if let Some(&output) = rules.get(&a) {
+                if output == b {
+                    // a -> b is a magic rule, trigram stolen
+                    return 0;
+                }
+            }
+            if let Some(&output) = rules.get(&b) {
+                if output == c {
+                    // b -> c is a magic rule, trigram stolen
+                    return 0;
+                }
+            }
+        }
+
+        // No magic rules affect this trigram
+        self.data.get_trigram_u([a, b, c])
     }
 
     /*
@@ -1105,7 +1301,8 @@ mod tests {
             let initial = analyzer.score_cache(&cache);
 
             analyzer.apply_neighbor(&mut cache, swap);
-            analyzer.apply_neighbor(&mut cache, swap.revert(cache));
+            let revert = swap.revert(&cache);
+            analyzer.apply_neighbor(&mut cache, revert);
 
             let returned = analyzer.score_cache(&cache);
 
@@ -1144,5 +1341,132 @@ mod tests {
 
         //         println!("{c1}{c2}: {}", pair.dist);
         //     })
+    }
+
+    #[test]
+    fn test_magic_bigram_frequency_basic() {
+        // Test basic magic key frequency calculation
+        let (analyzer, layout) = analyzer_layout("test/magic");
+        let cache = analyzer.cached_layout(layout, &[]);
+
+        // Test that 'a' -> 'b' bigram returns 0 (stolen by magic)
+        let a = cache.char_mapping.get_u('a');
+        let b = cache.char_mapping.get_u('b');
+
+        let freq = analyzer.get_bigram_frequency_magic(&cache, a, b);
+        assert_eq!(freq, 0, "a->b should be stolen by magic key");
+
+        // Test that 'a' -> 'z' bigram is unaffected
+        let z = cache.char_mapping.get_u('z');
+
+        let freq = analyzer.get_bigram_frequency_magic(&cache, a, z);
+        assert_eq!(freq, 0, "a->z should be unaffected");
+
+        // Todo: test that the mag -> 'z' bigram is zero
+        // Todo: test that 'a' -> mag has the stolen frequency
+        // Todo: test that 'z' -> mag is zero
+    }
+
+    #[test]
+    fn test_magic_bigram_multiple_keys() {
+        // Test priority ordering when multiple magic keys have same rules
+        // test/magic has two magic keys. The first has rule 'a'->'b', the second has 'a'->'b' and 'b'->'c'
+        let (analyzer, _) = analyzer_layout("test/magic");
+
+        // Todo: test that 'a' -> mag returns bg(a,b)
+        // Todo: test that 'a' -> mag2 returns 0
+        // Todo: test that 'b' -> mag2 returns bg(b,c)
+    }
+
+    #[test]
+    fn test_magic_skipgram_frequency() {
+        let (analyzer, layout) = analyzer_layout("test/magic");
+        let cache = analyzer.cached_layout(layout, &[]);
+
+        // Test skipgram calculation with magic keys
+        let a = cache.char_mapping.get_u('a');
+        let b = cache.char_mapping.get_u('b');
+
+        let freq = analyzer.get_skipgram_frequency_magic(&cache, a, b);
+
+        // Should be base skipgram minus any stolen by magic rules
+        let base = analyzer.data.get_skipgram_u([a, b]);
+        assert!(
+            freq <= base,
+            "Magic keys can only reduce skipgram frequency"
+        );
+    }
+
+    #[test]
+    fn test_magic_trigram_frequency() {
+        let (analyzer, layout) = analyzer_layout("test/magic");
+        let cache = analyzer.cached_layout(layout, &[]);
+
+        // Test trigram calculation with magic keys
+        let a = cache.char_mapping.get_u('a');
+        let b = cache.char_mapping.get_u('b');
+        let c = cache.char_mapping.get_u('c');
+
+        let freq = analyzer.get_trigram_frequency_magic(&cache, a, b, c);
+
+        // Trigram should either be 0 (stolen) or base frequency
+        let base = analyzer.data.get_trigram_u([a, b, c]);
+        assert!(
+            freq == 0 || freq == base,
+            "Trigram should be either stolen (0) or not ({base}), got {freq}"
+        );
+    }
+
+    #[test]
+    fn test_magic_frequency_symmetry() {
+        // Test that changing a rule and reverting it preserves frequencies
+        let (analyzer, layout) = analyzer_layout("test/magic");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+
+        // Extract values first to avoid borrow conflicts
+        let (magic_key, leader, output) = if let Some((mk, rules)) = cache.magic.rules.iter().next()
+        {
+            if let Some((&l, &o)) = rules.iter().next() {
+                (*mk, l, o)
+            } else {
+                return; // No rules
+            }
+        } else {
+            return; // No magic keys
+        };
+
+        let a = cache.char_mapping.get_u('t');
+        let b = cache.char_mapping.get_u('e');
+
+        // Get initial frequency
+        let initial_bg = analyzer.get_bigram_frequency_magic(&cache, a, b);
+        let initial_sg = analyzer.get_skipgram_frequency_magic(&cache, a, b);
+
+        // Change the rule
+        let new_output = cache.char_mapping.get_u('x');
+        cache
+            .magic
+            .rules
+            .get_mut(&magic_key)
+            .unwrap()
+            .insert(leader, new_output);
+
+        // Revert the rule
+        cache
+            .magic
+            .rules
+            .get_mut(&magic_key)
+            .unwrap()
+            .insert(leader, output);
+
+        // Frequencies should be restored
+        let final_bg = analyzer.get_bigram_frequency_magic(&cache, a, b);
+        let final_sg = analyzer.get_skipgram_frequency_magic(&cache, a, b);
+
+        assert_eq!(initial_bg, final_bg, "Bigram frequency should be restored");
+        assert_eq!(
+            initial_sg, final_sg,
+            "Skipgram frequency should be restored"
+        );
     }
 }
