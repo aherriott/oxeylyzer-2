@@ -1,10 +1,8 @@
 use fxhash::FxHashMap as HashMap;
 use itertools::Itertools;
 use libdof::prelude::{Finger, PhysicalKey, Shape};
-use std::sync::Arc;
 
 use crate::{
-    char_mapping::CharMapping,
     layout::MagicRule,
     layout::PosPair,
     weights::{FingerWeights, Weights},
@@ -13,47 +11,55 @@ use crate::{
 
 const KEY_EDGE_OFFSET: f64 = 0.5;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+// CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
+// It is wrapped by Analyzer
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CachedLayout {
-    pub name: String,
     pub keys: Box<[u8]>,
-    pub fingers: Box<[Finger]>,
-    pub keyboard: Box<[PhysicalKey]>,
-    pub shape: Shape,
-    pub char_mapping: Arc<CharMapping>,
-    pub possible_neighbors: Box<[Neighbor]>,
     pub sfb: SFBCache,
     pub stretch: StretchCache,
     pub magic: MagicCache,
 }
 
 impl CachedLayout {
-    pub fn char(&self, pos: u8) -> Option<char> {
-        let u = self.keys.get(pos as usize)?;
+    pub fn new(data: &AnalyzerData, layout: &Layout) -> Self {
+        let keys = layout
+            .keys
+            .iter()
+            .map(|&c| data.mapping.get_u(c))
+            .collect::<Box<_>>();
 
-        match self.char_mapping.get_c(*u) {
-            REPLACEMENT_CHAR => None,
-            c => Some(c),
-        }
+        let fingers = layout.fingers;
+        let shape = layout.shape;
+        let char_mapping = data.mapping.clone();
+        let keyboard = layout.keyboard;
+        let magic = initialize_magic_cache(&layout.magic, &char_mapping, &keys);
+
+        // Initialize strech cache
+        let stretch = StretchCache::new(&keys, &fingers, &keyboard, &self.weights);
+
+        // Initialize the SFBCache
+        let sfb = self.sfb_cache_initialize(&keys, &fingers, &keyboard);
+
+        let cache = CachedLayout {
+            name,
+            keys,
+            fingers,
+            keyboard,
+            shape,
+            stretch,
+            sfb,
+        };
+
+        cache
     }
 
-    /**
-     * Zero-allocation fast-copy
-     * Assumes self and other were cloned at some point, and all memory is allocated
-     */
-    pub fn fast_copy(&mut self, other: &Self) {
-        debug_assert!(
-            self.name == other.name,
-            "These should have the same name if they were cloned."
-        );
+    pub fn score(&self) -> i64 {
+        return self.sfb.total + self.stretch.total;
+    }
 
-        // No need to copy name
+    pub fn copy(&mut self, other: &Self) {
         self.keys.copy_from_slice(&other.keys);
-        // No need to copy fingers
-        // No need to copy physical keyboard
-        // No need to copy shape
-        // No need to copy char_mapping
-        // No need to copy possible_swaps
         let _ = self
             .sfb
             .weighted_sfb_indices
@@ -91,77 +97,6 @@ impl CachedLayout {
             .map(|(pair, bg)| bg.copy_from_slice(other.stretch.per_keypair.get(pair).unwrap()));
         self.stretch.total = other.stretch.total;
     }
-
-    // Apply a neighbor diff to the cache. Returns the diff to revert it.
-    pub fn apply_neighbor(&mut self, diff: Neighbor) -> Neighbor {
-        match diff {
-            Neighbor::KeySwap(PosPair(a, b)) => {
-                self.keys.swap(a as usize, b as usize);
-                Neighbor::KeySwap(PosPair(a, b))
-            }
-            Neighbor::MagicRule(MagicRule(key, leader, output)) => {
-                // Save the exising rule so we can revert it.
-                let revert = *self.magic.rules.get(&key).unwrap().get(&leader).unwrap();
-                self.magic
-                    .rules
-                    .get_mut(&key)
-                    .unwrap()
-                    .insert(leader, output);
-                Neighbor::MagicRule(MagicRule(key, leader, revert))
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for CachedLayout {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.keys.iter().map(|&u| self.char_mapping.get_c(u));
-
-        for l in self.shape.inner().iter() {
-            let mut i = 0;
-            for c in iter.by_ref() {
-                write!(f, "{c} ")?;
-                i += 1;
-
-                if *l == i {
-                    break;
-                }
-            }
-            writeln!(f)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DeltaBigram {
-    pub a: u8,
-    pub b: u8,
-    pub new: i64,
-    pub old: i64,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DeltaTrigram {
-    pub a: u8,
-    pub b: u8,
-    pub c: u8,
-    pub new: i64,
-    pub old: i64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DeltaGram {
-    Bigram(DeltaBigram),
-    Skipgram(DeltaBigram),
-    Trigram(DeltaTrigram),
-}
-
-impl Default for DeltaGram {
-    fn default() -> Self {
-        DeltaGram::Bigram(DeltaBigram::default())
-    }
 }
 
 // For now, only "simple" magic rules are supported. One leader key -> one output key.
@@ -169,12 +104,6 @@ impl Default for DeltaGram {
 pub struct MagicCache {
     // magic_key -> leader -> output
     pub rules: HashMap<u8, HashMap<u8, u8>>,
-    // Preallocate buffer for iterative score updates on rule change
-    pub affected_grams: Box<[DeltaGram]>,
-    // Buffers for magic-applied bigram/skipgram/trigram frequencies
-    pub bigrams: Box<[i64]>,
-    pub skipgrams: Box<[i64]>,
-    pub trigrams: Box<[i64]>,
 }
 
 // The difference between two neighboring layouts.
@@ -499,8 +428,8 @@ mod tests {
         // Test arbitrary magic rule
         let diff = Neighbor::MagicRule(MagicRule(
             *cache.magic.rules.iter().next().unwrap().0,
-            cache.char_mapping.get_u('c'),
-            cache.char_mapping.get_u('d'),
+            analyzer.char_mapping.get_u('c'),
+            analyzer.char_mapping.get_u('d'),
         ));
         analyzer.apply_neighbor(&mut cache, diff);
         let revert = diff.revert(&cache);

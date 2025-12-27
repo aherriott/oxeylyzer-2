@@ -52,6 +52,22 @@ impl Analyzer {
         self.greedy_depth4_improve(layout, pins)
     }
 
+    pub fn greedy_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+        let mut cache = self.cached_layout(layout, pins);
+        let mut best_score = self.score_cache(&cache);
+
+        while let Some((neighbor, score)) = self.best_neighbor(&mut cache) {
+            if score <= best_score {
+                break;
+            }
+
+            best_score = score;
+            self.apply_neighbor(&mut cache, neighbor);
+        }
+
+        (cache.into(), best_score)
+    }
+
     pub fn greedy_depth2_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         self.greedy_improve_depth_n(layout, pins, 2)
     }
