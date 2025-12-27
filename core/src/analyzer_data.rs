@@ -18,7 +18,7 @@ pub struct AnalyzerData {
 
 impl AnalyzerData {
     pub fn new(data: Data) -> Self {
-        let mut chars = vec![0; data.chars.len() + 2];
+        let mut chars = vec![0; data.chars.len() + 8];
         let mut mapping = CharMapping::new();
 
         let char_total = data.char_total as f64 / 100.0;

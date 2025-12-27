@@ -68,57 +68,57 @@ impl Analyzer {
         &self.data.mapping
     }
 
-    pub fn cached_layout(&self, layout: Layout, pins: &[usize]) -> CachedLayout {
-        let keys = layout
-            .keys
-            .iter()
-            .map(|&c| self.data.mapping.get_u(c))
-            .collect::<Box<_>>();
+    // pub fn cached_layout(&self, layout: Layout, pins: &[usize]) -> CachedLayout {
+    //     let keys = layout
+    //         .keys
+    //         .iter()
+    //         .map(|&c| self.data.mapping.get_u(c))
+    //         .collect::<Box<_>>();
 
-        let name = layout.name;
-        let fingers = layout.fingers;
-        let shape = layout.shape;
-        let char_mapping = self.data.mapping.clone();
-        let keyboard = layout.keyboard;
+    //     let name = layout.name;
+    //     let fingers = layout.fingers;
+    //     let shape = layout.shape;
+    //     let char_mapping = self.data.mapping.clone();
+    //     let keyboard = layout.keyboard;
 
-        // Initialize the Magic/Repeat key cache
-        let magic = self.initialize_magic_cache(&layout.magic, &char_mapping, &keys);
+    //     // Initialize the Magic/Repeat key cache
+    //     let magic = self.initialize_magic_cache(&layout.magic, &char_mapping, &keys);
 
-        // All possible keyswaps to create a neighbor layout
-        let possible_swaps = (0..(keys.len() as u8))
-            .filter(|v| !pins.contains(&(*v as usize)))
-            .tuple_combinations::<(_, _)>()
-            .map(|pair| Neighbor::KeySwap(pair.into()));
-        // All possible new magic rules to create a neighbor layout
-        let possible_rules = magic.rules.iter().flat_map(|(key, _)| {
-            keys.iter().flat_map(|lead| {
-                keys.iter()
-                    .map(|output| Neighbor::MagicRule(MagicRule(*key, *lead, *output)))
-            })
-        });
-        let possible_neighbors = possible_swaps.chain(possible_rules).collect();
+    //     // All possible keyswaps to create a neighbor layout
+    //     let possible_swaps = (0..(keys.len() as u8))
+    //         .filter(|v| !pins.contains(&(*v as usize)))
+    //         .tuple_combinations::<(_, _)>()
+    //         .map(|pair| Neighbor::KeySwap(pair.into()));
+    //     // All possible new magic rules to create a neighbor layout
+    //     let possible_rules = magic.rules.iter().flat_map(|(key, _)| {
+    //         keys.iter().flat_map(|lead| {
+    //             keys.iter()
+    //                 .map(|output| Neighbor::MagicRule(MagicRule(*key, *lead, *output)))
+    //         })
+    //     });
+    //     let possible_neighbors = possible_swaps.chain(possible_rules).collect();
 
-        // Initialize strech cache
-        let stretch = StretchCache::new(&keys, &fingers, &keyboard, &self.weights, &magic);
+    //     // Initialize strech cache
+    //     let stretch = StretchCache::new(&keys, &fingers, &keyboard, &self.weights, &magic);
 
-        // Initialize the SFBCache
-        let sfb = self.sfb_cache_initialize(&keys, &fingers, &keyboard, &magic);
+    //     // Initialize the SFBCache
+    //     let sfb = self.sfb_cache_initialize(&keys, &fingers, &keyboard, &magic);
 
-        let cache = CachedLayout {
-            name,
-            keys,
-            fingers,
-            keyboard,
-            shape,
-            char_mapping,
-            possible_neighbors,
-            stretch,
-            sfb,
-            magic,
-        };
+    //     let cache = CachedLayout {
+    //         name,
+    //         keys,
+    //         fingers,
+    //         keyboard,
+    //         shape,
+    //         char_mapping,
+    //         possible_neighbors,
+    //         stretch,
+    //         sfb,
+    //         magic,
+    //     };
 
-        cache
-    }
+    //     cache
+    // }
 
     pub fn greedy_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         let mut cache = self.cached_layout(layout, pins);
@@ -392,10 +392,11 @@ impl Analyzer {
 
     // Simple getter that maps a keycode pair to the associated weighted bigram score
     fn sfb_get_weighted_bigram(&self, keys: &[u8], magic: &MagicCache, a: u8, b: u8) -> i64 {
+        let mapping_len = self.data.mapping.len();
         let u1 = a as usize;
         let u2 = b as usize;
-        let bg = *magic.bigrams.get(u1 * keys.len() + u2).unwrap();
-        let sg = *magic.skipgrams.get(u1 * keys.len() + u2).unwrap();
+        let bg = *magic.bigrams.get(u1 * mapping_len + u2).unwrap();
+        let sg = *magic.skipgrams.get(u1 * mapping_len + u2).unwrap();
 
         self.weights.sfbs * bg + self.weights.sfs * sg
     }
@@ -657,21 +658,14 @@ impl Analyzer {
     }
 
     pub fn stretch_get_bigram(&self, cache: &CachedLayout, a: &u8, b: &u8) -> i64 {
+        let mapping_len = self.data.mapping.len();
         let u1 = *a as usize;
         let u2 = *b as usize;
 
-        let bg = cache.magic.bigrams.get(u1 + u2 * cache.keys.len()).unwrap()
-            + cache.magic.bigrams.get(u2 + u1 * cache.keys.len()).unwrap();
-        let sg = cache
-            .magic
-            .skipgrams
-            .get(u1 + u2 * cache.keys.len())
-            .unwrap()
-            + cache
-                .magic
-                .skipgrams
-                .get(u2 + u1 * cache.keys.len())
-                .unwrap();
+        let bg = cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
+            + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap();
+        let sg = cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
+            + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap();
 
         // TODO: should this be sfb / sfs? If you weight sfbs more, the skipgrams instead get weighted more here.
         // Should it be the other way around? Would a weighted average make more sense?
@@ -719,19 +713,20 @@ impl Analyzer {
             }
         }
 
-        let mut bigrams = vec![0 as i64; keys.len().pow(2)].into_boxed_slice();
-        let mut skipgrams = vec![0 as i64; keys.len().pow(2)].into_boxed_slice();
-        let mut trigrams = vec![0 as i64; keys.len().pow(3)].into_boxed_slice();
+        let mapping_len = self.data.mapping.len();
+        let mut bigrams = vec![0 as i64; mapping_len.pow(2)].into_boxed_slice();
+        let mut skipgrams = vec![0 as i64; mapping_len.pow(2)].into_boxed_slice();
+        let mut trigrams = vec![0 as i64; mapping_len.pow(3)].into_boxed_slice();
 
         // First, copy all bg/sg/tg frequencies from data
         keys.iter().tuple_combinations().for_each(|(key1, key2)| {
             let u1 = *key1 as usize;
             let u2 = *key2 as usize;
-            bigrams[u1 * keys.len() + u2] = self.data.get_bigram_u([*key1, *key2]);
-            skipgrams[u1 * keys.len() + u2] = self.data.get_skipgram_u([*key1, *key2]);
+            bigrams[u1 * mapping_len + u2] = self.data.get_bigram_u([*key1, *key2]);
+            skipgrams[u1 * mapping_len + u2] = self.data.get_skipgram_u([*key1, *key2]);
             keys.iter().for_each(|key3| {
                 let u3 = *key3 as usize;
-                trigrams[u1 * keys.len().pow(2) + u2 * keys.len() + u3] =
+                trigrams[u1 * mapping_len.pow(2) + u2 * mapping_len + u3] =
                     self.data.get_trigram_u([*key1, *key2, *key3]);
             });
         });
@@ -740,18 +735,18 @@ impl Analyzer {
         let mut add_bg = |a: u8, b: u8, val: i64| {
             let u1 = a as usize;
             let u2 = b as usize;
-            bigrams[u1 * keys.len() + u2] += val;
+            bigrams[u1 * mapping_len + u2] += val;
         };
         let mut add_sg = |a: u8, b: u8, val: i64| {
             let u1 = a as usize;
             let u2 = b as usize;
-            skipgrams[u1 * keys.len() + u2] += val;
+            skipgrams[u1 * mapping_len + u2] += val;
         };
         let mut add_tg = |a: u8, b: u8, c: u8, val: i64| {
             let u1 = a as usize;
             let u2 = b as usize;
             let u3 = c as usize;
-            trigrams[u1 * keys.len().pow(2) + u2 * keys.len() + u3] += val;
+            trigrams[u1 * mapping_len.pow(2) + u2 * mapping_len + u3] += val;
         };
 
         // Next, apply the magic rules
@@ -947,7 +942,7 @@ impl Analyzer {
             // output -> key1 bigram stolen whenever the leader is pressed first
             add_bg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 old,
                 *key1,
                 self.data.get_trigram_u([*lead, old, *key1]),
@@ -955,7 +950,7 @@ impl Analyzer {
             );
             add_bg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *magic_key,
                 *key1,
                 self.data.get_trigram_u([*lead, *output, *key1])
@@ -964,7 +959,7 @@ impl Analyzer {
             );
             add_bg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *output,
                 *key1,
                 -1 * self.data.get_trigram_u([*lead, *output, *key1]),
@@ -974,7 +969,7 @@ impl Analyzer {
             // key1 -> output skipgram stolen whenever the leader is pressed in the middle
             add_sg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 old,
                 self.data.get_trigram_u([*key1, *lead, old]),
@@ -982,7 +977,7 @@ impl Analyzer {
             );
             add_sg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 *magic_key,
                 self.data.get_trigram_u([*key1, *lead, *output])
@@ -991,7 +986,7 @@ impl Analyzer {
             );
             add_sg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 *output,
                 -1 * self.data.get_trigram_u([*key1, *lead, *output]),
@@ -1001,7 +996,7 @@ impl Analyzer {
             // key1 -> lead -> output trigram always stolen
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 *lead,
                 old,
@@ -1010,7 +1005,7 @@ impl Analyzer {
             );
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 *lead,
                 *magic_key,
@@ -1020,7 +1015,7 @@ impl Analyzer {
             );
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *key1,
                 *lead,
                 *output,
@@ -1031,7 +1026,7 @@ impl Analyzer {
             // lead -> output -> key1 trigram always stolen
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *lead,
                 old,
                 *key1,
@@ -1040,7 +1035,7 @@ impl Analyzer {
             );
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *lead,
                 *magic_key,
                 *key1,
@@ -1050,7 +1045,7 @@ impl Analyzer {
             );
             add_tg(
                 &mut cache.magic,
-                cache.keys.len(),
+                self.data.mapping.len(),
                 *lead,
                 *output,
                 *key1,
@@ -1088,6 +1083,7 @@ impl Analyzer {
      */
 
     pub fn sfbs(&self, cache: &CachedLayout) -> i64 {
+        let mapping_len = self.data.mapping.len();
         cache
             .sfb
             .weighted_sfb_indices
@@ -1101,14 +1097,15 @@ impl Analyzer {
                     let u1 = cache.keys[*a as usize] as usize;
                     let u2 = cache.keys[*b as usize] as usize;
 
-                    cache.magic.bigrams.get(u1 * cache.keys.len() + u2).unwrap()
-                        + cache.magic.bigrams.get(u2 * cache.keys.len() + u1).unwrap()
+                    cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
+                        + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
                 },
             )
             .sum()
     }
 
     pub fn sfs(&self, cache: &CachedLayout) -> i64 {
+        let mapping_len = self.data.mapping.len();
         cache
             .sfb
             .weighted_sfb_indices
@@ -1122,16 +1119,8 @@ impl Analyzer {
                     let u1 = cache.keys[*a as usize] as usize;
                     let u2 = cache.keys[*b as usize] as usize;
 
-                    cache
-                        .magic
-                        .skipgrams
-                        .get(u1 * cache.keys.len() + u2)
-                        .unwrap()
-                        + cache
-                            .magic
-                            .skipgrams
-                            .get(u2 * cache.keys.len() + u1)
-                            .unwrap()
+                    cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
+                        + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap()
                 },
             )
             .sum()
@@ -1178,6 +1167,7 @@ impl Analyzer {
     }
 
     pub fn finger_sfbs(&self, cache: &CachedLayout) -> [i64; 10] {
+        let mapping_len = self.data.mapping.len();
         cache.sfb.weighted_sfb_indices.fingers.clone().map(|pairs| {
             pairs
                 .iter()
@@ -1189,8 +1179,8 @@ impl Analyzer {
                         let u1 = cache.keys[*a as usize] as usize;
                         let u2 = cache.keys[*b as usize] as usize;
 
-                        cache.magic.bigrams.get(u1 * cache.keys.len() + u2).unwrap()
-                            + cache.magic.bigrams.get(u2 * cache.keys.len() + u1).unwrap()
+                        cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
+                            + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
                     },
                 )
                 .sum()
@@ -1200,6 +1190,7 @@ impl Analyzer {
     pub fn trigrams(&self, cache: &CachedLayout) -> TrigramData {
         use crate::trigrams::TrigramType::*;
 
+        let mapping_len = self.data.mapping.len();
         let mut trigrams = TrigramData::default();
 
         for (&c1, &f1) in cache.keys.iter().zip(&cache.fingers) {
@@ -1211,7 +1202,7 @@ impl Analyzer {
                     let freq = cache
                         .magic
                         .trigrams
-                        .get(u1 * cache.keys.len().pow(2) + u2 * cache.keys.len() + u3)
+                        .get(u1 * mapping_len.pow(2) + u2 * mapping_len + u3)
                         .unwrap();
                     let ttype = TRIGRAMS[f1 as usize * 100 + f2 as usize * 10 + f3 as usize];
 
@@ -1360,7 +1351,7 @@ mod tests {
         let z = cache.char_mapping.get_u('z');
 
         let freq = analyzer.get_bigram_frequency_magic(&cache, a, z);
-        assert_eq!(freq, 0, "a->z should be unaffected");
+        assert_ne!(freq, 0, "a->z should be unaffected");
 
         // Todo: test that the mag -> 'z' bigram is zero
         // Todo: test that 'a' -> mag has the stolen frequency

@@ -122,7 +122,8 @@ mod tests {
         let mapping_s = "abcdefhgijklmnopqrstuvwxyz ";
         let mapping = mapping_s.chars().collect::<CharMapping>();
 
-        assert_eq!(mapping.len(), mapping_s.len() + 3);
+        // CharMapping::new() starts with 3 defaults + 5 MAGIC_CHARS = 8
+        assert_eq!(mapping.len(), mapping_s.len() + 8);
 
         let s = "this is epic-";
         let u = mapping.map_cs(s).collect::<Vec<_>>();
