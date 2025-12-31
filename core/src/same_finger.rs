@@ -24,7 +24,7 @@ pub struct SFCache {
 
 impl SFCache {
     // Zero initialize
-    pub fn new(fingers: &[Finger], keyboard: &[PhysicalKey]) -> Self {
+    pub fn initialize() {
         assert!(
             fingers.len() <= u8::MAX as usize,
             "Too many keys to index with u8, max is {}",
@@ -59,14 +59,6 @@ impl SFCache {
                     })
                     .collect::<Box<[SfBigramPair]>>()
                 }).collect::<Box<Box<[SfBigramPair]>>>();
-
-        let key_to_pos = Box<CharMapping::
-
-        Self {
-            sfb_per_finger,
-            sfs_per_finger,
-            keypair_dist_per_finger,
-        }
     }
 
     pub fn fast_copy(&mut self, other: &SFCache) {

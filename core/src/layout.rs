@@ -19,7 +19,7 @@ impl<U: Into<u8>> From<(U, U)> for PosPair {
 
 // magic_key, leader, output
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MagicRule(pub u8, pub u8, pub u8);
+pub struct MagicStealBigram(pub u8, pub u8, pub u8);
 
 impl<U: Into<u8>> From<(U, U, U)> for MagicRule {
     fn from((p1, p2, p3): (U, U, U)) -> Self {

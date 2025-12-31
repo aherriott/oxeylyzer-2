@@ -6,8 +6,8 @@
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StretchCache {
-    pub all_pairs: Box<[BigramPair]>,
-    pub per_keypair: HashMap<PosPair, Box<[BigramPair]>>,
+    pub all_pairs: Vec<BigramPair>,
+    pub per_keypair: Vec<Vec<BigramPair>>,
     pub total: i64,
 }
 
@@ -105,6 +105,14 @@ impl StretchCache {
             total,
         }
     }
+
+    pub fn add_key() {}
+
+    pub fn remove_key() {}
+
+    pub fn add_rule() {}
+
+    pub fn remove_rule() {}
 }
 
 fn x_finger_overlap(f1: Finger, f2: Finger) -> f64 {

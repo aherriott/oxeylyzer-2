@@ -16,19 +16,23 @@ const KEY_EDGE_OFFSET: f64 = 0.5;
 
 // CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
 // It is wrapped by Analyzer
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CachedLayout {
-    pub keys: Box<[u8]>,
+    pub keys: Vec<u8>,
     pub sfb: SFCache,
     pub stretch: StretchCache,
     pub magic: MagicCache,
-    fingers: Box<[Box<[BigramPair]>; 10]>, // Internal storage for key:finger mapping
+    fingers: Vec<Vec<BigramPair>>, // Internal storage for key:finger mapping
 }
 
 impl CachedLayout {
-    pub fn new(data: &AnalyzerData, layout: &Layout) -> Self {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn initialize(data: &AnalyzerData, layout: &Layout) -> Self {
         // Zero initialize all of the cache data
-        let keys = Box::new([EMPTY_KEY; layout.keys.len()]);
+        let keys = Box::new([REPLACEMENT_CHAR; layout.keys.len()]);
         let magic = initialize_magic_cache(&layout.magic, &char_mapping, &keys);
         let stretch = StretchCache::new(&keys, &fingers, &keyboard, &self.weights);
         let sfb = self.sfb_cache_initialize(&keys, &fingers, &keyboard);
@@ -53,7 +57,7 @@ impl CachedLayout {
 
     // Add a key at pos. Key should currently be empty
     pub fn add_key(&mut self, pos: usize, u: u8) {
-        debug_assert!(self.keys[pos] == EMPTY_KEY);
+        debug_assert!(self.keys[pos] == REPLACEMENT_CHAR);
         self.sfb.add_key(pos, u);
         self.stretch.add_key(pos, u);
 
@@ -63,7 +67,7 @@ impl CachedLayout {
 
     // Remove a key at pos. Key should currently contain something
     pub fn remove_key(&mut self, pos: usize) {
-        debug_assert!(self.keys[pos] != EMPTY_KEY);
+        debug_assert!(self.keys[pos] != REPLACEMENT_CHAR);
         self.sfb.remove_key(pos);
         self.stretch.remove_key(pos);
 
@@ -73,7 +77,7 @@ impl CachedLayout {
 
     // Add a rule. Rule should currently be empty
     pub fn add_rule(&mut self, key: u8, leader: u8, output: u8) {
-        debug_assert!(self.magic.rules[key][leader] == EMPTY_KEY);
+        debug_assert!(self.magic.rules[key][leader] == REPLACEMENT_CHAR);
         affected_grams = self.magic.add_rule(key, leader, output);
         self.sf.add_rule(affected_grams);
         self.stretch.add_rule(affected_bgs);
@@ -81,7 +85,7 @@ impl CachedLayout {
 
     // Remove a rule. Rule should currently contain something
     pub fn remove_rule(&mut self, key: u8, leader: u8, output: u8) {
-        debug_assert!(self.magic.rules[key][leader] != EMPTY_KEY);
+        debug_assert!(self.magic.rules[key][leader] != REPLACEMENT_CHAR);
         affected_grams = self.magic.remove_rule(key, leader, output);
         self.sf.add_rule(affected_grams);
         self.stretch.add_rule(affected_grams);

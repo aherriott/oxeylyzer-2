@@ -33,28 +33,12 @@ pub struct TrigramData {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Neighbor {
     KeySwap(PosPair),
-    MagicRule(MagicRule),
+    MagicStealBigram(MagicStealBigram),
 }
 
 impl Neighbor {
     pub fn default() -> Self {
         Neighbor::KeySwap(PosPair(0, 0))
-    }
-
-    pub fn revert(&self, cache: &CachedLayout) -> Neighbor {
-        match self {
-            Neighbor::KeySwap(_) => *self,
-            Neighbor::MagicRule(rule) => {
-                let output = cache
-                    .magic
-                    .rules
-                    .get(&rule.0)
-                    .unwrap()
-                    .get(&rule.1)
-                    .unwrap();
-                Neighbor::MagicRule(MagicRule(rule.0, rule.1, *output))
-            }
-        }
     }
 }
 
@@ -66,9 +50,9 @@ pub struct Analyzer {
     pub analyze_stretches: bool,
     pub analyze_trigrams: bool,
     char_mapping: Arc<CharMapping>,
-    possible_neighbors: Box<[Neighbor]>,
-    current_cache: Box<CachedLayout>,
-    working_cache: Box<CachedLayout>,
+    possible_neighbors: Vec<Neighbor>,
+    current_cache: CachedLayout,
+    working_cache: CachedLayout,
 }
 
 impl Analyzer {
@@ -108,7 +92,7 @@ impl Analyzer {
      */
 
     // possible_neighbors only needs to be called once per layout + pins combo
-    pub fn possible_neighbors(&self) -> Box<[Neighbor]> {
+    pub fn possible_neighbors(&self) -> Vec<[Neighbor]> {
         // All possible keyswaps to create a neighbor layout
         let possible_swaps = (0..(self.keys.len() as u8))
             .filter(|v| !self.pins.contains(&(*v as usize)))

@@ -1,19 +1,48 @@
+/*
+ **************************************
+ *     Magic and Repeat Remapping
+ **************************************
+ */
+
 // For now, only "simple" magic rules are supported. One leader key -> one output key.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
     // magic_key -> leader -> output
-    pub rules: HashMap<u8, HashMap<u8, u8>>,
+    pub rules: Vec<Vec<u8>>,
 }
 
-/*
- **************************************
- *    Magic Frequency (On-Demand)
- **************************************
- */
+impl MagicCache {
+    fn new(layout: &Layout) -> Self {
+        // TODO: allocate rules based on num magic keys and num keys
+        Self {
+            rules: Vec::new()
+        }
+    }
+
+    // Main entry point for neighbor updates. Updates the rules for the key under the hood
+    // from, to may be non-magic keys that has already had its bg stolen by another magic key
+    // At least one of from, to must be magic/repeat
+    fn steal_bigram(&mut self, from: u8, to: u8, a: u8, b: u8) {
+        
+    }
+
+    // Updates the list of possible neighbors that can be reached from the current rules
+    fn possible_neighbors(&self, possible_neighbors: &mut Vec<Neighbor>) {
+        self.rules.iter().enumerate())
+        .map(|(magic, rule)| {
+            rule.iter().enumerate()
+            .map(|(leader, output)| {
+                if *output == REPLACEMENT_CHAR {
+
+                }
+            })
+        })
+    }
+
 
 /// Get effective bigram frequency accounting for magic key rules
 /// This works on the premise that magic keys "steal" frequency from their non-magic counterparts
-fn get_bigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
+fn get_bigram_freq(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
     // Check if a or b are magic keys
     let a_is_magic = cache.magic.rules.contains_key(&a);
     let b_is_magic = cache.magic.rules.contains_key(&b);
@@ -97,7 +126,7 @@ fn get_bigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 
 }
 
 /// Get effective skipgram frequency accounting for magic key rules
-fn get_skipgram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
+fn get_skipgram_freq(&self, cache: &CachedLayout, a: u8, b: u8) -> i64 {
     // Check if a or b are magic keys
     let a_is_magic = cache.magic.rules.contains_key(&a);
     let b_is_magic = cache.magic.rules.contains_key(&b);
@@ -141,7 +170,7 @@ fn get_skipgram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8) -> i6
 }
 
 /// Get effective trigram frequency accounting for magic key rules
-fn get_trigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8, c: u8) -> i64 {
+fn get_trigram_freq(&self, cache: &CachedLayout, a: u8, b: u8, c: u8) -> i64 {
     // Check which positions are magic keys
     let a_is_magic = cache.magic.rules.contains_key(&a);
     let b_is_magic = cache.magic.rules.contains_key(&b);
@@ -200,12 +229,6 @@ fn get_trigram_frequency_magic(&self, cache: &CachedLayout, a: u8, b: u8, c: u8)
     // No magic rules affect this trigram
     self.data.get_trigram_u([a, b, c])
 }
-
-/*
- **************************************
- *     Magic and Repeat Remapping
- **************************************
- */
 
 fn initialize_magic_cache(
     &self,
