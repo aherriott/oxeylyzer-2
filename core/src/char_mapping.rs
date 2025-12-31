@@ -8,7 +8,6 @@ pub struct CharMapping(IndexMap<char, u8>);
 impl Default for CharMapping {
     fn default() -> Self {
         let mut map = Self(Default::default());
-
         map.push(REPLACEMENT_CHAR);
         map.push(SHIFT_CHAR);
         map.push(SPACE_CHAR);
@@ -122,7 +121,7 @@ mod tests {
         let mapping_s = "abcdefhgijklmnopqrstuvwxyz ";
         let mapping = mapping_s.chars().collect::<CharMapping>();
 
-        // CharMapping::new() starts with 3 defaults + 5 MAGIC_CHARS = 8
+        // CharMapping::new() starts with 3 defaults + 5 MAGIC_CHARS
         assert_eq!(mapping.len(), mapping_s.len() + 8);
 
         let s = "this is epic-";

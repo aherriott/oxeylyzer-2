@@ -29,7 +29,7 @@ pub mod prelude {
 }
 
 // pub use libdof;
-
+pub const EMPTY_CHAR: char = ' ';
 pub const REPLACEMENT_CHAR: char = char::REPLACEMENT_CHARACTER;
 pub const SPACE_CHAR: char = '␣';
 pub const SHIFT_CHAR: char = '⇑';

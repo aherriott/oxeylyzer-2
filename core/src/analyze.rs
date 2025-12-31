@@ -29,6 +29,35 @@ pub struct TrigramData {
     pub invalid: i64,
 }
 
+// The difference between two neighboring layouts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Neighbor {
+    KeySwap(PosPair),
+    MagicRule(MagicRule),
+}
+
+impl Neighbor {
+    pub fn default() -> Self {
+        Neighbor::KeySwap(PosPair(0, 0))
+    }
+
+    pub fn revert(&self, cache: &CachedLayout) -> Neighbor {
+        match self {
+            Neighbor::KeySwap(_) => *self,
+            Neighbor::MagicRule(rule) => {
+                let output = cache
+                    .magic
+                    .rules
+                    .get(&rule.0)
+                    .unwrap()
+                    .get(&rule.1)
+                    .unwrap();
+                Neighbor::MagicRule(MagicRule(rule.0, rule.1, *output))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analyzer {
     pub data: AnalyzerData,
@@ -59,9 +88,9 @@ impl Analyzer {
     }
 
     pub fn use_layout(&mut self, layout: &Layout, pins: &[usize]) {
-        self.current_cache = Box::new(self.cached_layout(layout, pins));
-        // Running cached_layout twice isn't strictly required, but it helps make sure the memory allocation is the same
-        self.working_cache = Box::new(self.cached_layout(layout, pins));
+        self.current_cache = Box::new(CachedLayout::new(self.data, layout));
+        // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
+        self.working_cache = self.current_cache.clone();
     }
 
     pub fn score(&self) -> i64 {
