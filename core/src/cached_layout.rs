@@ -3,10 +3,10 @@ use itertools::Itertools;
 use libdof::prelude::{Finger, PhysicalKey, Shape};
 
 use crate::{
-    magic::MagicCache,
-    same_finger::SFCache,
-    stretches::StretchCache,
-    trigrams::TrigramCache,
+    MagicCache,
+    SFCache,
+    StretchCache,
+    TrigramCache,
     layout::PosPair,
     weights::{FingerWeights, Weights},
     REPLACEMENT_CHAR,
@@ -16,43 +16,54 @@ const KEY_EDGE_OFFSET: f64 = 0.5;
 
 // CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
 // It is wrapped by Analyzer
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CachedLayout {
-    pub keys: Vec<u8>,
-    pub sfb: SFCache,
-    pub stretch: StretchCache,
-    pub magic: MagicCache,
-    fingers: Vec<Vec<BigramPair>>, // Internal storage for key:finger mapping
+    keys: Vec<u8>,
+    possible_neighbors: Vec<Neighbor>,
+    sfb: SFCache,
+    stretch: StretchCache,
+    magic: MagicCache,
+    fingers: Vec<Finger>, // Internal storage for key:finger mapping
 }
 
 impl CachedLayout {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn initialize(data: &AnalyzerData, layout: &Layout) -> Self {
+    pub fn initialize(&mut self, data: &AnalyzerData, keyboard: &[PhysicalKey], char_mapping: &CharMapping, layout: &Layout) {
         // Zero initialize all of the cache data
-        let keys = Box::new([REPLACEMENT_CHAR; layout.keys.len()]);
-        let magic = initialize_magic_cache(&layout.magic, &char_mapping, &keys);
-        let stretch = StretchCache::new(&keys, &fingers, &keyboard, &self.weights);
-        let sfb = self.sfb_cache_initialize(&keys, &fingers, &keyboard);
-
-        let cache = CachedLayout { keys, stretch, sfb };
-
-        // Build the current score for the layout by adding all the current keys and rules
-        layout.keys.iter().for_each( (i: usize, u: u8) => {
-            cache.add_key(i, u);
-        });
+        self.keys.clear();
+        for _ in 0..layout.keys.len() {
+            self.keys.push(REPLACEMENT_CHAR);
+        }
+        self.magic.initialize(&layout.magic, &char_mapping, &self.keys);
+        self.sfb.initialize(&layout.fingers, &layout.keyboard, &self.keys);
+        self.stretch.initialize(&keys, &fingers, &keyboard);
 
         layout.magic.iter().for_each( (key: u8, leader: u8, output: u8) => {
-            cache.add_rule( key, leader, output);
-        })
+            self.add_rule( key, leader, output);
+        });
 
-        cache
+        layout.keys.iter().enumerate().map(|(i: usize, u: u8)| {
+            self.add_key(i, u);
+        });
     }
 
     pub fn score(&self) -> i64 {
         return self.sfb.total + self.stretch.total;
+    }
+
+    // Calculates the score of a neighbor and applies it to the cache
+    pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
+        match neighbor {
+            Neighbor::KeySwap(PosPair(a, b)) => {
+                self.remove_key(a);
+                self.remove_key(b);
+                self.add_key(a);
+                self.add_key(b);
+            }
+            Neighbor::MagicStealBigram(MagicStealBigram(key, leader, output)) => {
+                self.remove_rule(key, leader);
+                self.add_rule(key, leader, output);
+            }
+        }
     }
 
     // Add a key at pos. Key should currently be empty
@@ -91,45 +102,8 @@ impl CachedLayout {
         self.stretch.add_rule(affected_grams);
     }
 
-    pub fn copy(&mut self, other: &Self) {
-        // TODO: move to metrics files
-        // self.keys.copy_from_slice(&other.keys);
-        // let _ = self
-        //     .sfb
-        //     .weighted_sfb_indices
-        //     .fingers
-        //     .iter_mut()
-        //     .zip(other.sfb.weighted_sfb_indices.fingers.iter())
-        //     .map(|(s, o)| s.copy_from_slice(o));
-        // self.sfb
-        //     .weighted_sfb_indices
-        //     .all
-        //     .copy_from_slice(&other.sfb.weighted_sfb_indices.all);
-
-        // let _ = self
-        //     .sfb
-        //     .unweighted_sfb_indices
-        //     .fingers
-        //     .iter_mut()
-        //     .zip(other.sfb.unweighted_sfb_indices.fingers.iter())
-        //     .map(|(s, o)| s.copy_from_slice(o));
-        // self.sfb
-        //     .unweighted_sfb_indices
-        //     .all
-        //     .copy_from_slice(&other.sfb.unweighted_sfb_indices.all);
-
-        // self.sfb.per_finger.copy_from_slice(&*other.sfb.per_finger);
-        // self.sfb.total = other.sfb.total;
-
-        // self.stretch
-        //     .all_pairs
-        //     .copy_from_slice(&other.stretch.all_pairs);
-        // let _ = self
-        //     .stretch
-        //     .per_keypair
-        //     .iter_mut()
-        //     .map(|(pair, bg)| bg.copy_from_slice(other.stretch.per_keypair.get(pair).unwrap()));
-        // self.stretch.total = other.stretch.total;
+    pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
+        &self.possible_neighbors
     }
 }
 
@@ -155,7 +129,7 @@ mod tests {
         let layout = Layout::load(format!("../layouts/test/magic.dof"))
             .expect("this layout is valid and exists, soooo");
         let mut cache = analyzer.cached_layout(layout, &[]);
-        let reference = cache.clone();
+        let reference = self.clone();
 
         // Test key swap
         let diff = Neighbor::KeySwap(PosPair(0, 1));
@@ -166,7 +140,7 @@ mod tests {
 
         // Test arbitrary magic rule
         let diff = Neighbor::MagicRule(MagicRule(
-            *cache.magic.rules.iter().next().unwrap().0,
+            *self.magic.rules.iter().next().unwrap().0,
             analyzer.char_mapping.get_u('c'),
             analyzer.char_mapping.get_u('d'),
         ));

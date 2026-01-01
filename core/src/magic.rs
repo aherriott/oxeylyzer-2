@@ -12,17 +12,14 @@ pub struct MagicCache {
 }
 
 impl MagicCache {
-    fn new(layout: &Layout) -> Self {
+    pub fn initialize(&mut self, layout: &Layout) {
         // TODO: allocate rules based on num magic keys and num keys
-        Self {
-            rules: Vec::new()
-        }
     }
 
     // Main entry point for neighbor updates. Updates the rules for the key under the hood
     // from, to may be non-magic keys that has already had its bg stolen by another magic key
     // At least one of from, to must be magic/repeat
-    fn steal_bigram(&mut self, from: u8, to: u8, a: u8, b: u8) {
+    pub fn steal_bigram(&mut self, from: u8, to: u8, a: u8, b: u8) {
         
     }
 

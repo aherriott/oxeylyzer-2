@@ -18,13 +18,13 @@ pub struct SFCache {
     use_per_finger: Box<[i64; 10]>,                 // Finger use
     total_bg: i64,                                  // Total non-zero-freq BGs (for normalizing)
     total_sg: i64,                                  // Total non-zero-freq SGs (for normalizing)
-    key_to_pos: Box<[usize]>,                       // Key position from key code
-    sfbg_dist_per_key: Box<[Box<[SfBigramPair]>]>,  // One-time calculated key pos -> list of bg dist on same finger
+    key_to_pos: Vec<usize>,                         // Key position from key code
+    sfbg_dist_per_key: Vec<Vec<SfBigramPair>>,      // One-time calculated key pos -> list of bg dist on same finger
 }
 
 impl SFCache {
     // Zero initialize
-    pub fn initialize() {
+    pub fn initialize(&mut self, fingers: &[Finger], keyboard: &[PhysicalKey]) {
         assert!(
             fingers.len() <= u8::MAX as usize,
             "Too many keys to index with u8, max is {}",
@@ -35,34 +35,34 @@ impl SFCache {
             keyboard.len(),
             "finger len is not the same as keyboard len: "
         );
-        let sfb_per_finger = Box<i64>::new([0; 10]);
-        let total_sfbs = 0;
-        let sfs_per_finger = Box<i64>::new([0; 10]);
-        let total_sfs = 0;
-        let use_per_finger = Box<i64>::new([0; 10]);
-        let total_bg = 0;
-        let total_sg = 0;
-        let key_to_pos = Box<usize>::new([256; 256]); // invalid index, u8 max size
+        self.sfb_per_finger.iter_mut().map(|x| *x = 0);
+        self.total_sfbs = 0;
+        self.sfs_per_finger.iter_mut().map(|x| *x = 0);
+        self.total_sfs = 0;
+        self.use_per_finger.iter_mut().map(|x| *x = 0);
+        self.total_bg = 0;
+        self.total_sg = 0;
+        self.key_to_pos.iter_mut().map(|x| *x = 256); // Invalid pos (u8::Max + 1)
 
-        let sfbg_dist_per_key: Box<[Box<[SfBigramPair]>]> = 
-            fingers
-                .iter()
-                .zip(keyboard)
-                .map(|(finger, physical_1)| {
-                    fingers.iter()
+        fingers
+            .iter()
+            .zip(keyboard)
+            .map(|(finger, physical_1)| {
+                self.sfbg_dist_per_key.push(Vec::new());
+                fingers.iter()
                     .zip(keyboard)
                     .zip(0u8)
                     .filter(|((f, physical_2), pos)| (f == &finger))
-                    .map(|((f, physical_2), pos)| SfBigramPair {
-                        other_pos: pos,
-                        dist: (dist(physical_1, physical_2, Finger::LP, Finger::LP) * 100.0) as i64,
-                    })
-                    .collect::<Box<[SfBigramPair]>>()
-                }).collect::<Box<Box<[SfBigramPair]>>>();
-    }
-
-    pub fn fast_copy(&mut self, other: &SFCache) {
-        // TODO: Copy vars, but not pre-calc
+                    .map(|((f, physical_2), pos)| {
+                        self.sfbg_dist_per_key
+                            .last_mut()
+                            .unwrap()
+                            .push(SfBigramPair {
+                                other_pos: pos,
+                                dist: (dist(physical_1, physical_2, Finger::LP, Finger::LP) * 100.0) as i64,
+                            });
+                    });
+            });
     }
 
     pub fn score(&self, weights: &Weights) {

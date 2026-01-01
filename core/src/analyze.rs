@@ -5,6 +5,7 @@ use libdof::{dofinitions::Finger, magic::MagicKey, prelude::PhysicalKey};
 use nanorand::{Rng, WyRand};
 use std::sync::Arc;
 
+use crate::cached_layout;
 use crate::{
     analyzer_data::AnalyzerData,
     cached_layout::*,
@@ -15,19 +16,19 @@ use crate::{
     weights::{FingerWeights, Weights},
 };
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TrigramData {
-    pub sft: i64,
-    pub sfb: i64,
-    pub inroll: i64,
-    pub outroll: i64,
-    pub alternate: i64,
-    pub redirect: i64,
-    pub onehandin: i64,
-    pub onehandout: i64,
-    pub thumb: i64,
-    pub invalid: i64,
-}
+// #[derive(Debug, Clone, PartialEq, Default)]
+// pub struct TrigramData {
+//     pub sft: i64,
+//     pub sfb: i64,
+//     pub inroll: i64,
+//     pub outroll: i64,
+//     pub alternate: i64,
+//     pub redirect: i64,
+//     pub onehandin: i64,
+//     pub onehandout: i64,
+//     pub thumb: i64,
+//     pub invalid: i64,
+// }
 
 // The difference between two neighboring layouts.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,13 +45,12 @@ impl Neighbor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analyzer {
-    pub data: AnalyzerData,
-    pub weights: Weights,
-    pub analyze_bigrams: bool,
-    pub analyze_stretches: bool,
-    pub analyze_trigrams: bool,
+    data: AnalyzerData,
+    weights: Weights,
+    analyze_bigrams: bool,
+    analyze_stretches: bool,
+    analyze_trigrams: bool,
     char_mapping: Arc<CharMapping>,
-    possible_neighbors: Vec<Neighbor>,
     current_cache: CachedLayout,
     working_cache: CachedLayout,
 }
@@ -61,6 +61,8 @@ impl Analyzer {
         let analyze_bigrams = weights.has_bigram_weights();
         let analyze_stretches = weights.has_stretch_weights();
         let analyze_trigrams = weights.has_trigram_weights();
+        let current_cache = CachedLayout::default();
+        let working_cache = CachedLayout::default();
 
         Self {
             data,
@@ -68,11 +70,13 @@ impl Analyzer {
             analyze_bigrams,
             analyze_stretches,
             analyze_trigrams,
+            current_cache,
+            working_cache,
         }
     }
 
     pub fn use_layout(&mut self, layout: &Layout, pins: &[usize]) {
-        self.current_cache = Box::new(CachedLayout::new(self.data, layout));
+        self.current_cache.initialize(self.data, layout);
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
     }
@@ -92,25 +96,13 @@ impl Analyzer {
      */
 
     // possible_neighbors only needs to be called once per layout + pins combo
-    pub fn possible_neighbors(&self) -> Vec<[Neighbor]> {
-        // All possible keyswaps to create a neighbor layout
-        let possible_swaps = (0..(self.keys.len() as u8))
-            .filter(|v| !self.pins.contains(&(*v as usize)))
-            .tuple_combinations::<(_, _)>()
-            .map(|pair| Neighbor::KeySwap(pair.into()));
-        // All possible new magic rules to create a neighbor layout
-        let possible_rules = self.magic.rules.iter().flat_map(|(key, _)| {
-            self.keys.iter().flat_map(|lead| {
-                self.keys
-                    .iter()
-                    .map(|output| Neighbor::MagicRule(MagicRule(*key, *lead, *output)))
-            })
-        });
-        let possible_neighbors = possible_swaps.chain(possible_rules).collect();
+    pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
+        self.current_cache.possible_neighbors()
     }
 
     pub fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
-        cache.possible_neighbors[rng.generate_range(0..cache.possible_neighbors.len())]
+        let pos_neighbors = self.current_cache.possible_neighbors();
+        pos_neighbors[rng.generate_range(0..pos_neighbors.len())]
     }
 
     /**
@@ -120,12 +112,8 @@ impl Analyzer {
         let mut best_score = self.score_cache(cache);
         let mut best = None;
 
-        // TODO: can we remove this clone?
-        let neighbors = self.possible_neighbors.clone();
-        for neighbor in neighbors {
-            let score = self.test_neighbor(cache, neighbor);
-
-            if score > best_score {
+        for neighbor in self.current_cache.possible_neighbors() {
+            if self.test_neighbor(neighbor) > best_score {
                 best_score = score;
                 best = Some((neighbor.clone(), score));
             }
@@ -136,31 +124,14 @@ impl Analyzer {
     // Calculates the score of a neighbor without updating the cache
     pub fn test_neighbor(&self, neighbor: Neighbor) -> i64 {
         // Copy the current cache to the working cache
-        self.working_cache.copy(&self.current_cache);
-        return self.apply_neighbor_to_cache(neighbor);
+        self.working_cache.copy_from(&self.current_cache);
+        return Self::apply_neighbor_to_cache(neighbor);
     }
 
     // Calculates the score of a neighbor without updating the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         // Copy the current cache to the working cache
-        return self.apply_neighbor_to_cache(neighbor);
-    }
-
-    // Calculates the score of a neighbor and applies it to the cache
-    fn apply_neighbor_to_cache(cache: &mut CachedLayout, neighbor: Neighbor) -> i64 {
-        match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => {
-                cache.remove_key(a);
-                cache.remove_key(b);
-                cache.add_key(a);
-                cache.add_key(b);
-            }
-            Neighbor::MagicRule(MagicRule(key, leader, output)) => {
-                cache.remove_rule(key, leader);
-                cache.add_rule(key, leader, output);
-            }
-        }
-        cache.score()
+        return Self::apply_neighbor_to_cache(neighbor);
     }
 
     /*
