@@ -2,13 +2,13 @@
 
 // A Key value, like "A"
 type CacheKey = usize;
-// A position for a Key
+// A key position
 type CachePos = usize;
 
 // An IndexVec is a Vec which itself stores indexes, and thus supports reverse lookup
 pub struct KeysCache {
-    vec: Vec<Option<CacheKey>>,
-    reverse_vec: Vec<Option<CachePos>>,
+    vec: Vec<CacheKey>,
+    reverse_vec: Vec<Option<CachePos>>, // Option because some Key may not be assigned
 }
 
 impl KeysCache {
@@ -24,6 +24,7 @@ impl KeysCache {
     }
 
     pub fn set(&mut self, i: CachePos, value: CacheKey) {
+        // TODO: See if this logic is right when I'm less hungover
         if self.reverse_vec[value].is_some() {
             if self.reverse_vec[value] != Some(i) {
                 panic!(
@@ -32,7 +33,6 @@ impl KeysCache {
                     self.reverse_vec[value].unwrap()
                 );
             }
-            self.reverse_vec[value] = None;
         }
         self.vec[i] = value;
         self.reverse_vec[value] = Some(i);
@@ -46,7 +46,7 @@ impl KeysCache {
         self.reverse_vec[idx]
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(&mut self, capacity: usize) -> Self {
         Self {
             vec: Vec::with_capacity(capacity),
             reverse_vec: vec![None; capacity],

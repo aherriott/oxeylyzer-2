@@ -9,9 +9,12 @@ pub mod corpus_cleaner;
 pub mod data;
 pub mod depth_optimization;
 pub mod layout;
+pub mod magic;
 pub mod optimization;
+pub mod same_finger;
 pub mod simulated_annealing;
 pub mod stats;
+pub mod stretches;
 pub mod trigrams;
 pub mod weights;
 
@@ -23,6 +26,9 @@ pub mod prelude {
         corpus_cleaner::*,
         data::Data,
         layout::{Layout, PosPair},
+        magic::MagicCache,
+        same_finger::SFCache,
+        stretches::StretchCache,
         weights::{FingerWeights, Weights},
         OxeylyzerError, REPEAT_KEY, REPLACEMENT_CHAR, SHIFT_CHAR,
     };
