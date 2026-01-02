@@ -6,12 +6,12 @@ type CacheKey = usize;
 type CachePos = usize;
 
 // An IndexVec is a Vec which itself stores indexes, and thus supports reverse lookup
-pub struct IndexVec {
-    vec: Vec<usize>,
-    reverse_vec: Vec<Option<usize>>,
+pub struct KeysCache {
+    vec: Vec<Option<CacheKey>>,
+    reverse_vec: Vec<Option<CachePos>>,
 }
 
-impl IndexVec {
+impl KeysCache {
     pub fn new() -> Self {
         Self {
             vec: Vec::new(),
@@ -19,20 +19,30 @@ impl IndexVec {
         }
     }
 
-    pub fn get(&self, i: usize) -> usize {
+    pub fn get(&self, i: CachePos) -> CacheKey {
         self.vec[i]
     }
 
-    pub fn set(&mut self, i: usize, value: usize) {
+    pub fn set(&mut self, i: CachePos, value: CacheKey) {
+        if self.reverse_vec[value].is_some() {
+            if self.reverse_vec[value] != Some(i) {
+                panic!(
+                    "IndexVec: value {} is already set at index {}",
+                    value,
+                    self.reverse_vec[value].unwrap()
+                );
+            }
+            self.reverse_vec[value] = None;
+        }
         self.vec[i] = value;
         self.reverse_vec[value] = Some(i);
     }
 
-    pub fn iter(&self) -> std::slice::Iter<usize> {
+    pub fn iter(&self) -> std::slice::Iter<CachePos> {
         self.vec.iter()
     }
 
-    pub fn reverse_at(&self, idx: usize) -> Option<usize> {
+    pub fn reverse_at(&self, idx: usize) -> Option<CachePos> {
         self.reverse_vec[idx]
     }
 
