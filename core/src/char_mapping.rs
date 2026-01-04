@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use crate::{MAGIC_CHARS, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CharMapping(IndexMap<char, u8>);
+pub struct CharMapping(IndexMap<char, CacheKey>);
 
 impl Default for CharMapping {
     fn default() -> Self {
@@ -26,26 +26,26 @@ impl CharMapping {
 
     pub fn push(&mut self, c: char) {
         if !self.0.contains_key(&c) {
-            self.0.insert(c, self.len() as u8);
+            self.0.insert(c, self.len() as CacheKey);
         }
     }
 
-    pub fn remove(&mut self, c: char) -> Option<u8> {
+    pub fn remove(&mut self, c: char) -> Option<CacheKey> {
         self.0.swap_remove(&c)
     }
 
-    pub fn pop(&mut self) -> Option<(char, u8)> {
+    pub fn pop(&mut self) -> Option<(char, CacheKey)> {
         self.0.pop()
     }
 
-    pub fn get_u(&self, c: char) -> u8 {
+    pub fn get_u(&self, c: char) -> CacheKey {
         match self.0.get(&c) {
             Some(c) => *c,
             None => 0,
         }
     }
 
-    pub fn get_c(&self, u: u8) -> char {
+    pub fn get_c(&self, u: CacheKey) -> char {
         match self.0.get_index(u as usize) {
             Some((c, _)) => *c,
             None => REPLACEMENT_CHAR,
@@ -61,11 +61,11 @@ impl CharMapping {
         self.len() == 0
     }
 
-    pub fn map_cs<'a>(&'a self, s: &'a str) -> impl Iterator<Item = u8> + 'a {
+    pub fn map_cs<'a>(&'a self, s: &'a str) -> impl Iterator<Item = CacheKey> + 'a {
         s.chars().map(|c| self.get_u(c))
     }
 
-    pub fn map_us<'a>(&'a self, u: &'a [u8]) -> impl Iterator<Item = char> + 'a {
+    pub fn map_us<'a>(&'a self, u: &'a [CacheKey]) -> impl Iterator<Item = char> + 'a {
         u.iter().map(|u| self.get_c(*u))
     }
 }

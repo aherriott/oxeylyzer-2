@@ -13,16 +13,16 @@ pub struct StretchCache {
 
 impl StretchCache {
     pub fn new(
-        keys: &[u8],
+        keys: &[CacheKey],
         fingers: &[Finger],
         keyboard: &[PhysicalKey],
         weights: &Weights,
         magic: &MagicCache,
     ) -> Self {
         assert!(
-            fingers.len() <= u8::MAX as usize,
-            "Too many keys to index with u8, max is {}",
-            u8::MAX
+            fingers.len() <= CacheKey::MAX as usize,
+            "Too many keys to index with CacheKey, max is {}",
+            CacheKey::MAX
         );
         assert_eq!(
             fingers.len(),
@@ -38,7 +38,7 @@ impl StretchCache {
             .tuple_combinations::<(_, _)>()
             .filter(|((_, ((_, &f1), _)), (_, ((_, &f2), _)))| f1 != f2 && (f1.hand() == f2.hand()))
             .filter_map(|((i1, ((k1, &f1), _c1)), (i2, ((k2, &f2), _c2)))| {
-                let diff = (f1 as u8).abs_diff(f2 as u8) as f64;
+                let diff = (f1 as CacheKey).abs_diff(f2 as CacheKey) as f64;
                 let fd = diff * 1.35;
                 // let minimum_diff = diff * 0.9;
                 let (dx, dy) = dx_dy(k1, k2, f1, f2);
@@ -54,7 +54,7 @@ impl StretchCache {
                 // }
 
                 (stretch > 0.001).then_some(BigramPair {
-                    pair: PosPair(i1 as u8, i2 as u8),
+                    pair: PosPair(i1 as CacheKey, i2 as CacheKey),
                     dist: (stretch * 100.0) as i64,
                 })
             })
@@ -62,8 +62,8 @@ impl StretchCache {
 
         // println!("pair count: {}", all_pairs.len());
 
-        let per_keypair = (0..(fingers.len() as u8))
-            .cartesian_product(0..(fingers.len() as u8))
+        let per_keypair = (0..(fingers.len() as CacheKey))
+            .cartesian_product(0..(fingers.len() as CacheKey))
             .map(|(i1, i2)| {
                 let is = [i1, i2];
 
@@ -184,19 +184,22 @@ fn dx_dy(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> (f64, f6
     let xo = x_finger_overlap(f1, f2);
 
     // match (f1.hand(), f2.hand()) {
-    //     (Hand::Left, Hand::Left) => match ((f1 as u8) > (f2 as u8), (f1 as u8) < (f2 as u8)) {
+    //     (Hand::Left, Hand::Left) => match ((f1 as CacheKey) > (f2 as CacheKey), (f1 as CacheKey) < (f2 as CacheKey)) {
     //         (true, false) if r1 < l2 => (-dx, dy),
     //         (false, true) if l1 > r2 => (-dx, dy),
     //         _ => (dx, dy),
     //     },
-    //     (Hand::Right, Hand::Right) => match ((f2 as u8) > (f1 as u8), (f2 as u8) < (f1 as u8)) {
+    //     (Hand::Right, Hand::Right) => match ((f2 as CacheKey) > (f1 as CacheKey), (f2 as CacheKey) < (f1 as CacheKey)) {
     //         (true, false) if r1 > l2 => (-dx, dy),
     //         (false, true) if l1 < r2 => (-dx, dy),
     //         _ => (dx, dy),
     //     },
     //     _ => (dx, dy)
     // }
-    match ((f1 as u8) > (f2 as u8), (f1 as u8) < (f2 as u8)) {
+    match (
+        (f1 as CacheKey) > (f2 as CacheKey),
+        (f1 as CacheKey) < (f2 as CacheKey),
+    ) {
         (true, false) if r1 < l2 + xo => (-dx, dy),
         (false, true) if l1 + xo > r2 => (-dx, dy),
         _ => (dx, dy),
@@ -263,7 +266,7 @@ fn keypair_stretch(&self, cache: &CachedLayout, pair: &PosPair) -> i64 {
         .unwrap_or_default()
 }
 
-pub fn stretch_get_bigram(&self, cache: &CachedLayout, a: &u8, b: &u8) -> i64 {
+pub fn stretch_get_bigram(&self, cache: &CachedLayout, a: &CacheKey, b: &CacheKey) -> i64 {
     let mapping_len = self.data.mapping.len();
     let u1 = *a as usize;
     let u2 = *b as usize;

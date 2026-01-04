@@ -45,11 +45,11 @@ impl CachedLayout {
             fingers,
         };
 
-        layout.keys.iter().enumerate().map(|(i: usize, u: u8)| {
+        layout.keys.iter().enumerate().map(|(i: usize, u: CacheKey)| {
             cache.add_key(i, u);
         });
 
-        layout.magic.iter().for_each( (key: u8, leader: u8, output: u8) => {
+        layout.magic.iter().for_each( (key: CacheKey, leader: CacheKey, output: CacheKey) => {
             cache.steal_bigram(key, leader, output);
         });
 
@@ -77,7 +77,7 @@ impl CachedLayout {
     }
 
     // Add a key at pos. Key should currently be empty
-    pub fn add_key(&mut self, pos: usize, u: u8) {
+    pub fn add_key(&mut self, pos: usize, u: CacheKey) {
         debug_assert!(self.keys[pos] == REPLACEMENT_CHAR);
         self.sfb.add_key(pos, u);
         self.stretch.add_key(pos, u);
@@ -97,7 +97,7 @@ impl CachedLayout {
     }
 
     // Add a rule. Rule should currently be empty
-    pub fn steal_bigram(&mut self, key: u8, leader: u8, output: u8) {
+    pub fn steal_bigram(&mut self, key: CacheKey, leader: CacheKey, output: CacheKey) {
         debug_assert!(self.magic.rules[key][leader] == REPLACEMENT_CHAR);
         affected_grams = self.magic.add_rule(key, leader, output);
         self.sfb.steal_bigram(affected_grams);

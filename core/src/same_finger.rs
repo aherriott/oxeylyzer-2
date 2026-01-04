@@ -26,9 +26,9 @@ impl SFCache {
     // Zero initialize
     pub fn initialize(&mut self, fingers: &[Finger], keyboard: &[PhysicalKey]) {
         assert!(
-            fingers.len() <= u8::MAX as usize,
-            "Too many keys to index with u8, max is {}",
-            u8::MAX
+            fingers.len() <= CacheKey::MAX as usize,
+            "Too many keys to index with CacheKey, max is {}",
+            CacheKey::MAX
         );
         assert_eq!(
             fingers.len(),
@@ -42,7 +42,7 @@ impl SFCache {
         self.use_per_finger.iter_mut().map(|x| *x = 0);
         self.total_bg = 0;
         self.total_sg = 0;
-        self.key_to_pos.iter_mut().map(|x| *x = 256); // Invalid pos (u8::Max + 1)
+        self.key_to_pos.iter_mut().map(|x| *x = 256); // Invalid pos (CacheKey::Max + 1)
 
         fingers
             .iter()
@@ -51,7 +51,7 @@ impl SFCache {
                 self.sfbg_dist_per_key.push(Vec::new());
                 fingers.iter()
                     .zip(keyboard)
-                    .zip(0u8)
+                    .zip(0CacheKey)
                     .filter(|((f, physical_2), pos)| (f == &finger))
                     .map(|((f, physical_2), pos)| {
                         self.sfbg_dist_per_key
@@ -77,7 +77,7 @@ impl SFCache {
         // TODO
     }
 
-pub fn add_key(&mut self, keys: &Box<[u8]>, magic: &MagicCache, pos: usize, key: u8) {
+pub fn add_key(&mut self, keys: &Box<[CacheKey]>, magic: &MagicCache, pos: usize, key: CacheKey) {
     let sfb = self.sfbg_dist_per_key[pos]
         .iter()
         .map(|sfbg: SfBigramPair| i64 {
@@ -110,7 +110,7 @@ pub fn add_key(&mut self, keys: &Box<[u8]>, magic: &MagicCache, pos: usize, key:
     self.key_to_pos[key] = pos;
 }
 
-pub fn remove_key(&mut self, keys: &Box<[u8]>, magic: &MagicCache, pos: usize, key: u8) {
+pub fn remove_key(&mut self, keys: &Box<[CacheKey]>, magic: &MagicCache, pos: usize, key: CacheKey) {
     let sfb = self.sfbg_dist_per_key[pos]
         .iter()
         .map(|sfbg: SfBigramPair| i64 {

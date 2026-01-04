@@ -9,9 +9,9 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PosPair(pub u8, pub u8);
+pub struct PosPair(pub CacheKey, pub CacheKey);
 
-impl<U: Into<u8>> From<(U, U)> for PosPair {
+impl<U: Into<CacheKey>> From<(U, U)> for PosPair {
     fn from((p1, p2): (U, U)) -> Self {
         Self(p1.into(), p2.into())
     }
@@ -19,9 +19,9 @@ impl<U: Into<u8>> From<(U, U)> for PosPair {
 
 // magic_key, leader, output
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MagicStealBigram(pub u8, pub u8, pub u8);
+pub struct MagicStealBigram(pub CacheKey, pub CacheKey, pub CacheKey);
 
-impl<U: Into<u8>> From<(U, U, U)> for MagicRule {
+impl<U: Into<CacheKey>> From<(U, U, U)> for MagicRule {
     fn from((p1, p2, p3): (U, U, U)) -> Self {
         Self(p1.into(), p2.into(), p3.into())
     }

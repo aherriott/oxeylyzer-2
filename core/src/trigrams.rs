@@ -23,7 +23,7 @@ enum Hand {
 
 impl Hand {
     const fn eq(self, rhs: Self) -> bool {
-        self as u8 == rhs as u8
+        self as CacheKey == rhs as CacheKey
     }
 }
 
@@ -32,7 +32,7 @@ struct Finger(DofFinger);
 
 impl Finger {
     const fn eq(self, rhs: Self) -> bool {
-        self.0 as u8 == rhs.0 as u8
+        self.0 as CacheKey == rhs.0 as CacheKey
     }
 
     const fn hand(self) -> Hand {

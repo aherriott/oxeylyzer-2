@@ -123,26 +123,26 @@ impl AnalyzerData {
     }
 
     #[inline]
-    pub fn get_char_u(&self, c: u8) -> i64 {
+    pub fn get_char_u(&self, c: CacheKey) -> i64 {
         self.chars[c as usize]
     }
 
     #[inline]
-    pub fn get_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+    pub fn get_bigram_u(&self, [c1, c2]: [CacheKey; 2]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
         self.bigrams[u1][u2]
     }
 
     #[inline]
-    pub fn get_skipgram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
+    pub fn get_skipgram_u(&self, [c1, c2]: [CacheKey; 2]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
         self.skipgrams[u1][u2]
     }
 
     #[inline]
-    pub fn get_trigram_u(&self, [c1, c2, c3]: [u8; 3]) -> i64 {
+    pub fn get_trigram_u(&self, [c1, c2, c3]: [CacheKey; 3]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
         let u3 = c3 as usize;
