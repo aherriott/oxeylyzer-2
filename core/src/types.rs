@@ -42,11 +42,11 @@ impl KeysCache {
         self.vec.iter()
     }
 
-    pub fn reverse_at(&self, idx: usize) -> Option<CachePos> {
+    pub fn reverse_get(&self, i: CacheKey) -> Option<CachePos> {
         self.reverse_vec[idx]
     }
 
-    pub fn with_capacity(&mut self, capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             vec: Vec::with_capacity(capacity),
             reverse_vec: vec![None; capacity],

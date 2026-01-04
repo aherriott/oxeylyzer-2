@@ -51,18 +51,13 @@ pub struct Analyzer {
     analyze_stretches: bool,
     analyze_trigrams: bool,
     char_mapping: Arc<CharMapping>,
-    current_cache: CachedLayout,
-    working_cache: CachedLayout,
+    current_cache: Option<CachedLayout>,
+    working_cache: Option<CachedLayout>,
 }
 
 impl Analyzer {
     pub fn new(data: Data, weights: Weights) -> Self {
         let data = AnalyzerData::new(data);
-        let analyze_bigrams = weights.has_bigram_weights();
-        let analyze_stretches = weights.has_stretch_weights();
-        let analyze_trigrams = weights.has_trigram_weights();
-        let current_cache = CachedLayout::default();
-        let working_cache = CachedLayout::default();
 
         Self {
             data,
@@ -70,13 +65,13 @@ impl Analyzer {
             analyze_bigrams,
             analyze_stretches,
             analyze_trigrams,
-            current_cache,
-            working_cache,
+            None,
+            None,
         }
     }
 
     pub fn use_layout(&mut self, layout: &Layout, pins: &[usize]) {
-        self.current_cache.initialize(self.data, layout);
+        self.current_cache = Some(CachedLayout::new(self.data, layout));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
     }
@@ -97,11 +92,13 @@ impl Analyzer {
 
     // possible_neighbors only needs to be called once per layout + pins combo
     pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
-        self.current_cache.possible_neighbors()
+        assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
+        self.current_cache.unwrap().possible_neighbors()
     }
 
     pub fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
-        let pos_neighbors = self.current_cache.possible_neighbors();
+        assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
+        let pos_neighbors = self.current_cache.unwrap().possible_neighbors();
         pos_neighbors[rng.generate_range(0..pos_neighbors.len())]
     }
 

@@ -3,13 +3,7 @@ use itertools::Itertools;
 use libdof::prelude::{Finger, PhysicalKey, Shape};
 
 use crate::{
-    MagicCache,
-    SFCache,
-    StretchCache,
-    TrigramCache,
-    layout::PosPair,
-    weights::{FingerWeights, Weights},
-    REPLACEMENT_CHAR,
+    KeysCache, MagicCache, REPLACEMENT_CHAR, SFCache, StretchCache, TrigramCache, layout::PosPair, stretches::StretchCache, types::KeysCache, weights::{FingerWeights, Weights}
 };
 
 const KEY_EDGE_OFFSET: f64 = 0.5;
@@ -18,8 +12,9 @@ const KEY_EDGE_OFFSET: f64 = 0.5;
 // It is wrapped by Analyzer
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CachedLayout {
-    keys: Vec<u8>,
+    keys: KeysCache,
     possible_neighbors: Vec<Neighbor>,
+    affected_grams: Vec<DeltaGram>,
     sfb: SFCache,
     stretch: StretchCache,
     magic: MagicCache,
@@ -27,23 +22,38 @@ pub struct CachedLayout {
 }
 
 impl CachedLayout {
-    pub fn initialize(&mut self, data: &AnalyzerData, keyboard: &[PhysicalKey], char_mapping: &CharMapping, layout: &Layout) {
+    // Allocates all the required memory
+    pub fn new(data: &AnalyzerData, keyboard: &[PhysicalKey], char_mapping: &CharMapping, layout: &Layout) -> Self {
         // Zero initialize all of the cache data
-        self.keys.clear();
-        for _ in 0..layout.keys.len() {
-            self.keys.push(REPLACEMENT_CHAR);
-        }
-        self.magic.initialize(&layout.magic, &char_mapping, &self.keys);
-        self.sfb.initialize(&layout.fingers, &layout.keyboard, &self.keys);
-        self.stretch.initialize(&keys, &fingers, &keyboard);
+        let keys = KeysCache::new(layout.keys.len());
+        let possible_neighbors = Vec::with_capacity(
+            layout.keys.len() * layout.keys.len() + // Keyswaps
+            (layout.keys.len() - layout.magic.len()) * layout.magic.len() // Steal Bigrams
+        );
+        // TODO: This with_capacity probably isn't right
+        let affected_grams = Vec::with_capacity(keys.len() * 3);
+        let magic = MagicCache::new(&layout.magic, &char_mapping, &keys);
+        let sfb = SFCache::new(&layout.fingers, &layout.keyboard, &keys);
+        let stretch = StretchCache::new();
 
-        layout.magic.iter().for_each( (key: u8, leader: u8, output: u8) => {
-            self.add_rule( key, leader, output);
-        });
+        let cache = CachedLayout {
+            keys,
+            possible_neighbors,
+            sfb,
+            stretch,
+            magic,
+            fingers,
+        };
 
         layout.keys.iter().enumerate().map(|(i: usize, u: u8)| {
-            self.add_key(i, u);
+            cache.add_key(i, u);
         });
+
+        layout.magic.iter().for_each( (key: u8, leader: u8, output: u8) => {
+            cache.steal_bigram(key, leader, output);
+        });
+
+        cache
     }
 
     pub fn score(&self) -> i64 {
@@ -87,19 +97,11 @@ impl CachedLayout {
     }
 
     // Add a rule. Rule should currently be empty
-    pub fn add_rule(&mut self, key: u8, leader: u8, output: u8) {
+    pub fn steal_bigram(&mut self, key: u8, leader: u8, output: u8) {
         debug_assert!(self.magic.rules[key][leader] == REPLACEMENT_CHAR);
         affected_grams = self.magic.add_rule(key, leader, output);
-        self.sf.add_rule(affected_grams);
-        self.stretch.add_rule(affected_bgs);
-    }
-
-    // Remove a rule. Rule should currently contain something
-    pub fn remove_rule(&mut self, key: u8, leader: u8, output: u8) {
-        debug_assert!(self.magic.rules[key][leader] != REPLACEMENT_CHAR);
-        affected_grams = self.magic.remove_rule(key, leader, output);
-        self.sf.add_rule(affected_grams);
-        self.stretch.add_rule(affected_grams);
+        self.sfb.steal_bigram(affected_grams);
+        self.stretch.steal_bigram(affected_grams);
     }
 
     pub fn possible_neighbors(&self) -> &Vec<Neighbor> {

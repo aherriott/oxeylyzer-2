@@ -4,11 +4,11 @@ use crate::{char_mapping::CharMapping, data::Data};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalyzerData {
-    name: String,
-    chars: Box<[i64]>,
-    bigrams: Box<[i64]>,
-    skipgrams: Box<[i64]>,
-    trigrams: Box<[i64]>,
+    pub name: String,
+    pub chars: Vec<i64>,
+    pub bigrams: Vec<Vec<i64>>,
+    pub skipgrams: Vec<Vec<i64>>,
+    pub trigrams: Vec<Vec<Vec<i64>>>,
     pub char_total: f64,
     pub bigram_total: f64,
     pub skipgram_total: f64,
@@ -39,55 +39,49 @@ impl AnalyzerData {
 
         let len = chars.len();
 
-        let mut bigrams = vec![0; len.pow(2)];
+        let mut bigrams = vec![vec![0; len]; len];
 
         for ([c1, c2], f) in data.bigrams {
             let u1 = mapping.get_u(c1) as usize;
             let u2 = mapping.get_u(c2) as usize;
 
-            let i = u1 * len + u2;
-            debug_assert_eq!(bigrams[i], 0);
-            bigrams[i] = (f * bigram_total) as i64;
+            debug_assert_eq!(bigrams[u1][u2], 0);
+            bigrams[u1][u2] = (f * bigram_total) as i64;
         }
 
-        let mut skipgrams = vec![0; len.pow(2)];
+        let mut skipgrams = vec![vec![0; len]; len];
 
         for ([c1, c2], f) in data.skipgrams {
             let u1 = mapping.get_u(c1) as usize;
             let u2 = mapping.get_u(c2) as usize;
 
-            let i = u1 * len + u2;
-            debug_assert_eq!(skipgrams[i], 0);
-            skipgrams[i] = (f * skipgram_total) as i64;
+            debug_assert_eq!(skipgrams[u1][u2], 0);
+            skipgrams[u1][u2] = (f * skipgram_total) as i64;
         }
 
-        let mut trigrams = vec![0; len.pow(3)];
+        let mut trigrams = vec![vec![vec![0; len]; len]; len];
 
         for ([c1, c2, c3], f) in data.trigrams {
             let u1 = mapping.get_u(c1) as usize;
             let u2 = mapping.get_u(c2) as usize;
             let u3 = mapping.get_u(c3) as usize;
 
-            let i = u1 * len.pow(2) + u2 * len + u3;
-            debug_assert_eq!(trigrams[i], 0);
-            trigrams[i] = (f * trigram_total) as i64;
+            debug_assert_eq!(trigrams[u1][u2][u3], 0);
+            trigrams[u1][u2][u3] = (f * trigram_total) as i64;
         }
 
         let mapping = Arc::new(mapping);
 
         Self {
             name: data.name,
-            chars: chars.into(),
-            bigrams: bigrams.into(),
-            skipgrams: skipgrams.into(),
-            trigrams: trigrams.into(),
-            // same_finger_weighted_bigrams,
-            // stretch_weighted_bigrams,
+            chars: chars,
+            bigrams: bigrams,
+            skipgrams: skipgrams,
+            trigrams: trigrams,
             char_total,
             bigram_total,
             skipgram_total,
             trigram_total,
-
             mapping,
         }
     }
@@ -112,26 +106,20 @@ impl AnalyzerData {
     pub fn get_bigram(&self, [c1, c2]: [char; 2]) -> i64 {
         let u1 = self.mapping.get_u(c1) as usize;
         let u2 = self.mapping.get_u(c2) as usize;
-
-        let i = u1 * self.len() + u2;
-        self.bigrams[i]
+        self.bigrams[u1][u2]
     }
 
     pub fn get_skipgram(&self, [c1, c2]: [char; 2]) -> i64 {
         let u1 = self.mapping.get_u(c1) as usize;
         let u2 = self.mapping.get_u(c2) as usize;
-
-        let i = u1 * self.len() + u2;
-        self.skipgrams[i]
+        self.skipgrams[u1][u2]
     }
 
     pub fn get_trigram(&self, [c1, c2, c3]: [char; 3]) -> i64 {
         let u1 = self.mapping.get_u(c1) as usize;
         let u2 = self.mapping.get_u(c2) as usize;
         let u3 = self.mapping.get_u(c3) as usize;
-
-        let i = u1 * self.len().pow(2) + u2 * self.len() + u3;
-        self.trigrams[i]
+        self.trigrams[u1][u2][u3]
     }
 
     #[inline]
@@ -143,18 +131,14 @@ impl AnalyzerData {
     pub fn get_bigram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
-
-        let i = u1 * self.len() + u2;
-        self.bigrams[i]
+        self.bigrams[u1][u2]
     }
 
     #[inline]
     pub fn get_skipgram_u(&self, [c1, c2]: [u8; 2]) -> i64 {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
-
-        let i = u1 * self.len() + u2;
-        self.skipgrams[i]
+        self.skipgrams[u1][u2]
     }
 
     #[inline]
@@ -162,8 +146,6 @@ impl AnalyzerData {
         let u1 = c1 as usize;
         let u2 = c2 as usize;
         let u3 = c3 as usize;
-
-        let i = u1 * self.len().pow(2) + u2 * self.len() + u3;
-        self.trigrams[i]
+        self.trigrams[u1][u2][u3]
     }
 }
