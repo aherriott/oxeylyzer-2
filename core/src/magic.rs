@@ -5,32 +5,36 @@
  */
 
 use crate::{
-    analyze::Neighbor, analyzer_data::AnalyzerData, layout::Layout, types::CacheKey,
+    analyze::Neighbor,
+    analyzer_data::AnalyzerData,
+    layout::{Layout, MagicStealBigram},
+    types::CacheKey,
     types::KeysCache,
 };
 
 pub struct DeltaBigram {
-    a: CacheKey,
-    b: CacheKey,
-    old_freq: i64,
-    new_freq: i64,
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub old_freq: i64,
+    pub new_freq: i64,
 }
 
 pub struct DeltaSkipgram {
-    a: CacheKey,
-    b: CacheKey,
-    old_freq: i64,
-    new_freq: i64,
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub old_freq: i64,
+    pub new_freq: i64,
 }
 
 pub struct DeltaTrigram {
-    a: CacheKey,
-    b: CacheKey,
-    c: CacheKey,
-    old_freq: i64,
-    new_freq: i64,
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub c: CacheKey,
+    pub old_freq: i64,
+    pub new_freq: i64,
 }
 
+#[derive(Debug, Clone)]
 pub enum DeltaGram {
     Bigram(DeltaBigram),
     Skipgram(DeltaSkipgram),
@@ -318,5 +322,4 @@ fn test_magic_frequency_symmetry() {
         initial_sg, final_sg,
         "Skipgram frequency should be restored"
     );
-}
 }

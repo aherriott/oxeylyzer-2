@@ -1,5 +1,7 @@
 // Helper types
 
+use crate::layout::Layout;
+
 // A Key value, like "A"
 pub type CacheKey = usize;
 // A key position
@@ -49,7 +51,11 @@ impl KeysCache {
     }
 
     pub fn reverse_get(&self, i: CacheKey) -> Option<CachePos> {
-        self.reverse_vec[idx]
+        self.reverse_vec[i]
+    }
+
+    pub fn len(&self) -> usize {
+        self.vec.len()
     }
 
     pub fn with_capacity(capacity: usize) -> Self {

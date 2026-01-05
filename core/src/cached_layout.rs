@@ -44,7 +44,8 @@ impl CachedLayout {
             (layout.keys.len() - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
         );
         // TODO: This with_capacity probably isn't right
-        let affected_grams = Vec::with_capacity(keys.len().pow(2) + keys.magic.len() * keys.len());
+        let affected_grams =
+            Vec::with_capacity(layout.keys.len().pow(2) + layout.magic.len() * layout.keys.len());
         let magic = MagicCache::new(&layout.magic, &char_mapping, &keys);
         let sfb = SFCache::new(&layout.fingers, &layout.keyboard, &keys);
         let stretch = StretchCache::new();
@@ -97,8 +98,7 @@ impl CachedLayout {
         self.sfb.add_key(pos, u);
         self.stretch.add_key(pos, u);
 
-        // update fingers
-        finger
+        // update fingers (no-op, fingers are static)
     }
 
     // Remove a key at pos. Key should currently contain something
