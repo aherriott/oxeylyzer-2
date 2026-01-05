@@ -13,6 +13,7 @@ use libdof::dofinitions::Finger;
 use libdof::prelude::PhysicalKey;
 use std::fmt::{self, Debug};
 
+#[derive(Clone)]
 pub struct SfBigramPair {
     pub other_pos: usize,
     pub dist: i64,

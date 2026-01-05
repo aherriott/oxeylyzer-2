@@ -31,7 +31,7 @@ pub struct DeltaTrigram {
     new_freq: i64,
 }
 
-enum DeltaGram {
+pub enum DeltaGram {
     Bigram(DeltaBigram),
     Skipgram(DeltaSkipgram),
     Trigram(DeltaTrigram),
