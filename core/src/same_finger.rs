@@ -43,7 +43,7 @@ pub struct SFCache {
 
 impl SFCache {
     // Zero initialize
-    pub fn initialize(&mut self, fingers: &[Finger], keyboard: &[PhysicalKey]) {
+    pub fn new(fingers: &[Finger], keyboard: &[PhysicalKey], keys: &[CacheKey]) -> Self {
         assert!(
             fingers.len() <= CacheKey::MAX as usize,
             "Too many keys to index with CacheKey, max is {}",
@@ -54,33 +54,36 @@ impl SFCache {
             keyboard.len(),
             "finger len is not the same as keyboard len: "
         );
-        self.sfb_per_finger.iter_mut().map(|x| *x = 0);
-        self.total_sfbs = 0;
-        self.sfs_per_finger.iter_mut().map(|x| *x = 0);
-        self.total_sfs = 0;
-        self.use_per_finger.iter_mut().map(|x| *x = 0);
-        self.total_bg = 0;
-        self.total_sg = 0;
-        self.key_to_pos.iter_mut().map(|x| *x = EMPTY_KEY); // Invalid pos (CacheKey::Max + 1)
+        let mut sfb_per_finger = Box::new([0i64; 10]);
+        let mut sfs_per_finger = Box::new([0i64; 10]);
+        let mut use_per_finger = Box::new([0i64; 10]);
+        // compute distances
+        let mut sfbg_dist_per_key = Vec::with_capacity(fingers.len());
+        for (i, (finger1, phys1)) in fingers.iter().zip(keyboard).enumerate() {
+            let mut pairs = Vec::new();
+            for (j, (finger2, phys2)) in fingers.iter().zip(keyboard).enumerate() {
+                if finger1 == finger2 && i != j {
+                    // distance function placeholder
+                    let dist = (dist_placeholder(phys1, phys2) * 100.0) as i64;
+                    pairs.push(SfBigramPair { other_pos: j, dist });
+                }
+            }
+            sfbg_dist_per_key.push(pairs);
+        }
+        Self {
+            sfb_per_finger,
+            total_sfbs: 0,
+            sfs_per_finger,
+            total_sfs: 0,
+            use_per_finger,
+            total_bg: 0,
+            total_sg: 0,
+            sfbg_dist_per_key,
+        }
+    }
 
-        fingers.iter().zip(keyboard).map(|(finger, physical_1)| {
-            self.sfbg_dist_per_key.push(Vec::new());
-            fingers
-                .iter()
-                .zip(keyboard)
-                .zip(0)
-                .filter(|((f, physical_2), pos)| (f == &finger))
-                .map(|((f, physical_2), pos)| {
-                    self.sfbg_dist_per_key
-                        .last_mut()
-                        .unwrap()
-                        .push(SfBigramPair {
-                            other_pos: pos,
-                            dist: (Self::dist(physical_1, physical_2, Finger::LP, Finger::LP)
-                                * 100.0) as i64,
-                        });
-                });
-        });
+    pub fn initialize(&mut self, fingers: &[Finger], keyboard: &[PhysicalKey]) {
+        // stub
     }
 
     pub fn score(&self, weights: &Weights) -> i64 {
