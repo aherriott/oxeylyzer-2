@@ -4,8 +4,13 @@
  **************************************
  */
 
+use crate::char_mapping::EMPTY_KEY;
+use crate::magic::{DeltaGram, MagicCache};
+use crate::stats::Stats;
+use crate::types::CacheKey;
 use crate::weights::{FingerWeights, Weights};
 use libdof::dofinitions::Finger;
+use libdof::prelude::PhysicalKey;
 use std::fmt::{self, Debug};
 
 pub struct SfBigramPair {

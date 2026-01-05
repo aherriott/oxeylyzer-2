@@ -38,7 +38,7 @@ impl CachedLayout {
         layout: &Layout,
     ) -> Self {
         // Zero initialize all of the cache data
-        let keys = KeysCache::new(layout.keys);
+        let keys = KeysCache::new(layout);
         let possible_neighbors = Vec::with_capacity(
             layout.keys.len() * layout.keys.len() + // Keyswaps
             (layout.keys.len() - layout.magic.len()) * layout.magic.len(), // Steal Bigrams

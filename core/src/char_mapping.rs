@@ -2,6 +2,8 @@ use indexmap::IndexMap;
 
 use crate::{types::CacheKey, EMPTY_CHAR, MAGIC_CHARS, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
 
+pub const EMPTY_KEY: CacheKey = 1;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharMapping(IndexMap<char, CacheKey>);
 
