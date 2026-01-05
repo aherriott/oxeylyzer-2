@@ -5,11 +5,17 @@
  */
 
 use crate::{
-    cached_layout::BigramPair, layout::PosPair, magic::MagicCache, types::CacheKey,
+    analyze::Neighbor,
+    analyzer_data::AnalyzerData,
+    cached_layout::{BigramPair, CachedLayout},
+    layout::PosPair,
+    magic::MagicCache,
+    types::CacheKey,
     weights::Weights,
 };
 use itertools::Itertools;
 use libdof::{dofinitions::Finger, keyboard::PhysicalKey};
+use std::collections::HashMap;
 
 const KEY_EDGE_OFFSET: f64 = 0.5;
 

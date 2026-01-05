@@ -11,7 +11,9 @@ use crate::{
     types::CacheKey,
     types::KeysCache,
 };
+use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
 pub struct DeltaBigram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -19,6 +21,7 @@ pub struct DeltaBigram {
     pub new_freq: i64,
 }
 
+#[derive(Debug, Clone)]
 pub struct DeltaSkipgram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -26,6 +29,7 @@ pub struct DeltaSkipgram {
     pub new_freq: i64,
 }
 
+#[derive(Debug, Clone)]
 pub struct DeltaTrigram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -48,6 +52,7 @@ pub struct MagicCache {
     bg_freq: Vec<Vec<i64>>,
     sg_freq: Vec<Vec<i64>>,
     tg_freq: Vec<Vec<Vec<i64>>>,
+    rules: HashMap<CacheKey, HashMap<CacheKey, CacheKey>>,
 }
 
 impl MagicCache {
@@ -118,27 +123,43 @@ impl MagicCache {
         affected_grams: Option<&mut Vec<DeltaGram>>,
     ) {
         // Helper functions to set frequencies and update affected grams
-        let set_bg = |a, b, new| {
+        let set_bg = |a: CacheKey, b: CacheKey, new: i64| {
             let old = self.bg_freq[a][b];
-            bg_freq[a][b] = new_freq;
-            if let Some(affected_grams) = grams {
-                grams.push(DeltaGram::Bigram(DeltaBigram { a, b, old, new }));
+            self.bg_freq[a][b] = new;
+            if let Some(grams) = affected_grams {
+                grams.push(DeltaGram::Bigram(DeltaBigram {
+                    a,
+                    b,
+                    old_freq: old,
+                    new_freq: new,
+                }));
             }
         };
 
-        let set_sg = |a, b, new| {
+        let set_sg = |a: CacheKey, b: CacheKey, new: i64| {
             let old = self.sg_freq[a][b];
-            sg_freq[a][b] = new_freq;
-            if let Some(affected_grams) = grams {
-                grams.push(DeltaGram::Skipgram(DeltaSkipgram { a, b, old, new }));
+            self.sg_freq[a][b] = new;
+            if let Some(grams) = affected_grams {
+                grams.push(DeltaGram::Skipgram(DeltaSkipgram {
+                    a,
+                    b,
+                    old_freq: old,
+                    new_freq: new,
+                }));
             }
         };
 
-        let set_tg = |a, b, c, new| {
-            let old = self.bg_freq[a][b];
-            tg_freq[a][b][c] = new_freq;
-            if let Some(affected_grams) = grams {
-                grams.push(DeltaGram::Trigram(DeltaTrigram { a, b, c, old, new }));
+        let set_tg = |a: CacheKey, b: CacheKey, c: CacheKey, new: i64| {
+            let old = self.tg_freq[a][b][c];
+            self.tg_freq[a][b][c] = new;
+            if let Some(grams) = affected_grams {
+                grams.push(DeltaGram::Trigram(DeltaTrigram {
+                    a,
+                    b,
+                    c,
+                    old_freq: old,
+                    new_freq: new,
+                }));
             }
         };
 
