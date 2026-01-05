@@ -4,8 +4,8 @@ use libdof::prelude::{Dof, Finger, Keyboard, PhysicalKey, Shape};
 use nanorand::{tls_rng, Rng as _};
 
 use crate::{
-    cached_layout::CachedLayout, Result, MAGIC_CHARS, REPEAT_KEY, REPLACEMENT_CHAR, SHIFT_CHAR,
-    SPACE_CHAR,
+    cached_layout::CachedLayout, types::CacheKey, Result, MAGIC_CHARS, REPEAT_KEY,
+    REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,7 +21,7 @@ impl<U: Into<CacheKey>> From<(U, U)> for PosPair {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MagicStealBigram(pub CacheKey, pub CacheKey, pub CacheKey);
 
-impl<U: Into<CacheKey>> From<(U, U, U)> for MagicRule {
+impl<U: Into<CacheKey>> From<(U, U, U)> for MagicStealBigram {
     fn from((p1, p2, p3): (U, U, U)) -> Self {
         Self(p1.into(), p2.into(), p3.into())
     }

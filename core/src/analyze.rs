@@ -42,6 +42,9 @@ pub struct Analyzer {
 impl Analyzer {
     pub fn new(data: Data, weights: Weights) -> Self {
         let data = AnalyzerData::new(data);
+        let analyze_bigrams = weights.has_bigram_weights();
+        let analyze_stretches = weights.has_stretch_weights();
+        let analyze_trigrams = weights.has_trigram_weights();
 
         Self {
             data,
@@ -49,13 +52,18 @@ impl Analyzer {
             analyze_bigrams,
             analyze_stretches,
             analyze_trigrams,
-            None,
-            None,
+            current_cache: None,
+            working_cache: None,
         }
     }
 
     pub fn use_layout(&mut self, layout: &Layout, pins: &[usize]) {
-        self.current_cache = Some(CachedLayout::new(self.data, layout));
+        self.current_cache = Some(CachedLayout::new(
+            &self.data,
+            &layout.keyboard,
+            &self.data.mapping,
+            layout,
+        ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
     }
@@ -64,7 +72,7 @@ impl Analyzer {
         self.current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .score()
+            .score(&self.weights)
     }
 
     /*

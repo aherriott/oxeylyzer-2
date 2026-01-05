@@ -6,7 +6,7 @@ use crate::{
     analyze::Neighbor,
     analyzer_data::AnalyzerData,
     char_mapping::CharMapping,
-    layout::{Layout, PosPair},
+    layout::{Layout, MagicStealBigram, PosPair},
     magic::DeltaGram,
     magic::MagicCache,
     same_finger::SFCache,
@@ -52,10 +52,11 @@ impl CachedLayout {
         let cache = CachedLayout {
             keys,
             possible_neighbors,
+            affected_grams,
             sfb,
             stretch,
             magic,
-            fingers,
+            fingers: layout.fingers.to_vec(),
         };
 
         layout.keys.iter().enumerate().map(|i, u| {
@@ -74,8 +75,6 @@ impl CachedLayout {
     pub fn score(&self, weights: &Weights) -> i64 {
         return self.sfb.score(weights) + self.stretch.score(weights);
     }
-
-    pub fn 
 
     // Calculates the score of a neighbor and applies it to the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
