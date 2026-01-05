@@ -141,17 +141,21 @@ mod tests {
     fn test_apply_revert_neighbor_cache_integrity() {
         let data = Data::load("../data/english.json").expect("this should exist");
         let weights = dummy_weights();
-        let analyzer = Analyzer::new(data, weights);
         let layout = Layout::load(format!("../layouts/test/magic.dof"))
             .expect("this layout is valid and exists, soooo");
-        let mut cache = analyzer.cached_layout(layout, &[]);
-        let reference = self.clone();
+        let cache = CachedLayout::new(
+            &AnalyzerData::new(&data),
+            &layout.keyboard, // TODO
+            &CharMapping::default(),
+            &layout,
+        );
+        let reference = cache.clone();
 
         // Test key swap
         let diff = Neighbor::KeySwap(PosPair(0, 1));
-        analyzer.apply_neighbor(&mut cache, diff);
+        cache.apply_neighbor(diff);
         let revert = diff.revert(&cache);
-        analyzer.apply_neighbor(&mut cache, revert);
+        cache.apply_neighbor(revert);
         assert!(cache == reference);
 
         // Test arbitrary magic rule
@@ -215,5 +219,60 @@ mod tests {
 
         print_key_info(&layout, 'b');
         print_key_info(&layout, '␣');
+    }
+
+    #[test]
+    fn update_cache_bigrams() {
+        let (analyzer, layout) = analyzer_layout("rstn-oxey");
+
+        analyzer.use_layout(layout, &[]);
+        let reference = cache.clone();
+
+        let possible_swaps = cache.possible_neighbors.clone();
+
+        for (i, &swap) in possible_swaps.iter().enumerate() {
+            let initial = analyzer.score_cache(&cache);
+
+            analyzer.apply_neighbor(&mut cache, swap);
+            let revert = swap.revert(&cache);
+            analyzer.apply_neighbor(&mut cache, revert);
+
+            let returned = analyzer.score_cache(&cache);
+
+            assert_eq!(initial, returned, "iteration {i}: ");
+            assert_eq!(cache, reference, "iteration {i}: ");
+        }
+    }
+
+    #[test]
+    fn stretch_cache_consistency() {
+        let (analyzer, layout) = analyzer_layout("qwerty-minimal");
+        let mut cache = analyzer.cached_layout(layout, &[]);
+        let swap = PosPair(0, 8);
+
+        let total = cache.stretch.total;
+        let stretches = analyzer.stretches(&cache);
+
+        assert_eq!(total, stretches);
+
+        dbg!(total);
+
+        analyzer.apply_neighbor(&mut cache, Neighbor::KeySwap(swap));
+        analyzer.apply_neighbor(&mut cache, Neighbor::KeySwap(swap));
+
+        let total2 = cache.stretch.total;
+
+        println!("total stretch cache: {total}");
+        println!("diff after swaps:    {}", total - total2);
+
+        // println!("{:#?}", cache.stretch_cache.all_pairs);
+
+        // cache.stretch_cache.per_keypair.get(&swap).unwrap().iter()
+        //     .for_each(|pair| {
+        //         let [p1, p2] = [pair.pair.0, pair.pair.1];
+        //         let [c1, c2] = [cache.char(p1).unwrap(), cache.char(p2).unwrap()];
+
+        //         println!("{c1}{c2}: {}", pair.dist);
+        //     })
     }
 }
