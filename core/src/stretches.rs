@@ -9,7 +9,7 @@ use crate::{
     analyzer_data::AnalyzerData,
     cached_layout::{BigramPair, CachedLayout},
     layout::PosPair,
-    magic::MagicCache,
+    magic::{DeltaGram, MagicCache},
     types::CacheKey,
     weights::Weights,
 };
@@ -121,9 +121,17 @@ impl StretchCache {
         }
     }
 
-    pub fn add_key() {}
+    pub fn add_key(&mut self, _pos: usize, _key: CacheKey) {
+        // stub
+    }
 
-    pub fn remove_key() {}
+    pub fn remove_key(&mut self, _pos: usize) {
+        // stub
+    }
+
+    pub fn steal_bigram(&mut self, _affected_grams: &[DeltaGram]) {
+        // stub
+    }
 
     pub fn score(&self, weights: &Weights) -> i64 {
         // TODO
@@ -231,9 +239,6 @@ impl StretchCache {
         neighbor: &Neighbor,
         apply: bool,
     ) -> i64 {
-        if !self.analyze_stretches {
-            return 0;
-        }
         match neighbor {
             Neighbor::KeySwap(pair) => {
                 if pair.0 == pair.1 {

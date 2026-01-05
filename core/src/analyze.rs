@@ -115,7 +115,7 @@ impl Analyzer {
             .current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .score();
+            .score(&self.weights);
         let mut best = None;
 
         for neighbor in self
