@@ -69,8 +69,7 @@ impl Analyzer {
     }
 
     pub fn layout(&self) -> Layout {
-        &self
-            .current_cache
+        self.current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
             .into()

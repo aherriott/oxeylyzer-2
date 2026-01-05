@@ -1,3 +1,4 @@
+use crate::types::CacheKey;
 use libdof::prelude::{Finger as DofFinger, Finger::*};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

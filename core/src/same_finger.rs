@@ -59,12 +59,12 @@ impl SFCache {
         let mut use_per_finger = Box::new([0i64; 10]);
         // compute distances
         let mut sfbg_dist_per_key = Vec::with_capacity(fingers.len());
-        for (i, (finger1, phys1)) in fingers.iter().zip(keyboard).enumerate() {
+        for (i, (finger1, _phys1)) in fingers.iter().zip(keyboard).enumerate() {
             let mut pairs = Vec::new();
-            for (j, (finger2, phys2)) in fingers.iter().zip(keyboard).enumerate() {
+            for (j, (finger2, _phys2)) in fingers.iter().zip(keyboard).enumerate() {
                 if finger1 == finger2 && i != j {
                     // distance function placeholder
-                    let dist = (dist_placeholder(phys1, phys2) * 100.0) as i64;
+                    let dist = 0i64; // TODO: compute actual distance
                     pairs.push(SfBigramPair { other_pos: j, dist });
                 }
             }
@@ -82,7 +82,7 @@ impl SFCache {
         }
     }
 
-    pub fn initialize(&mut self, fingers: &[Finger], keyboard: &[PhysicalKey]) {
+    pub fn initialize(&mut self, _fingers: &[Finger], _keyboard: &[PhysicalKey]) {
         // stub
     }
 
@@ -97,7 +97,7 @@ impl SFCache {
             .sum()
     }
 
-    pub fn stats(&self, stats: &mut Stats) {
+    pub fn stats(&self, _stats: &mut Stats) {
         // TODO
     }
 

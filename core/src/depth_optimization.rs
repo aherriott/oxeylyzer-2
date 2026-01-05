@@ -1,6 +1,6 @@
 use crate::{
-    analyze::Analyzer,
-    cached_layout::{CachedLayout, Neighbor},
+    analyze::{Analyzer, Neighbor},
+    cached_layout::CachedLayout,
     layout::Layout,
 };
 

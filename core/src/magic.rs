@@ -73,7 +73,7 @@ impl MagicCache {
         keys: &KeysCache,
         layout: &Layout,
         possible_neighbors: &mut Vec<Neighbor>,
-    ) {
+    ) -> Self {
         /* This data structure leads to wholesale copying of all bg values. Since we're biasing for time > space, this is fine. */
         let bg_freq = data.bigrams.clone();
         let sg_freq = data.skipgrams.clone();
