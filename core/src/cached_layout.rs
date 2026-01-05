@@ -3,10 +3,17 @@ use itertools::Itertools;
 use libdof::prelude::{Finger, PhysicalKey, Shape};
 
 use crate::{
-    KeysCache, MagicCache, REPLACEMENT_CHAR, SFCache, StretchCache, TrigramCache, layout::PosPair, stretches::StretchCache, types::KeysCache, weights::{FingerWeights, Weights}
+    analyze::Neighbor,
+    analyzer_data::AnalyzerData,
+    char_mapping::CharMapping,
+    layout::{Layout, PosPair},
+    magic::MagicCache,
+    same_finger::SFCache,
+    stretches::StretchCache,
+    types::{CacheKey, KeysCache},
+    weights::{FingerWeights, Weights},
+    REPLACEMENT_CHAR,
 };
-
-const KEY_EDGE_OFFSET: f64 = 0.5;
 
 // CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
 // It is wrapped by Analyzer
@@ -23,15 +30,20 @@ pub struct CachedLayout {
 
 impl CachedLayout {
     // Allocates all the required memory
-    pub fn new(data: &AnalyzerData, keyboard: &[PhysicalKey], char_mapping: &CharMapping, layout: &Layout) -> Self {
+    pub fn new(
+        data: &AnalyzerData,
+        keyboard: &[PhysicalKey],
+        char_mapping: &CharMapping,
+        layout: &Layout,
+    ) -> Self {
         // Zero initialize all of the cache data
         let keys = KeysCache::new(layout.keys.len());
         let possible_neighbors = Vec::with_capacity(
             layout.keys.len() * layout.keys.len() + // Keyswaps
-            (layout.keys.len() - layout.magic.len()) * layout.magic.len() // Steal Bigrams
+            (layout.keys.len() - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
         );
         // TODO: This with_capacity probably isn't right
-        let affected_grams = Vec::with_capacity(keys.len() * 3);
+        let affected_grams = Vec::with_capacity(keys.len().pow(2) + keys.magic.len() * keys.len());
         let magic = MagicCache::new(&layout.magic, &char_mapping, &keys);
         let sfb = SFCache::new(&layout.fingers, &layout.keyboard, &keys);
         let stretch = StretchCache::new();
@@ -45,12 +57,14 @@ impl CachedLayout {
             fingers,
         };
 
-        layout.keys.iter().enumerate().map(|(i: usize, u: CacheKey)| {
+        layout.keys.iter().enumerate().map(|i, u| {
             cache.add_key(i, u);
         });
 
-        layout.magic.iter().for_each( (key: CacheKey, leader: CacheKey, output: CacheKey) => {
-            cache.steal_bigram(key, leader, output);
+        layout.magic.iter().for_each(|key, rules| {
+            rules.iter().for_each(|leader, output| {
+                cache.steal_bigram(key, leader, output);
+            });
         });
 
         cache
@@ -70,8 +84,7 @@ impl CachedLayout {
                 self.add_key(b);
             }
             Neighbor::MagicStealBigram(MagicStealBigram(key, leader, output)) => {
-                self.remove_rule(key, leader);
-                self.add_rule(key, leader, output);
+                self.steal_bigram(key, leader, output);
             }
         }
     }
@@ -93,7 +106,6 @@ impl CachedLayout {
         self.stretch.remove_key(pos);
 
         // update fingers
-
     }
 
     // Add a rule. Rule should currently be empty

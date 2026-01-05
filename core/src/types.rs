@@ -1,9 +1,9 @@
 // Helper types
 
 // A Key value, like "A"
-type CacheKey = usize;
+pub type CacheKey = usize;
 // A key position
-type CachePos = usize;
+pub type CachePos = usize;
 
 // An IndexVec is a Vec which itself stores indexes, and thus supports reverse lookup
 pub struct KeysCache {

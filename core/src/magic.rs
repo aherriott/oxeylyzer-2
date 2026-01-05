@@ -4,7 +4,38 @@
  **************************************
  */
 
-use crate::analyze::Neighbor;
+use crate::{
+    analyze::Neighbor, analyzer_data::AnalyzerData, layout::Layout, types::CacheKey,
+    types::KeysCache,
+};
+
+pub struct DeltaBigram {
+    a: CacheKey,
+    b: CacheKey,
+    old_freq: i64,
+    new_freq: i64,
+}
+
+pub struct DeltaSkipgram {
+    a: CacheKey,
+    b: CacheKey,
+    old_freq: i64,
+    new_freq: i64,
+}
+
+pub struct DeltaTrigram {
+    a: CacheKey,
+    b: CacheKey,
+    c: CacheKey,
+    old_freq: i64,
+    new_freq: i64,
+}
+
+enum DeltaGram {
+    Bigram(DeltaBigram),
+    Skipgram(DeltaSkipgram),
+    Trigram(DeltaTrigram),
+}
 
 // For now, only "simple" magic rules are supported. One leader key -> one output key.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -127,13 +158,13 @@ impl MagicCache {
         set_bg(a, b, 0i64);
 
         for c in keys {
-            debug_assert(self.bg_freq[b][c] - self.tg_freq[a][b][c] >= 0);
+            debug_assert!(self.bg_freq[b][c] - self.tg_freq[a][b][c] >= 0);
             set_bg(m, c, self.bg_freq[m][c] + self.tg_freq[a][b][c]);
             set_bg(b, c, self.bg_freq[b][c] - self.tg_freq[a][b][c]);
         }
 
         for z in keys {
-            debug_assert(self.sg_freq[z][b] - self.tg_freq[z][a][b] >= 0);
+            debug_assert!(self.sg_freq[z][b] - self.tg_freq[z][a][b] >= 0);
             set_sg(z, m, self.sg_freq[z][m] + self.tg_freq[z][a][b]);
             set_sg(z, b, self.sg_freq[z][b] - self.tg_freq[z][a][b]);
         }

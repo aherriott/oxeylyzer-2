@@ -22,8 +22,8 @@ pub mod weights;
 pub mod prelude {
     pub use super::{
         analyze::Analyzer,
+        analyze::Neighbor,
         cached_layout::CachedLayout,
-        cached_layout::Neighbor,
         corpus_cleaner::*,
         data::Data,
         layout::{Layout, PosPair},

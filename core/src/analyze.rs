@@ -16,20 +16,6 @@ use crate::{
     weights::{FingerWeights, Weights},
 };
 
-// #[derive(Debug, Clone, PartialEq, Default)]
-// pub struct TrigramData {
-//     pub sft: i64,
-//     pub sfb: i64,
-//     pub inroll: i64,
-//     pub outroll: i64,
-//     pub alternate: i64,
-//     pub redirect: i64,
-//     pub onehandin: i64,
-//     pub onehandout: i64,
-//     pub thumb: i64,
-//     pub invalid: i64,
-// }
-
 // The difference between two neighboring layouts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Neighbor {
@@ -105,12 +91,13 @@ impl Analyzer {
     /**
      * Returns the best neighbor
      */
-    pub fn best_neighbor(&self, cache: &mut CachedLayout) -> Option<(Neighbor, i64)> {
-        let mut best_score = self.score_cache(cache);
+    pub fn best_neighbor(&self) -> Option<(Neighbor, i64)> {
+        let mut best_score = self.score_cache(self.current_cache);
         let mut best = None;
 
         for neighbor in self.current_cache.possible_neighbors() {
-            if self.test_neighbor(neighbor) > best_score {
+            let score = self.test_neighbor(neighbor);
+            if score > best_score {
                 best_score = score;
                 best = Some((neighbor.clone(), score));
             }
@@ -137,148 +124,159 @@ impl Analyzer {
      **************************************
      */
 
-    pub fn sfbs(&self, cache: &CachedLayout) -> i64 {
-        let mapping_len = self.data.mapping.len();
-        cache
-            .sfb
-            .weighted_sfb_indices
-            .all
-            .iter()
-            .map(
-                |BigramPair {
-                     pair: PosPair(a, b),
-                     ..
-                 }| {
-                    let u1 = cache.keys[*a as usize] as usize;
-                    let u2 = cache.keys[*b as usize] as usize;
+    // pub fn sfbs(&self) -> i64 {
+    //     let mapping_len = self.data.mapping.len();
+    //     self.current_cache
+    //         .unwrap()
+    //         .sfb
+    //         .weighted_sfb_indices
+    //         .all
+    //         .iter()
+    //         .map(
+    //             |BigramPair {
+    //                  pair: PosPair(a, b),
+    //                  ..
+    //              }| {
+    //                 let u1 = cache.keys[*a as usize] as usize;
+    //                 let u2 = cache.keys[*b as usize] as usize;
 
-                    cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
-                        + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
-                },
-            )
-            .sum()
-    }
+    //                 cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
+    //                     + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
+    //             },
+    //         )
+    //         .sum()
+    // }
 
-    pub fn sfs(&self, cache: &CachedLayout) -> i64 {
-        let mapping_len = self.data.mapping.len();
-        cache
-            .sfb
-            .weighted_sfb_indices
-            .all
-            .iter()
-            .map(
-                |BigramPair {
-                     pair: PosPair(a, b),
-                     ..
-                 }| {
-                    let u1 = cache.keys[*a as usize] as usize;
-                    let u2 = cache.keys[*b as usize] as usize;
+    // pub fn sfs(&self) -> i64 {
+    //     let mapping_len = self.data.mapping.len();
+    //     cache
+    //         .sfb
+    //         .weighted_sfb_indices
+    //         .all
+    //         .iter()
+    //         .map(
+    //             |BigramPair {
+    //                  pair: PosPair(a, b),
+    //                  ..
+    //              }| {
+    //                 let u1 = cache.keys[*a as usize] as usize;
+    //                 let u2 = cache.keys[*b as usize] as usize;
 
-                    cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
-                        + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap()
-                },
-            )
-            .sum()
-    }
+    //                 cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
+    //                     + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap()
+    //             },
+    //         )
+    //         .sum()
+    // }
 
-    pub fn stretches(&self, cache: &CachedLayout) -> i64 {
-        cache
-            .stretch
-            .all_pairs
-            .iter()
-            .map(
-                |BigramPair {
-                     pair: PosPair(a, b),
-                     dist,
-                 }| {
-                    let u1 = cache.keys[*a as usize];
-                    let u2 = cache.keys[*b as usize];
+    // pub fn stretches(&self) -> i64 {
+    //     cache
+    //         .stretch
+    //         .all_pairs
+    //         .iter()
+    //         .map(
+    //             |BigramPair {
+    //                  pair: PosPair(a, b),
+    //                  dist,
+    //              }| {
+    //                 let u1 = cache.keys[*a as usize];
+    //                 let u2 = cache.keys[*b as usize];
 
-                    (self.stretch_get_bigram(cache, &u1, &u2)
-                        + self.stretch_get_bigram(cache, &u2, &u1))
-                        * dist
-                },
-            )
-            .sum()
-    }
+    //                 (self.stretch_get_bigram(cache, &u1, &u2)
+    //                     + self.stretch_get_bigram(cache, &u2, &u1))
+    //                     * dist
+    //             },
+    //         )
+    //         .sum()
+    // }
 
-    pub fn finger_use(&self, cache: &CachedLayout) -> [i64; 10] {
-        let mut res = [0; 10];
+    // pub fn finger_use(&self) -> [i64; 10] {
+    //     let mut res = [0; 10];
 
-        for (&k, &f) in cache.keys.iter().zip(cache.fingers.iter()) {
-            // TODO: Magic mapping
-            res[f as usize] += self.data.get_char_u(k);
-        }
+    //     for (&k, &f) in cache.keys.iter().zip(cache.fingers.iter()) {
+    //         // TODO: Magic mapping
+    //         res[f as usize] += self.data.get_char_u(k);
+    //     }
 
-        res
-    }
+    //     res
+    // }
 
-    pub fn weighted_finger_distance(&self, cache: &CachedLayout) -> [i64; 10] {
-        Finger::FINGERS.map(|f| self.sfb_finger_weighted_bigrams(cache, f))
-    }
+    // pub fn unweighted_finger_distance(&self, cache: &CachedLayout) -> [i64; 10] {
+    //     Finger::FINGERS.map(|f| self.sfb_finger_unweighted_bigrams(cache, f))
+    // }
 
-    pub fn unweighted_finger_distance(&self, cache: &CachedLayout) -> [i64; 10] {
-        Finger::FINGERS.map(|f| self.sfb_finger_unweighted_bigrams(cache, f))
-    }
+    // pub fn finger_sfbs(&self) -> [i64; 10] {
+    //     let mapping_len = self.data.mapping.len();
+    //     self.current_cache
+    //         .sfb
+    //         .weighted_sfb_indices
+    //         .fingers
+    //         .clone()
+    //         .map(|pairs| {
+    //             pairs
+    //                 .iter()
+    //                 .map(
+    //                     |BigramPair {
+    //                          pair: PosPair(a, b),
+    //                          ..
+    //                      }| {
+    //                         let u1 = self.current_cache.keys[*a as usize] as usize;
+    //                         let u2 = self.current_cache.keys[*b as usize] as usize;
 
-    pub fn finger_sfbs(&self, cache: &CachedLayout) -> [i64; 10] {
-        let mapping_len = self.data.mapping.len();
-        cache.sfb.weighted_sfb_indices.fingers.clone().map(|pairs| {
-            pairs
-                .iter()
-                .map(
-                    |BigramPair {
-                         pair: PosPair(a, b),
-                         ..
-                     }| {
-                        let u1 = cache.keys[*a as usize] as usize;
-                        let u2 = cache.keys[*b as usize] as usize;
+    //                         self.current_cache
+    //                             .magic
+    //                             .bigrams
+    //                             .get(u1 * mapping_len + u2)
+    //                             .unwrap()
+    //                             + self
+    //                                 .current_cache
+    //                                 .magic
+    //                                 .bigrams
+    //                                 .get(u2 * mapping_len + u1)
+    //                                 .unwrap()
+    //                     },
+    //                 )
+    //                 .sum()
+    //         })
+    // }
 
-                        cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
-                            + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
-                    },
-                )
-                .sum()
-        })
-    }
+    // pub fn trigrams(&self) -> TrigramData {
+    //     use crate::trigrams::TrigramType::*;
 
-    pub fn trigrams(&self, cache: &CachedLayout) -> TrigramData {
-        use crate::trigrams::TrigramType::*;
+    //     let mapping_len = self.data.mapping.len();
+    //     let mut trigrams = TrigramData::default();
 
-        let mapping_len = self.data.mapping.len();
-        let mut trigrams = TrigramData::default();
+    //     for (&c1, &f1) in self.current_cache.keys.iter().zip(&self.current_cache.fingers) {
+    //         for (&c2, &f2) in self.current_cache.keys.iter().zip(&self.current_cache.fingers) {
+    //             for (&c3, &f3) in self.current_cache.keys.iter().zip(&self.current_cache.fingers) {
+    //                 let u1 = c1 as usize;
+    //                 let u2 = c2 as usize;
+    //                 let u3 = c3 as usize;
+    //                 let freq = self.current_cache
+    //                     .magic
+    //                     .trigrams
+    //                     .get(u1 * mapping_len.pow(2) + u2 * mapping_len + u3)
+    //                     .unwrap();
+    //                 let ttype = TRIGRAMS[f1 as usize * 100 + f2 as usize * 10 + f3 as usize];
 
-        for (&c1, &f1) in cache.keys.iter().zip(&cache.fingers) {
-            for (&c2, &f2) in cache.keys.iter().zip(&cache.fingers) {
-                for (&c3, &f3) in cache.keys.iter().zip(&cache.fingers) {
-                    let u1 = c1 as usize;
-                    let u2 = c2 as usize;
-                    let u3 = c3 as usize;
-                    let freq = cache
-                        .magic
-                        .trigrams
-                        .get(u1 * mapping_len.pow(2) + u2 * mapping_len + u3)
-                        .unwrap();
-                    let ttype = TRIGRAMS[f1 as usize * 100 + f2 as usize * 10 + f3 as usize];
+    //                 match ttype {
+    //                     Sft => trigrams.sft += freq,
+    //                     Sfb => trigrams.sfb += freq,
+    //                     Inroll => trigrams.inroll += freq,
+    //                     Outroll => trigrams.outroll += freq,
+    //                     Alternate => trigrams.alternate += freq,
+    //                     Redirect => trigrams.redirect += freq,
+    //                     OnehandIn => trigrams.onehandin += freq,
+    //                     OnehandOut => trigrams.onehandout += freq,
+    //                     Thumb => trigrams.thumb += freq,
+    //                     Invalid => trigrams.invalid += freq,
+    //                 }
+    //             }
+    //         }
+    //     }
 
-                    match ttype {
-                        Sft => trigrams.sft += freq,
-                        Sfb => trigrams.sfb += freq,
-                        Inroll => trigrams.inroll += freq,
-                        Outroll => trigrams.outroll += freq,
-                        Alternate => trigrams.alternate += freq,
-                        Redirect => trigrams.redirect += freq,
-                        OnehandIn => trigrams.onehandin += freq,
-                        OnehandOut => trigrams.onehandout += freq,
-                        Thumb => trigrams.thumb += freq,
-                        Invalid => trigrams.invalid += freq,
-                    }
-                }
-            }
-        }
-
-        trigrams
-    }
+    //     trigrams
+    // }
 
     pub fn similarity(&self, layout1: &Layout, layout2: &Layout) -> i64 {
         // TODO: Magic
