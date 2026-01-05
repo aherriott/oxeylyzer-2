@@ -5,21 +5,19 @@ use crate::{
 };
 
 impl Analyzer {
-    pub fn always_better_swap(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let mut cache = self.cached_layout(layout, pins);
-        let mut best_score = self.score_cache(&cache);
-
-        let swaps = std::mem::take(&mut cache.possible_neighbors);
+    pub fn always_better_swap(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+        self.use_layout(&layout, pins);
+        let mut best_score = self.score();
 
         loop {
             let mut best_loop_score = i64::MIN;
 
-            for &pair in swaps.iter() {
-                let score = self.test_neighbor(&mut cache, pair);
+            for &neighbor in self.possible_neighbors() {
+                let score = self.test_neighbor(neighbor);
 
                 if score > best_score {
                     best_loop_score = score;
-                    self.apply_neighbor(&mut cache, pair);
+                    self.apply_neighbor(neighbor);
                     break;
                 }
             }
@@ -31,41 +29,41 @@ impl Analyzer {
             best_score = best_loop_score;
         }
 
-        (cache.into(), best_score)
+        (self.layout(), best_score)
     }
 
-    pub fn alternative_d3(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+    pub fn alternative_d3(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         let (layout, _) = self.always_better_swap(layout, pins);
         self.greedy_depth3_improve(layout, pins)
     }
 
-    pub fn optimize_depth3(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let (layout, _) = self.greedy_improve(layout, pins);
+    pub fn optimize_depth3(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+        let (layout, _) = self.greedy_improve(&layout, pins);
         let (layout, _) = self.greedy_depth2_improve(layout, pins);
         self.greedy_depth3_improve(layout, pins)
     }
 
-    pub fn optimize_depth4(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let (layout, _) = self.greedy_improve(layout, pins);
+    pub fn optimize_depth4(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+        let (layout, _) = self.greedy_improve(&layout, pins);
         let (layout, _) = self.greedy_depth2_improve(layout, pins);
         let (layout, _) = self.greedy_depth3_improve(layout, pins);
         self.greedy_depth4_improve(layout, pins)
     }
 
-    pub fn greedy_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
-        let mut cache = self.cached_layout(layout, pins);
-        let mut best_score = self.score_cache(&cache);
+    pub fn greedy_improve(&mut self, layout: &Layout, pins: &[usize]) -> (Layout, i64) {
+        self.use_layout(&layout, pins);
+        let mut best_score = self.score();
 
-        while let Some((neighbor, score)) = self.best_neighbor(&mut cache) {
+        while let Some((neighbor, score)) = self.best_neighbor() {
             if score <= best_score {
                 break;
             }
 
             best_score = score;
-            self.apply_neighbor(&mut cache, neighbor);
+            self.apply_neighbor(neighbor);
         }
 
-        (cache.into(), best_score)
+        (self.layout(), best_score)
     }
 
     pub fn greedy_depth2_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
@@ -86,59 +84,46 @@ impl Analyzer {
         pins: &[usize],
         depth: usize,
     ) -> (Layout, i64) {
-        let mut cache = self.cached_layout(layout, pins);
+        self.use_layout(&layout, pins);
         let mut diffs = vec![Neighbor::default(); depth];
-        let mut cur_best = self.score_cache(&cache);
+        let mut cur_best = self.score();
 
-        let neighbors = std::mem::take(&mut cache.possible_neighbors);
-
-        while self.best_neighbor_recursive(&mut cache, depth, &mut diffs, &mut cur_best, &neighbors)
-        {
-            for diff in diffs.iter() {
-                self.apply_neighbor(&mut cache, *diff);
+        while self.best_neighbor_recursive(depth, &mut diffs, &mut cur_best) {
+            for neighbor in diffs.iter() {
+                self.apply_neighbor(*neighbor);
             }
         }
 
-        (cache.into(), cur_best)
+        (self.layout(), cur_best)
     }
 
     fn best_neighbor_recursive(
         &self,
-        cache: &mut CachedLayout,
         depth: usize,
         diffs: &mut Vec<Neighbor>,
         cur_best: &mut i64,
-        possible_neighbors: &[Neighbor],
     ) -> bool {
         if depth > 0 {
             let mut return_best = false;
-            for diff in possible_neighbors {
+            for neighbor in self.possible_neighbors() {
                 // Apply the neighbor
-                self.apply_neighbor(cache, *diff);
+                self.apply_neighbor(*neighbor);
 
                 // Recurse
-                let best = self.best_neighbor_recursive(
-                    cache,
-                    depth - 1,
-                    diffs,
-                    cur_best,
-                    possible_neighbors,
-                );
+                let best = self.best_neighbor_recursive(depth - 1, diffs, cur_best);
 
-                // TODO: This needs to be faster
                 // Revert the neighbor
-                let revert = diff.revert(cache);
-                self.apply_neighbor(cache, revert);
+                self.apply_neighbor(neighbor.revert());
 
                 // This chain is the current known best. Update diffs
                 if best {
-                    diffs[depth - 1] = *diff;
+                    diffs[depth - 1] = *neighbor;
                     return_best = true;
                 }
             }
             return_best
         } else {
-            let score = self.score_cache(cache);
+            let score = self.score();
             if score > *cur_best {
                 // This chain is the current known best. Update cur_best
                 *cur_best = score;
@@ -171,13 +156,12 @@ mod tests {
     #[test]
     fn cache_intact() {
         let (analyzer, layout) = analyzer_layout("rstn-oxey");
-        let mut cache = analyzer.cached_layout(layout, &[]);
+        analyzer.use_layout(&layout, &[]);
         let reference = cache.clone();
         let mut diffs = vec![Neighbor::default(); 4];
         let mut cur_best = i64::MIN;
-        let neighbors = cache.possible_neighbors.clone();
 
-        analyzer.best_neighbor_recursive(&mut cache, 1, &mut diffs, &mut cur_best, &neighbors);
+        analyzer.best_neighbor_recursive(1, &mut diffs, &mut cur_best);
         assert_eq!(cache, reference);
 
         analyzer.best_neighbor_recursive(&mut cache, 2, &mut diffs, &mut cur_best, &neighbors);

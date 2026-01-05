@@ -68,6 +68,14 @@ impl Analyzer {
         self.working_cache = self.current_cache.clone();
     }
 
+    pub fn layout(&self) -> Layout {
+        &self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .into()
+    }
+
     pub fn score(&self) -> i64 {
         self.current_cache
             .as_ref()
@@ -90,7 +98,7 @@ impl Analyzer {
             .possible_neighbors()
     }
 
-    pub fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
+    pub fn random_neighbor(&self, rng: &mut WyRand) -> Neighbor {
         assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
         let pos_neighbors = self
             .current_cache

@@ -27,61 +27,61 @@ pub struct TrigramStats {
     pub invalid: f64,
 }
 
-impl Analyzer {
-    pub fn stats(&self, layout: &Layout) -> Stats {
-        let cache = self.cached_layout(layout.clone(), &[]);
+// impl Analyzer {
+//     pub fn stats(&self, layout: &Layout) -> Stats {
+//         let cache = self.cached_layout(layout.clone(), &[]);
 
-        let finger_use = self
-            .finger_use(&cache)
-            .map(|u| u as f64 / self.data.char_total);
+//         let finger_use = self
+//             .finger_use(&cache)
+//             .map(|u| u as f64 / self.data.char_total);
 
-        let finger_sfbs = self
-            .finger_sfbs(&cache)
-            .map(|s| s as f64 / self.data.bigram_total);
+//         let finger_sfbs = self
+//             .finger_sfbs(&cache)
+//             .map(|s| s as f64 / self.data.bigram_total);
 
-        let weighted_finger_distance = self
-            .weighted_finger_distance(&cache)
-            .map(|s| s as f64 / ((self.data.bigram_total + self.data.skipgram_total) * 100.0));
+//         let weighted_finger_distance = self
+//             .weighted_finger_distance(&cache)
+//             .map(|s| s as f64 / ((self.data.bigram_total + self.data.skipgram_total) * 100.0));
 
-        let unweighted_finger_distance = self
-            .unweighted_finger_distance(&cache)
-            .map(|s| s as f64 / ((self.data.bigram_total + self.data.skipgram_total) * 100.0));
+//         let unweighted_finger_distance = self
+//             .unweighted_finger_distance(&cache)
+//             .map(|s| s as f64 / ((self.data.bigram_total + self.data.skipgram_total) * 100.0));
 
-        let sfbs = self.sfbs(&cache) as f64 / self.data.char_total;
-        let sfs = self.sfs(&cache) as f64 / self.data.bigram_total;
-        let stretches = self.stretches(&cache) as f64
-            / self.data.bigram_total
-            / 100.0
-            / self.weights.stretches as f64;
-        let score = self.score_cache(&cache);
+//         let sfbs = self.sfbs(&cache) as f64 / self.data.char_total;
+//         let sfs = self.sfs(&cache) as f64 / self.data.bigram_total;
+//         let stretches = self.stretches(&cache) as f64
+//             / self.data.bigram_total
+//             / 100.0
+//             / self.weights.stretches as f64;
+//         let score = self.score_cache(&cache);
 
-        let trigrams = self.trigram_stats(self.trigrams(&cache));
+//         let trigrams = self.trigram_stats(self.trigrams(&cache));
 
-        Stats {
-            finger_use,
-            finger_sfbs,
-            weighted_finger_distance,
-            unweighted_finger_distance,
-            sfbs,
-            sfs,
-            score,
-            stretches,
-            trigrams,
-        }
-    }
+//         Stats {
+//             finger_use,
+//             finger_sfbs,
+//             weighted_finger_distance,
+//             unweighted_finger_distance,
+//             sfbs,
+//             sfs,
+//             score,
+//             stretches,
+//             trigrams,
+//         }
+//     }
 
-    pub fn trigram_stats(&self, trigrams: TrigramData) -> TrigramStats {
-        TrigramStats {
-            sft: trigrams.sft as f64 / self.data.trigram_total,
-            sfb: trigrams.sfb as f64 / self.data.trigram_total,
-            inroll: trigrams.inroll as f64 / self.data.trigram_total,
-            outroll: trigrams.outroll as f64 / self.data.trigram_total,
-            alternate: trigrams.alternate as f64 / self.data.trigram_total,
-            redirect: trigrams.redirect as f64 / self.data.trigram_total,
-            onehandin: trigrams.onehandin as f64 / self.data.trigram_total,
-            onehandout: trigrams.onehandout as f64 / self.data.trigram_total,
-            thumb: trigrams.thumb as f64 / self.data.trigram_total,
-            invalid: trigrams.invalid as f64 / self.data.trigram_total,
-        }
-    }
-}
+//     pub fn trigram_stats(&self, trigrams: TrigramData) -> TrigramStats {
+//         TrigramStats {
+//             sft: trigrams.sft as f64 / self.data.trigram_total,
+//             sfb: trigrams.sfb as f64 / self.data.trigram_total,
+//             inroll: trigrams.inroll as f64 / self.data.trigram_total,
+//             outroll: trigrams.outroll as f64 / self.data.trigram_total,
+//             alternate: trigrams.alternate as f64 / self.data.trigram_total,
+//             redirect: trigrams.redirect as f64 / self.data.trigram_total,
+//             onehandin: trigrams.onehandin as f64 / self.data.trigram_total,
+//             onehandout: trigrams.onehandout as f64 / self.data.trigram_total,
+//             thumb: trigrams.thumb as f64 / self.data.trigram_total,
+//             invalid: trigrams.invalid as f64 / self.data.trigram_total,
+//         }
+//     }
+// }

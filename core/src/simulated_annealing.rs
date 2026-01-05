@@ -5,7 +5,7 @@ use crate::{analyze::Analyzer, layout::Layout};
 
 impl Analyzer {
     pub fn annealing_improve(
-        &self,
+        &mut self,
         layout: Layout,
         pins: &[usize],
         initial_temperature: f64,
@@ -25,11 +25,10 @@ impl Analyzer {
             "Final temperature must be positive"
         );
 
-        let mut cache = self.cached_layout(layout, pins);
         let mut rng = WyRand::new();
-        let mut best = cache.clone();
 
-        let mut best_score = self.score_cache(&cache);
+        self.use_layout(&layout, pins);
+        let mut best_score = self.score();
         let mut current_score = best_score;
         let mut worst_score = current_score;
         let mut temperature = initial_temperature;
@@ -40,19 +39,17 @@ impl Analyzer {
         assert!(cooling_rate < 1.0, "Cooling rate must be < 1.0");
 
         // let mut scores = Vec::<i64>::new();
-
+        let mut best = self.layout();
         for _ in 0..max_iterations {
-            let diff = self.random_neighbor(&cache, &mut rng);
-
-            // Test the swap
-            let new_score = self.test_neighbor(&mut cache, diff);
+            let diff = self.random_neighbor(&mut rng);
+            let new_score = self.test_neighbor(diff);
 
             if new_score < worst_score {
                 worst_score = new_score;
             }
             if new_score > best_score {
                 best_score = new_score;
-                best = cache.clone();
+                best = self.layout();
             }
 
             // Odds we take this swap
@@ -60,7 +57,7 @@ impl Analyzer {
 
             if ap > f64::random(&mut rng) {
                 current_score = new_score;
-                self.apply_neighbor(&mut cache, diff);
+                self.apply_neighbor(diff);
             }
             // scores.push(current_score);
 
@@ -68,7 +65,7 @@ impl Analyzer {
         }
         // plot_line_chart(scores).expect("Failed to plot line chart");
 
-        (best.into(), best_score)
+        (best, best_score)
     }
 }
 

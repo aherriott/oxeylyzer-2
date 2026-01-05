@@ -23,7 +23,6 @@ pub mod prelude {
     pub use super::{
         analyze::Analyzer,
         analyze::Neighbor,
-        cached_layout::CachedLayout,
         corpus_cleaner::*,
         data::Data,
         layout::{Layout, PosPair},
