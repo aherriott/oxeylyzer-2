@@ -7,6 +7,7 @@ use crate::{
     analyzer_data::AnalyzerData,
     char_mapping::CharMapping,
     layout::{Layout, PosPair},
+    magic::DeltaGram,
     magic::MagicCache,
     same_finger::SFCache,
     stretches::StretchCache,
@@ -37,7 +38,7 @@ impl CachedLayout {
         layout: &Layout,
     ) -> Self {
         // Zero initialize all of the cache data
-        let keys = KeysCache::new(layout.keys.len());
+        let keys = KeysCache::new(layout.keys);
         let possible_neighbors = Vec::with_capacity(
             layout.keys.len() * layout.keys.len() + // Keyswaps
             (layout.keys.len() - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
@@ -70,9 +71,11 @@ impl CachedLayout {
         cache
     }
 
-    pub fn score(&self) -> i64 {
-        return self.sfb.total + self.stretch.total;
+    pub fn score(&self, weights: &Weights) -> i64 {
+        return self.sfb.score(weights) + self.stretch.score(weights);
     }
+
+    pub fn 
 
     // Calculates the score of a neighbor and applies it to the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {

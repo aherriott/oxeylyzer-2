@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 
-use crate::{MAGIC_CHARS, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
+use crate::{types::CacheKey, EMPTY_CHAR, MAGIC_CHARS, REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharMapping(IndexMap<char, CacheKey>);
@@ -9,6 +9,7 @@ impl Default for CharMapping {
     fn default() -> Self {
         let mut map = Self(Default::default());
         map.push(REPLACEMENT_CHAR);
+        map.push(EMPTY_CHAR);
         map.push(SHIFT_CHAR);
         map.push(SPACE_CHAR);
         for char in MAGIC_CHARS.chars() {

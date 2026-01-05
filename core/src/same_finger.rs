@@ -55,7 +55,7 @@ impl SFCache {
         self.use_per_finger.iter_mut().map(|x| *x = 0);
         self.total_bg = 0;
         self.total_sg = 0;
-        self.key_to_pos.iter_mut().map(|x| *x = 256); // Invalid pos (CacheKey::Max + 1)
+        self.key_to_pos.iter_mut().map(|x| *x = EMPTY_KEY); // Invalid pos (CacheKey::Max + 1)
 
         fingers.iter().zip(keyboard).map(|(finger, physical_1)| {
             self.sfbg_dist_per_key.push(Vec::new());
@@ -77,7 +77,7 @@ impl SFCache {
         });
     }
 
-    pub fn score(&self, weights: &Weights) {
+    pub fn score(&self, weights: &Weights) -> i64 {
         // TODO: normalize
         Fingers::FINGERS
             .iter()
@@ -85,7 +85,7 @@ impl SFCache {
                 self.sfb_per_finger[f] * weights.finger[f] * weights.sfb
                     + self.sfs_per_finger[f] * weights.finger[f] * weights.sfs
             })
-            .sum();
+            .sum()
     }
 
     pub fn stats(&self, stats: &mut Stats) {
@@ -122,7 +122,7 @@ impl SFCache {
             .sum();
         self.sfs_per_finger[fingers[pos]] += sfs;
 
-        self.key_to_pos[key] = pos;
+        self.keys.reverse_get(key) = pos;
     }
 
     pub fn remove_key(
@@ -155,24 +155,24 @@ impl SFCache {
             .sum();
         self.sfs_per_finger[fingers[pos]] -= sfs;
 
-        self.key_to_pos[key] = 256;
+        self.keys.reverse_get(key) = EMPTY_KEY;
     }
 
     pub fn add_rule(&mut self, magic: &MagicCache, affected_grams: &[DeltaGram]) {
         for gram in &cache.magic.affected_grams {
             match gram {
                 DeltaGram::Bigram(bg) => {
-                    self.sfbg_dist_per_key[self.key_to_pos[bg.a]]
+                    self.sfbg_dist_per_key[self.keys.reverse_get(bg.a)]
                         .iter_mut()
-                        .filter(|(pos, dist)| (self.key_to_pos[bg.b] == pos)) // Is SF
+                        .filter(|(pos, dist)| (self.keys.reverse_get(bg.b) == pos)) // Is SF
                         .map(|(pos, dist)| {
                             self.sfb_per_finger(fingers[pos]) += (bg.new - bg.old) * dist;
                         })
                 }
                 DeltaGram::Skipgram(bg) => {
-                    self.sfbg_dist_per_key[self.key_to_pos[bg.a]]
+                    self.sfbg_dist_per_key[self.keys.reverse_get(bg.a)]
                         .iter_mut()
-                        .filter(|(pos, dist)| (self.key_to_pos[bg.b] == pos)) // Is SF
+                        .filter(|(pos, dist)| (self.keys.reverse_get(bg.b) == pos)) // Is SF
                         .map(|(pos, dist)| {
                             self.sfs_per_finger(fingers[pos]) += (bg.new - bg.old) * dist;
                         })

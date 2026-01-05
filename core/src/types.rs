@@ -6,17 +6,23 @@ pub type CacheKey = usize;
 pub type CachePos = usize;
 
 // An IndexVec is a Vec which itself stores indexes, and thus supports reverse lookup
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct KeysCache {
     vec: Vec<CacheKey>,
     reverse_vec: Vec<Option<CachePos>>, // Option because some Key may not be assigned
 }
 
 impl KeysCache {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(layout: &Layout) -> Self {
+        let mut keys = KeysCache {
             vec: Vec::new(),
             reverse_vec: Vec::new(),
+        };
+        for i in 0..layout.keys.len() {
+            keys.vec.push(i);
+            keys.reverse_vec.push(Some(i));
         }
+        keys
     }
 
     pub fn get(&self, i: CachePos) -> CacheKey {

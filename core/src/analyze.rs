@@ -9,7 +9,6 @@ use crate::cached_layout;
 use crate::{
     analyzer_data::AnalyzerData,
     cached_layout::*,
-    char_mapping::CharMapping,
     data::Data,
     layout::*,
     trigrams::TRIGRAMS,
@@ -36,7 +35,6 @@ pub struct Analyzer {
     analyze_bigrams: bool,
     analyze_stretches: bool,
     analyze_trigrams: bool,
-    char_mapping: Arc<CharMapping>,
     current_cache: Option<CachedLayout>,
     working_cache: Option<CachedLayout>,
 }
@@ -63,11 +61,10 @@ impl Analyzer {
     }
 
     pub fn score(&self) -> i64 {
-        self.current_cache.score()
-    }
-
-    pub fn mapping(&self) -> &CharMapping {
-        &self.data.mapping
+        self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .score()
     }
 
     /*
@@ -79,12 +76,19 @@ impl Analyzer {
     // possible_neighbors only needs to be called once per layout + pins combo
     pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
         assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
-        self.current_cache.unwrap().possible_neighbors()
+        self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .possible_neighbors()
     }
 
     pub fn random_neighbor(&self, cache: &CachedLayout, rng: &mut WyRand) -> Neighbor {
         assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
-        let pos_neighbors = self.current_cache.unwrap().possible_neighbors();
+        let pos_neighbors = self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .possible_neighbors();
         pos_neighbors[rng.generate_range(0..pos_neighbors.len())]
     }
 
@@ -92,11 +96,20 @@ impl Analyzer {
      * Returns the best neighbor
      */
     pub fn best_neighbor(&self) -> Option<(Neighbor, i64)> {
-        let mut best_score = self.score_cache(self.current_cache);
+        let mut best_score = self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .score();
         let mut best = None;
 
-        for neighbor in self.current_cache.possible_neighbors() {
-            let score = self.test_neighbor(neighbor);
+        for neighbor in self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .possible_neighbors()
+        {
+            let score = self.test_neighbor(*neighbor);
             if score > best_score {
                 best_score = score;
                 best = Some((neighbor.clone(), score));
@@ -108,8 +121,21 @@ impl Analyzer {
     // Calculates the score of a neighbor without updating the cache
     pub fn test_neighbor(&self, neighbor: Neighbor) -> i64 {
         // Copy the current cache to the working cache
-        self.working_cache.copy_from(&self.current_cache);
-        return Self::apply_neighbor_to_cache(neighbor);
+        let working = self
+            .working_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+        let current = self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+        debug_assert_eq!(
+            working, current,
+            "Working cache out of sync with current cache"
+        );
+        working.apply_neighbor(neighbor);
+        let score = working.score();
+        working.copy_from(current, neighbor);
     }
 
     // Calculates the score of a neighbor without updating the cache

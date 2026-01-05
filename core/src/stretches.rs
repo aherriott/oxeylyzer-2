@@ -119,9 +119,10 @@ impl StretchCache {
 
     pub fn remove_key() {}
 
-    pub fn add_rule() {}
-
-    pub fn remove_rule() {}
+    pub fn score(&self, weights: &Weights) -> i64 {
+        // TODO
+        self.total * weights.stretches
+    }
 
     fn x_finger_overlap(f1: Finger, f2: Finger) -> f64 {
         match (f1, f2) {
