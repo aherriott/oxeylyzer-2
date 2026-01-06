@@ -178,9 +178,41 @@ impl From<CachedLayout> for Layout {
                 .iter()
                 .map(|&u| layout.char_mapping.get_c(u))
                 .collect(),
-            fingers: layout.fingers,
+            fingers: layout.fingers.into_boxed_slice(),
             keyboard: layout.keyboard,
             shape: layout.shape,
+            magic: layout
+                .magic
+                .rules
+                .iter()
+                .map(|(c, mk)| {
+                    let c = layout.char_mapping.get_c(*c);
+                    let mut magic_key = MagicKey::new(&c.to_string());
+                    for (leading, output) in mk.iter() {
+                        magic_key.add_rule(
+                            &layout.char_mapping.get_c(*leading).to_string(),
+                            &layout.char_mapping.get_c(*output).to_string(),
+                        );
+                    }
+                    (c, magic_key)
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&CachedLayout> for Layout {
+    fn from(layout: &CachedLayout) -> Self {
+        Self {
+            name: layout.name.clone(),
+            keys: layout
+                .keys
+                .iter()
+                .map(|&u| layout.char_mapping.get_c(u))
+                .collect(),
+            fingers: layout.fingers.clone().into_boxed_slice(),
+            keyboard: layout.keyboard.clone(),
+            shape: layout.shape.clone(),
             magic: layout
                 .magic
                 .rules

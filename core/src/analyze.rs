@@ -1,7 +1,11 @@
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 use itertools::Itertools;
-use libdof::{dofinitions::Finger, magic::MagicKey, prelude::PhysicalKey};
+use libdof::{
+    dofinitions::Finger,
+    magic::MagicKey,
+    prelude::{PhysicalKey, Shape},
+};
 use nanorand::{Rng, WyRand};
 use std::sync::Arc;
 
@@ -63,6 +67,7 @@ impl Analyzer {
             &layout.keyboard,
             &self.data.mapping,
             layout,
+            &self.weights,
         ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();

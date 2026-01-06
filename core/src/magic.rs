@@ -13,7 +13,7 @@ use crate::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeltaBigram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -21,7 +21,7 @@ pub struct DeltaBigram {
     pub new_freq: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeltaSkipgram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -29,7 +29,7 @@ pub struct DeltaSkipgram {
     pub new_freq: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeltaTrigram {
     pub a: CacheKey,
     pub b: CacheKey,
@@ -38,7 +38,7 @@ pub struct DeltaTrigram {
     pub new_freq: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DeltaGram {
     Bigram(DeltaBigram),
     Skipgram(DeltaSkipgram),

@@ -1,6 +1,7 @@
 use fxhash::FxHashMap as HashMap;
 use itertools::Itertools;
 use libdof::prelude::{Finger, PhysicalKey, Shape};
+use std::sync::Arc;
 
 use crate::{
     analyze::Neighbor,
@@ -81,10 +82,12 @@ impl CachedLayout {
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
+                let key_a = self.keys.get(a);
+                let key_b = self.keys.get(b);
                 self.remove_key(a);
                 self.remove_key(b);
-                self.add_key(a);
-                self.add_key(b);
+                self.add_key(a, key_b);
+                self.add_key(b, key_a);
             }
             Neighbor::MagicStealBigram(MagicStealBigram(key, leader, output)) => {
                 self.steal_bigram(key, leader, output);
@@ -94,7 +97,8 @@ impl CachedLayout {
 
     // Add a key at pos. Key should currently be empty
     pub fn add_key(&mut self, pos: usize, u: CacheKey) {
-        debug_assert!(self.keys[pos] == REPLACEMENT_CHAR);
+        debug_assert!(self.keys.get(pos) == REPLACEMENT_CHAR);
+        self.keys.set(pos, u);
         self.sfb.add_key(pos, u);
         self.stretch.add_key(pos, u);
 
@@ -103,7 +107,8 @@ impl CachedLayout {
 
     // Remove a key at pos. Key should currently contain something
     pub fn remove_key(&mut self, pos: usize) {
-        debug_assert!(self.keys[pos] != REPLACEMENT_CHAR);
+        debug_assert!(self.keys.get(pos) != REPLACEMENT_CHAR);
+        self.keys.set(pos, REPLACEMENT_CHAR);
         self.sfb.remove_key(pos);
         self.stretch.remove_key(pos);
 

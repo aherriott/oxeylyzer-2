@@ -64,4 +64,8 @@ impl KeysCache {
             reverse_vec: vec![None; capacity],
         }
     }
+
+    pub fn as_slice(&self) -> &[CacheKey] {
+        &self.vec
+    }
 }

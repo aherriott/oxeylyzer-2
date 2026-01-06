@@ -140,22 +140,22 @@ impl StretchCache {
 
     fn x_finger_overlap(f1: Finger, f2: Finger) -> f64 {
         match (f1, f2) {
-            (LP, LR) => 0.8,
-            (LR, LP) => 0.8,
-            (LR, LM) => 0.4,
-            (LM, LR) => 0.4,
-            (LM, LI) => 0.1,
-            (LI, LM) => 0.1,
-            (LI, LT) => -2.5,
-            (LT, LI) => -2.5,
-            (RT, RI) => -2.5,
-            (RI, RT) => -2.5,
-            (RI, RM) => 0.1,
-            (RM, RI) => 0.1,
-            (RM, RR) => 0.4,
-            (RR, RM) => 0.4,
-            (RR, RP) => 0.8,
-            (RP, RR) => 0.8,
+            (Finger::LP, Finger::LR) => 0.8,
+            (Finger::LR, Finger::LP) => 0.8,
+            (Finger::LR, Finger::LM) => 0.4,
+            (Finger::LM, Finger::LR) => 0.4,
+            (Finger::LM, Finger::LI) => 0.1,
+            (Finger::LI, Finger::LM) => 0.1,
+            (Finger::LI, Finger::LT) => -2.5,
+            (Finger::LT, Finger::LI) => -2.5,
+            (Finger::RT, Finger::RI) => -2.5,
+            (Finger::RI, Finger::RT) => -2.5,
+            (Finger::RI, Finger::RM) => 0.1,
+            (Finger::RM, Finger::RI) => 0.1,
+            (Finger::RM, Finger::RR) => 0.4,
+            (Finger::RR, Finger::RM) => 0.4,
+            (Finger::RR, Finger::RP) => 0.8,
+            (Finger::RP, Finger::RR) => 0.8,
             _ => 0.0,
         }
     }
@@ -202,7 +202,7 @@ impl StretchCache {
         // pressed with middle and index is considered 1, if each key were pressed with the other
         // finger, the distance is negative (because who the fuck is doing that, that's not good).
 
-        let xo = x_finger_overlap(f1, f2);
+        let xo = Self::x_finger_overlap(f1, f2);
 
         // match (f1.hand(), f2.hand()) {
         //     (Hand::Left, Hand::Left) => match ((f1 as CacheKey) > (f2 as CacheKey), (f1 as CacheKey) < (f2 as CacheKey)) {
@@ -228,7 +228,7 @@ impl StretchCache {
     }
 
     fn dist(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> f64 {
-        let (dx, dy) = dx_dy(k1, k2, f1, f2);
+        let (dx, dy) = Self::dx_dy(k1, k2, f1, f2);
 
         dx.hypot(dy)
     }
