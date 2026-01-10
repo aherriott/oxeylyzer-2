@@ -5,189 +5,181 @@
  */
 
 use crate::{
-    analyze::Neighbor,
-    analyzer_data::AnalyzerData,
-    layout::{Layout, MagicStealBigram},
-    types::CacheKey,
-    types::KeysCache,
+    cached_layout::{DeltaBigram, DeltaGram, DeltaSkipgram, DeltaTrigram},
+    types::{CacheKey, CachePos},
 };
-use std::collections::HashMap;
 
-// For now, only "simple" magic rules are supported. One leader key -> one output key.
+/// MagicCache stores frequency tables that get modified by magic key rules.
+/// When a magic rule "steals" a bigram, the frequencies are redistributed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
-    // Freq lists are the mapped frequencies of bg, sg, tg post-magic rule
     bg_freq: Vec<Vec<i64>>,
     sg_freq: Vec<Vec<i64>>,
     tg_freq: Vec<Vec<Vec<i64>>>,
-    rules: HashMap<CacheKey, HashMap<CacheKey, CacheKey>>,
 }
 
 impl MagicCache {
+    pub fn new(num_keys: usize) -> Self {
+        Self {
+            bg_freq: vec![vec![0; num_keys]; num_keys],
+            sg_freq: vec![vec![0; num_keys]; num_keys],
+            tg_freq: vec![vec![vec![0; num_keys]; num_keys]; num_keys],
+        }
+    }
+
+    /// Initialize frequencies from corpus data
+    pub fn init_from_data(&mut self, bigrams: &[Vec<i64>], skipgrams: &[Vec<i64>], trigrams: &[Vec<Vec<i64>>]) {
+        self.bg_freq = bigrams.to_vec();
+        self.sg_freq = skipgrams.to_vec();
+        self.tg_freq = trigrams.to_vec();
+    }
+
+    #[inline]
     pub fn get_bg_freq(&self, a: CacheKey, b: CacheKey) -> i64 {
-        self.bg_freq[a][b]
+        self.bg_freq.get(a).and_then(|row| row.get(b)).copied().unwrap_or(0)
     }
 
+    #[inline]
     pub fn get_sg_freq(&self, a: CacheKey, b: CacheKey) -> i64 {
-        self.sg_freq[a][b]
+        self.sg_freq.get(a).and_then(|row| row.get(b)).copied().unwrap_or(0)
     }
 
+    #[inline]
     pub fn get_tg_freq(&self, a: CacheKey, b: CacheKey, c: CacheKey) -> i64 {
-        self.tg_freq[a][b][c]
+        self.tg_freq
+            .get(a)
+            .and_then(|r1| r1.get(b))
+            .and_then(|r2| r2.get(c))
+            .copied()
+            .unwrap_or(0)
     }
 
-    pub fn new(
-        data: &AnalyzerData,
-        keys: &KeysCache,
-        layout: &Layout,
-        possible_neighbors: &mut Vec<Neighbor>,
-    ) -> Self {
-        /* This data structure leads to wholesale copying of all bg values. Since we're biasing for time > space, this is fine. */
-        let bg_freq = data.bigrams.clone();
-        let sg_freq = data.skipgrams.clone();
-        let tg_freq = data.trigrams.clone();
-        let magic = MagicCache {
-            bg_freq,
-            sg_freq,
-            tg_freq,
-            rules: HashMap::default(),
-        };
-
-        // First, flesh out possible_neighbors with magic rules. steal_bigram will update as needed
-        layout.magic.iter().map(|mag, rules| {
-            rules.iter().map(|lead, out| {
-                for m in 0..keys.magic.len() {
-                    possible_neighbors.push(Neighbor::MagicStealBigram(MagicStealBigram {
-                        key: keys.magic[m], // TODO need the CacheKey, not the layout version
-                        m_old: *out,
-                        leader: *lead,
-                        output: *out,
-                    }));
-                }
-            });
-        });
-
-        // Call steal_bigram for all magic rules to set frequencies & possible neighbors
-        layout.magic.iter().map(|mag, rules| {
-            rules.iter().map(|lead, out| {
-                // Ignore affected_grams. Magic needs to run first to set all the freqs anyways before other metrics can init.
-                magic.steal_bigram(lead, out, mag, lead, possible_neighbors, keys, None);
-            });
-        });
-
-        magic
-    }
-
-    // Main entry point for neighbor updates. Updates the rules for the key under the hood
-    // from, to may be non-magic keys that has already had its bg stolen by another magic key
-    // At least one of from, to must be magic/repeat
+    /// Steal a bigram: when typing leader->output, magic key M intercepts it.
+    /// This redistributes frequencies from (leader, output) to (leader, magic_key).
+    ///
+    /// Populates affected_grams with position-based deltas for cache updates.
+    ///
+    /// The following calculations are based on the idea that magic keys "steal" bigrams from regular keys.
+    /// i.e. when you add the rule A->B to magic key M, the bigram A->B is never typed, because you always
+    /// type A->M instead.
+    ///
+    /// Assuming key order: Z->A->B->C
+    ///
+    /// If B is magic:
+    /// 1. The bigram A->B is fully stolen by A->M
+    /// 2. The bigram B->C is partially stolen by M->C, based on the rate of the A->B->C trigram (which is now typed A->M->C)
+    /// 3. The skipgram Z->B is partially stolen by Z->M, based on the rate of the Z->A->B trigram
+    /// 4. The trigram Z->A->B is fully stolen by Z->A->M
+    /// 5. The trigram A->B->C is fully stolen by A->M->C
     pub fn steal_bigram(
         &mut self,
-        a: CacheKey,
-        b: CacheKey,
-        m: CacheKey,
-        m_old: CacheKey,
-        possible_neighbors: &mut Vec<Neighbor>,
-        keys: &KeysCache,
-        affected_grams: Option<&mut Vec<DeltaGram>>,
+        a: CacheKey,      // leader
+        b: CacheKey,      // output (being stolen)
+        m: CacheKey,      // magic key
+        key_positions: &[Option<CachePos>],
+        num_keys: usize,
+        affected_grams: &mut Vec<DeltaGram>,
     ) {
-        // Helper functions to set frequencies and update affected grams
-        let set_bg = |a: CacheKey, b: CacheKey, new: i64| {
+        // Helper to get position, returns None if key not placed
+        let get_pos = |k: CacheKey| -> Option<CachePos> {
+            key_positions.get(k).copied().flatten()
+        };
+
+        // Helper macros to set frequencies and record deltas
+        let mut set_bg = |a: CacheKey, b: CacheKey, new: i64| {
             let old = self.bg_freq[a][b];
             self.bg_freq[a][b] = new;
-            if let Some(grams) = affected_grams {
-                grams.push(DeltaGram::Bigram(DeltaBigram {
-                    a,
-                    b,
+            if let (Some(p_a), Some(p_b)) = (get_pos(a), get_pos(b)) {
+                affected_grams.push(DeltaGram::Bigram(DeltaBigram {
+                    p_a,
+                    p_b,
                     old_freq: old,
                     new_freq: new,
                 }));
             }
         };
 
-        let set_sg = |a: CacheKey, b: CacheKey, new: i64| {
+        let mut set_sg = |a: CacheKey, b: CacheKey, new: i64| {
             let old = self.sg_freq[a][b];
             self.sg_freq[a][b] = new;
-            if let Some(grams) = affected_grams {
-                grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    a,
-                    b,
+            if let (Some(p_a), Some(p_b)) = (get_pos(a), get_pos(b)) {
+                affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
+                    p_a,
+                    p_b,
                     old_freq: old,
                     new_freq: new,
                 }));
             }
         };
 
-        let set_tg = |a: CacheKey, b: CacheKey, c: CacheKey, new: i64| {
+        let mut set_tg = |a: CacheKey, b: CacheKey, c: CacheKey, new: i64| {
             let old = self.tg_freq[a][b][c];
             self.tg_freq[a][b][c] = new;
-            if let Some(grams) = affected_grams {
-                grams.push(DeltaGram::Trigram(DeltaTrigram {
-                    a,
-                    b,
-                    c,
+            if let (Some(p_a), Some(p_b), Some(p_c)) = (get_pos(a), get_pos(b), get_pos(c)) {
+                affected_grams.push(DeltaGram::Trigram(DeltaTrigram {
+                    p_a,
+                    p_b,
+                    p_c,
                     old_freq: old,
                     new_freq: new,
                 }));
             }
         };
 
-        /*
-         * The following calculations are based on the idea that magic keys "steal" bigrams from regular keys.
-         * i.e. when you add the rule A->B to magic key M, the bigram A->B is never typed, because you always
-         * type A->M instead.
-         *
-         * Assuming key order: Z->A->B->C->D
-         *
-         * If B is magic:
-         * 1. The bigram A->B is fully stolen by A->M
-         * 2. The bigram B->C is partially stolen by M->C, based on the rate of the A->B->C trigram (which is now typed A->M->C)
-         * 3. The skipgram Z->B is partially stolen by Z->M, unless Z->A is magic (TODO, does this wash out in the math?) based on the rate of the Z->A->B trigram
-         * 4. The trigram Z->A->B is fully stolen by Z->A->M, unless Z->A is magic (TODO, does this wash out in the math?) (This is not fully accurate, since we can't know if Z is magic w/o quadgrams)
-         * 5. The trigram  A->B->C is fully stolen by A->M->C (This is not fully accurate, since we can't know if A is magic w/o quadgrams)
-         *  */
-
-        // The exact bigram is fully stolen:
+        // 1. The exact bigram A->B is fully stolen by A->M
         set_bg(a, m, self.bg_freq[a][m] + self.bg_freq[a][b]);
-        set_bg(a, b, 0i64);
+        set_bg(a, b, 0);
 
-        for c in keys {
-            debug_assert!(self.bg_freq[b][c] - self.tg_freq[a][b][c] >= 0);
-            set_bg(m, c, self.bg_freq[m][c] + self.tg_freq[a][b][c]);
-            set_bg(b, c, self.bg_freq[b][c] - self.tg_freq[a][b][c]);
+        // 2. For each key c: B->C is partially stolen by M->C based on trigram A->B->C
+        for c in 0..num_keys {
+            let tg = self.tg_freq[a][b][c];
+            if tg == 0 {
+                continue;
+            }
+            debug_assert!(self.bg_freq[b][c] >= tg);
+            set_bg(m, c, self.bg_freq[m][c] + tg);
+            set_bg(b, c, self.bg_freq[b][c] - tg);
         }
 
-        for z in keys {
-            debug_assert!(self.sg_freq[z][b] - self.tg_freq[z][a][b] >= 0);
-            set_sg(z, m, self.sg_freq[z][m] + self.tg_freq[z][a][b]);
-            set_sg(z, b, self.sg_freq[z][b] - self.tg_freq[z][a][b]);
+        // 3. For each key z: skipgram Z->B is partially stolen by Z->M based on trigram Z->A->B
+        for z in 0..num_keys {
+            let tg = self.tg_freq[z][a][b];
+            if tg == 0 {
+                continue;
+            }
+            debug_assert!(self.sg_freq[z][b] >= tg);
+            set_sg(z, m, self.sg_freq[z][m] + tg);
+            set_sg(z, b, self.sg_freq[z][b] - tg);
         }
 
-        for z in keys {
-            set_tg(z, a, m, self.tg_freq[z][a][m] + self.tg_freq[z][a][b]);
-            set_tg(z, a, b, 0i64);
+        // 4. For each key z: trigram Z->A->B is fully stolen by Z->A->M
+        for z in 0..num_keys {
+            let tg = self.tg_freq[z][a][b];
+            if tg == 0 {
+                continue;
+            }
+            set_tg(z, a, m, self.tg_freq[z][a][m] + tg);
+            set_tg(z, a, b, 0);
         }
 
-        for c in keys {
-            set_tg(a, m, c, self.tg_freq[a][m][c] + self.tg_freq[a][b][c]);
-            set_tg(a, b, c, 0i64);
-        }
-
-        // Update possible neighbors with the revert of the steal
-        for m in 0..keys.magic.len() {
-            // TODO update with m_old being the original magic key
-            possible_neighbors[(a * keys.len() + b) * keys.magic.len() + m] =
-                Neighbor::MagicStealBigram(MagicStealBigram {
-                    key: keys.magic[m],
-                    m_old: m,
-                    leader: a,
-                    output: b,
-                });
+        // 5. For each key c: trigram A->B->C is fully stolen by A->M->C
+        for c in 0..num_keys {
+            let tg = self.tg_freq[a][b][c];
+            if tg == 0 {
+                continue;
+            }
+            set_tg(a, m, c, self.tg_freq[a][m][c] + tg);
+            set_tg(a, b, c, 0);
         }
     }
 }
 
-mod test {}
+
+#[cfg(test)]
+mod test {
+    // TODO: fix these tests after refactoring is complete
+}
+
 #[test]
 fn test_magic_bigram_frequency_basic() {
     // Test basic magic key frequency calculation

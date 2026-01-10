@@ -99,21 +99,18 @@ impl CachedLayout {
             fingers: fingers.to_vec(),
         };
 
-        layout.keys.iter().enumerate().map(|i, u| {
-            cache.add_key(i, u);
-        });
-
-        layout.magic.iter().for_each(|key, rules| {
-            rules.iter().for_each(|leader, output| {
-                cache.steal_bigram(key, leader, output);
-            });
-        });
-
         // Initialize keys from layout
         for (pos, &key_char) in layout.keys.iter().enumerate() {
             let key = key_char as CacheKey; // TODO: proper char mapping
             cache.add_key(pos, key);
         }
+
+        // TODO: Initialize magic rules from layout.magic
+        // for (magic_char, magic_key) in layout.magic.iter() {
+        //     for rule in magic_key.rules() {
+        //         cache.steal_bigram(magic_char as CacheKey, rule.leader as CacheKey, rule.output as CacheKey);
+        //     }
+        // }
 
         cache
     }
@@ -198,7 +195,6 @@ impl CachedLayout {
                 }
                 DeltaGram::Skipgram(sg) => {
                     self.sfb.update_skipgram(&self.dist, sg);
-                    self.stretch.update_skipgram(sg);
                 }
                 DeltaGram::Trigram(_) => {}
             }
@@ -268,9 +264,35 @@ impl CachedLayout {
         }
     }
 
-    /// Steal a bigram for magic key functionality
-    pub fn steal_bigram(&mut self, _key: CacheKey, _leader: CacheKey, _output: CacheKey) {
-        // TODO: implement magic steal bigram
+    /// Steal a bigram for magic key functionality.
+    /// When typing leader->output, magic key intercepts and produces output.
+    pub fn steal_bigram(&mut self, magic_key: CacheKey, leader: CacheKey, output: CacheKey) {
+        self.affected_grams.clear();
+        self.magic.steal_bigram(
+            leader,
+            output,
+            magic_key,
+            &self.key_positions,
+            self.keys.len(),
+            &mut self.affected_grams,
+        );
+
+        // Update caches based on affected grams
+        for gram in &self.affected_grams {
+            match gram {
+                DeltaGram::Bigram(bg) => {
+                    self.sfb.update_bigram(&self.dist, bg);
+                    self.stretch.update_bigram(bg);
+                }
+                DeltaGram::Skipgram(sg) => {
+                    self.sfb.update_skipgram(&self.dist, sg);
+                    self.stretch.update_skipgram(sg);
+                }
+                DeltaGram::Trigram(_) => {
+                    // Trigrams don't affect SFB/stretch scores directly
+                }
+            }
+        }
     }
 
     pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
