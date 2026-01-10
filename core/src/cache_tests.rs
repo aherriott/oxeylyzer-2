@@ -152,7 +152,7 @@ mod tests {
 
         // SFB percentage should be between 0 and 100%
         assert!(stats.sfbs >= 0.0, "SFB percentage should be non-negative");
-        assert!(stats.sfbs <= 1.0, "SFB percentage should be <= 100%");
+        assert!(stats.sfbs <= 1.0, "SFB percentage should be <= 100%, got {}", stats.sfbs);
     }
 
     #[test]

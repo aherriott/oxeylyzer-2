@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{char_mapping::CharMapping, data::Data, types::CacheKey};
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -13,7 +11,7 @@ pub struct AnalyzerData {
     pub bigram_total: f64,
     pub skipgram_total: f64,
     pub trigram_total: f64,
-    pub mapping: Arc<CharMapping>,
+    mapping: CharMapping,
 }
 
 impl AnalyzerData {
@@ -70,8 +68,6 @@ impl AnalyzerData {
             trigrams[u1][u2][u3] = (f * trigram_total) as i64;
         }
 
-        let mapping = Arc::new(mapping);
-
         Self {
             name: data.name,
             chars: chars,
@@ -84,6 +80,16 @@ impl AnalyzerData {
             trigram_total,
             mapping,
         }
+    }
+
+    /// Add a character to the mapping if not already present
+    pub fn push_char(&mut self, c: char) {
+        self.mapping.push(c);
+    }
+
+    /// Access the char mapping
+    pub fn char_mapping(&self) -> &CharMapping {
+        &self.mapping
     }
 
     pub fn len(&self) -> usize {

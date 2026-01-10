@@ -57,7 +57,7 @@ serde_conv!(
 );
 
 #[serde_as]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(into = "SaveData")]
 pub struct Data {
     pub name: String,

@@ -6,7 +6,6 @@ use crate::{
     cached_layout::CachedLayout,
     data::Data,
     layout::*,
-    analyzer_data::AnalyzerData,
     stats::Stats,
     weights::Weights,
 };
@@ -37,7 +36,7 @@ impl Neighbor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analyzer {
-    data: AnalyzerData,
+    data: Data,
     weights: Weights,
     analyze_bigrams: bool,
     analyze_stretches: bool,
@@ -48,7 +47,6 @@ pub struct Analyzer {
 
 impl Analyzer {
     pub fn new(data: Data, weights: Weights) -> Self {
-        let data = AnalyzerData::new(data);
         let analyze_bigrams = weights.has_bigram_weights();
         let analyze_stretches = weights.has_stretch_weights();
         let analyze_trigrams = weights.has_trigram_weights();
@@ -66,16 +64,7 @@ impl Analyzer {
 
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
-        let char_mapping = (*self.data.mapping).clone();
-        let num_keys = self.data.len();
-        self.current_cache = Some(CachedLayout::new(
-            layout,
-            char_mapping,
-            num_keys,
-            &self.data.bigrams,
-            &self.data.skipgrams,
-            &self.data.trigrams,
-        ));
+        self.current_cache = Some(CachedLayout::new(layout, self.data.clone()));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
     }
@@ -201,13 +190,7 @@ impl Analyzer {
         let mut stats = Stats::default();
         stats.score = cache.score(&self.weights);
 
-        cache.stats(
-            &mut stats,
-            self.data.char_total,
-            self.data.bigram_total,
-            self.data.skipgram_total,
-            &self.data.chars,
-        );
+        cache.stats(&mut stats);
 
         stats
     }
@@ -368,13 +351,18 @@ impl Analyzer {
     // }
 
     pub fn similarity(&self, layout1: &Layout, layout2: &Layout) -> i64 {
+        let cache = self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+        let data = cache.data();
+
         // TODO: Magic
         let _key_sim = layout1
             .keys
             .iter()
             .zip(&layout2.keys)
             .filter(|&(c1, c2)| (c1 == c2))
-            .map(|(c1, _)| self.data.get_char(*c1))
+            .map(|(c1, _)| data.get_char(*c1))
             .sum::<i64>();
 
         let per_column = Finger::FINGERS
@@ -392,7 +380,7 @@ impl Analyzer {
                     .iter()
                     .zip(&layout1.fingers)
                     .filter(|&(c2, f2)| (f == *f2 && col1.contains(c2)))
-                    .map(|(c2, _)| self.data.get_char(*c2))
+                    .map(|(c2, _)| data.get_char(*c2))
                     .sum::<i64>()
             })
             .sum::<i64>();

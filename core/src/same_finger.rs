@@ -80,16 +80,22 @@ impl SFCache {
         let total_sfb: i64 = self.sfb_freq_per_finger.iter().sum();
         let total_sfs: i64 = self.sfs_freq_per_finger.iter().sum();
 
-        stats.sfbs = total_sfb as f64 / bigram_total;
-        stats.sfs = total_sfs as f64 / skipgram_total;
+        // Note: bigram_total and skipgram_total are already divided by 100 in AnalyzerData,
+        // but the stored frequencies are raw counts (percentage * total / 100).
+        // To get the correct percentage, we need to multiply the totals by 100.
+        let bigram_total_raw = bigram_total * 100.0;
+        let skipgram_total_raw = skipgram_total * 100.0;
+
+        stats.sfbs = total_sfb as f64 / bigram_total_raw;
+        stats.sfs = total_sfs as f64 / skipgram_total_raw;
 
         // Per-finger SFB frequencies
         for (i, &freq) in self.sfb_freq_per_finger.iter().enumerate() {
-            stats.finger_sfbs[i] = freq as f64 / bigram_total;
+            stats.finger_sfbs[i] = freq as f64 / bigram_total_raw;
         }
 
         // Per-finger weighted distance (score / 100 to convert back from centiunits)
-        let total_bg_sg = bigram_total + skipgram_total;
+        let total_bg_sg = bigram_total_raw + skipgram_total_raw;
         for (i, (&sfb_score, &sfs_score)) in self.sfb_score_per_finger.iter()
             .zip(self.sfs_score_per_finger.iter())
             .enumerate()

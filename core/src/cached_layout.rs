@@ -4,7 +4,9 @@ use fxhash::FxHashMap as HashMap;
 
 use crate::{
     analyze::Neighbor,
+    analyzer_data::AnalyzerData,
     char_mapping::CharMapping,
+    data::Data,
     dist::DistCache,
     layout::{Layout, MagicStealBigram, PosPair},
     magic::MagicCache,
@@ -55,9 +57,11 @@ pub enum DeltaGram {
 pub struct CachedLayout {
     // Layout identity
     name: String,
-    char_mapping: CharMapping,
     keyboard: Box<[PhysicalKey]>,
     shape: Shape,
+
+    /// Corpus data including char_mapping, character frequencies, bigrams, skipgrams, trigrams
+    data: AnalyzerData,
 
     /// Key at each position (EMPTY_KEY if unassigned)
     keys: Vec<CacheKey>,
@@ -90,9 +94,9 @@ impl Default for CachedLayout {
     fn default() -> Self {
         Self {
             name: String::new(),
-            char_mapping: CharMapping::default(),
             keyboard: Box::new([]),
             shape: Shape::default(),
+            data: AnalyzerData::default(),
             keys: Vec::new(),
             key_positions: Vec::new(),
             num_positions: 0,
@@ -108,18 +112,19 @@ impl Default for CachedLayout {
 }
 
 impl CachedLayout {
-    /// Create a new CachedLayout from a Layout and CharMapping
-    pub fn new(
-        layout: &Layout,
-        char_mapping: CharMapping,
-        num_keys: usize,
-        bigrams: &[Vec<i64>],
-        skipgrams: &[Vec<i64>],
-        trigrams: &[Vec<Vec<i64>>],
-    ) -> Self {
+    /// Create a new CachedLayout from a Layout and Data
+    pub fn new(layout: &Layout, data: Data) -> Self {
+        let mut analyzer_data = AnalyzerData::new(data);
+
+        // Ensure all layout keys are in the char_mapping for proper roundtrip
+        for &key_char in layout.keys.iter() {
+            analyzer_data.push_char(key_char);
+        }
+
         let len = layout.keyboard.len();
         let keyboard = &layout.keyboard;
         let fingers = &layout.fingers;
+        let num_keys = analyzer_data.len();
 
         let keys = vec![EMPTY_KEY; len];
         let key_positions = vec![None; num_keys];
@@ -130,18 +135,18 @@ impl CachedLayout {
         let sfb = SFCache::new(fingers, keyboard);
         let stretch = StretchCache::new(keyboard, fingers);
         let mut magic = MagicCache::new(num_keys);
-        magic.init_from_data(bigrams, skipgrams, trigrams);
+        magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
         // Build magic rules from layout.magic
         let mut magic_rules = Vec::new();
         for (&magic_char, magic_key_def) in layout.magic.iter() {
-            let magic_key = char_mapping.get_u(magic_char);
+            let magic_key = analyzer_data.char_mapping().get_u(magic_char);
             // rules() returns BTreeMap<String, String> where key=leading, value=output
             // Group by leader to build MagicRule entries
             let mut leader_outputs: HashMap<CacheKey, Vec<CacheKey>> = HashMap::default();
             for (leading_str, output_str) in magic_key_def.rules().iter() {
-                let leader = char_mapping.get_u(leading_str.chars().next().unwrap_or(' '));
-                let output = char_mapping.get_u(output_str.chars().next().unwrap_or(' '));
+                let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
+                let output = analyzer_data.char_mapping().get_u(output_str.chars().next().unwrap_or(' '));
                 leader_outputs.entry(leader).or_default().push(output);
             }
             for (leader, outputs) in leader_outputs {
@@ -158,9 +163,9 @@ impl CachedLayout {
 
         let mut cache = CachedLayout {
             name: layout.name.clone(),
-            char_mapping,
             keyboard: layout.keyboard.clone(),
             shape: layout.shape.clone(),
+            data: analyzer_data,
             keys,
             key_positions,
             num_positions: len,
@@ -175,7 +180,7 @@ impl CachedLayout {
 
         // Initialize keys from layout
         for (pos, &key_char) in layout.keys.iter().enumerate() {
-            let key = cache.char_mapping.get_u(key_char);
+            let key = cache.data.char_mapping().get_u(key_char);
             cache.add_key(pos, key);
         }
 
@@ -195,19 +200,29 @@ impl CachedLayout {
         cache
     }
 
+    /// Access the analyzer data (char frequencies, bigrams, etc.)
+    pub fn data(&self) -> &AnalyzerData {
+        &self.data
+    }
+
+    /// Access the char mapping
+    pub fn char_mapping(&self) -> &CharMapping {
+        self.data.char_mapping()
+    }
+
     /// Convert back to a Layout
     pub fn to_layout(&self) -> Layout {
         // Convert keys back to chars
         let keys: Box<[char]> = self.keys.iter()
-            .map(|&k| if k == EMPTY_KEY { ' ' } else { self.char_mapping.get_c(k) })
+            .map(|&k| if k == EMPTY_KEY { ' ' } else { self.data.char_mapping().get_c(k) })
             .collect();
 
         // Reconstruct magic HashMap from magic_rules
         let mut magic: HashMap<char, MagicKey> = HashMap::default();
         for rule in &self.magic_rules {
-            let magic_char = self.char_mapping.get_c(rule.magic_key);
-            let leader_char = self.char_mapping.get_c(rule.leader);
-            let output_char = self.char_mapping.get_c(rule.current_output);
+            let magic_char = self.data.char_mapping().get_c(rule.magic_key);
+            let leader_char = self.data.char_mapping().get_c(rule.leader);
+            let output_char = self.data.char_mapping().get_c(rule.current_output);
 
             let magic_key = magic.entry(magic_char).or_insert_with(|| {
                 MagicKey::new(&magic_char.to_string())
@@ -241,8 +256,13 @@ impl CachedLayout {
         self.sfb.score(weights) + self.stretch.score(weights)
     }
 
-    /// Populate stats from the caches. Requires totals for normalization.
-    pub fn stats(&self, stats: &mut Stats, char_total: f64, bigram_total: f64, skipgram_total: f64, chars: &[i64]) {
+    /// Populate stats from the caches. Uses internal data for normalization.
+    pub fn stats(&self, stats: &mut Stats) {
+        let char_total = self.data.char_total;
+        let bigram_total = self.data.bigram_total;
+        let skipgram_total = self.data.skipgram_total;
+        let chars = &self.data.chars;
+
         // Finger use: sum character frequencies per finger
         for (pos, &key) in self.keys.iter().enumerate() {
             if key != EMPTY_KEY && (key as usize) < chars.len() {
