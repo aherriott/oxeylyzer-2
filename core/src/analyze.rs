@@ -26,8 +26,10 @@ impl Neighbor {
         match self {
             // KeySwap is its own inverse
             Neighbor::KeySwap(pair) => Neighbor::KeySwap(*pair),
-            // TODO: MagicStealBigram revert would need the old output - for now just return self
-            Neighbor::MagicStealBigram(msb) => Neighbor::MagicStealBigram(*msb),
+            // MagicStealBigram revert: swap new_output and old_output
+            Neighbor::MagicStealBigram(MagicStealBigram(m, leader, new_out, old_out)) => {
+                Neighbor::MagicStealBigram(MagicStealBigram(*m, *leader, *old_out, *new_out))
+            }
         }
     }
 }
@@ -63,9 +65,12 @@ impl Analyzer {
 
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
+        let char_mapping = (*self.data.mapping).clone();
+        let num_keys = self.data.len();
         self.current_cache = Some(CachedLayout::new(
-            &layout.keyboard,
             layout,
+            char_mapping,
+            num_keys,
         ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
@@ -141,41 +146,41 @@ impl Analyzer {
     pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         let working = self
             .working_cache
-            .as_ref()
+            .as_mut()
             .expect("Analyzer has no Layout set");
         let current = self
             .current_cache
             .as_ref()
             .expect("Analyzer has no Layout set");
         debug_assert_eq!(
-            working, current,
+            working as &CachedLayout, current,
             "Working cache out of sync with current cache"
         );
 
         working.apply_neighbor(neighbor);
-        let score = working.score();
+        let score = working.score(&self.weights);
         working.copy_from(current, neighbor);
         score
     }
 
-    // Calculates the score of a neighbor without updating the cache
+    // Applies a neighbor and updates the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        let working = self
-            .working_cache
-            .as_ref()
-            .expect("Analyzer has no Layout set");
         let current = self
             .current_cache
-            .as_ref()
+            .as_mut()
             .expect("Analyzer has no Layout set");
-        debug_assert_eq!(
-            working, current,
-            "Working cache out of sync with current cache"
-        );
 
         current.apply_neighbor(neighbor);
+        let score = current.score(&self.weights);
+
+        // Sync working cache
+        let working = self
+            .working_cache
+            .as_mut()
+            .expect("Analyzer has no Layout set");
         working.copy_from(current, neighbor);
-        current.score()
+
+        score
     }
 
     /*
@@ -183,6 +188,7 @@ impl Analyzer {
      *              Stats
      **************************************
      */
+
 
     // pub fn sfbs(&self) -> i64 {
     //     let mapping_len = self.data.mapping.len();
@@ -374,22 +380,11 @@ impl Analyzer {
 
 impl std::fmt::Display for Analyzer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.keys.iter().map(|&u| self.char_mapping.get_c(u));
-
-        for l in self.shape.inner().iter() {
-            let mut i = 0;
-            for c in iter.by_ref() {
-                write!(f, "{c} ")?;
-                i += 1;
-
-                if *l == i {
-                    break;
-                }
-            }
-            writeln!(f)?;
+        if let Some(cache) = &self.current_cache {
+            write!(f, "{}", cache.to_layout())
+        } else {
+            write!(f, "<no layout>")
         }
-
-        Ok(())
     }
 }
 

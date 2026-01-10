@@ -207,7 +207,7 @@ impl CachedLayout {
             let magic_key = magic.entry(magic_char).or_insert_with(|| {
                 MagicKey::new(&magic_char.to_string())
             });
-            magic_key.steal_bigram(&leader_char.to_string(), &output_char.to_string());
+            magic_key.add_rule(&leader_char.to_string(), &output_char.to_string());
         }
 
         Layout {
@@ -251,6 +251,46 @@ impl CachedLayout {
                 self.steal_bigram(magic_key, leader, new_output);
             }
         }
+    }
+
+    /// Copy only the delta resulting from a neighbor transformation from another cache.
+    /// Assumes `other` has had `neighbor` applied relative to `self`.
+    /// This is more efficient than cloning the entire cache.
+    pub fn copy_from(&mut self, other: &CachedLayout, neighbor: Neighbor) {
+        match neighbor {
+            Neighbor::KeySwap(PosPair(a, b)) => {
+                // Copy the swapped keys
+                let key_a = other.keys[a];
+                let key_b = other.keys[b];
+                self.keys[a] = key_a;
+                self.keys[b] = key_b;
+
+                // Copy key_positions for the affected keys
+                if key_a < self.key_positions.len() {
+                    self.key_positions[key_a] = other.key_positions[key_a];
+                }
+                if key_b < self.key_positions.len() {
+                    self.key_positions[key_b] = other.key_positions[key_b];
+                }
+            }
+            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, _new_output, _old_output)) => {
+                // Copy the magic rule's current_output
+                for (self_rule, other_rule) in self.magic_rules.iter_mut().zip(other.magic_rules.iter()) {
+                    if self_rule.magic_key == magic_key && self_rule.leader == leader {
+                        self_rule.current_output = other_rule.current_output;
+                        break;
+                    }
+                }
+
+                // Copy only affected magic frequency entries
+                let keys = &other.keys;
+                self.magic.copy_from(&other.magic, other.affected_grams(), |pos| keys[pos]);
+            }
+        }
+
+        // Copy scoring caches - these use fixed-size arrays, no allocation
+        self.sfb.copy_from(&other.sfb);
+        self.stretch.copy_from(&other.stretch);
     }
 
     /// Add a key at pos. Position should currently be empty.

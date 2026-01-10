@@ -84,4 +84,14 @@ impl StretchCache {
             self.total += delta;
         }
     }
+
+    pub fn update_skipgram(&mut self, _sg: &DeltaSkipgram) {
+        // Stretches don't track skipgrams
+    }
+
+    /// Copy scoring data from another StretchCache. No allocations.
+    #[inline]
+    pub fn copy_from(&mut self, other: &StretchCache) {
+        self.total = other.total;
+    }
 }

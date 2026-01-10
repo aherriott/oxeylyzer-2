@@ -80,55 +80,62 @@ impl MagicCache {
         num_keys: usize,
         affected_grams: &mut Vec<DeltaGram>,
     ) {
-        // Helper to get position, returns None if key not placed
+        // Helper to get position
         let get_pos = |k: CacheKey| -> Option<CachePos> {
             key_positions.get(k).copied().flatten()
         };
 
-        // Helper macros to set frequencies and record deltas
-        let mut set_bg = |a: CacheKey, b: CacheKey, new: i64| {
-            let old = self.bg_freq[a][b];
-            self.bg_freq[a][b] = new;
-            if let (Some(p_a), Some(p_b)) = (get_pos(a), get_pos(b)) {
-                affected_grams.push(DeltaGram::Bigram(DeltaBigram {
-                    p_a,
-                    p_b,
-                    old_freq: old,
-                    new_freq: new,
-                }));
-            }
-        };
+        // Inline helper for setting bigram freq and recording delta
+        macro_rules! set_bg {
+            ($ka:expr, $kb:expr, $new:expr) => {{
+                let old = self.bg_freq[$ka][$kb];
+                self.bg_freq[$ka][$kb] = $new;
+                if let (Some(p_a), Some(p_b)) = (get_pos($ka), get_pos($kb)) {
+                    affected_grams.push(DeltaGram::Bigram(DeltaBigram {
+                        p_a,
+                        p_b,
+                        old_freq: old,
+                        new_freq: $new,
+                    }));
+                }
+            }};
+        }
 
-        let mut set_sg = |a: CacheKey, b: CacheKey, new: i64| {
-            let old = self.sg_freq[a][b];
-            self.sg_freq[a][b] = new;
-            if let (Some(p_a), Some(p_b)) = (get_pos(a), get_pos(b)) {
-                affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    p_a,
-                    p_b,
-                    old_freq: old,
-                    new_freq: new,
-                }));
-            }
-        };
+        macro_rules! set_sg {
+            ($ka:expr, $kb:expr, $new:expr) => {{
+                let old = self.sg_freq[$ka][$kb];
+                self.sg_freq[$ka][$kb] = $new;
+                if let (Some(p_a), Some(p_b)) = (get_pos($ka), get_pos($kb)) {
+                    affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
+                        p_a,
+                        p_b,
+                        old_freq: old,
+                        new_freq: $new,
+                    }));
+                }
+            }};
+        }
 
-        let mut set_tg = |a: CacheKey, b: CacheKey, c: CacheKey, new: i64| {
-            let old = self.tg_freq[a][b][c];
-            self.tg_freq[a][b][c] = new;
-            if let (Some(p_a), Some(p_b), Some(p_c)) = (get_pos(a), get_pos(b), get_pos(c)) {
-                affected_grams.push(DeltaGram::Trigram(DeltaTrigram {
-                    p_a,
-                    p_b,
-                    p_c,
-                    old_freq: old,
-                    new_freq: new,
-                }));
-            }
-        };
+        macro_rules! set_tg {
+            ($ka:expr, $kb:expr, $kc:expr, $new:expr) => {{
+                let old = self.tg_freq[$ka][$kb][$kc];
+                self.tg_freq[$ka][$kb][$kc] = $new;
+                if let (Some(p_a), Some(p_b), Some(p_c)) = (get_pos($ka), get_pos($kb), get_pos($kc)) {
+                    affected_grams.push(DeltaGram::Trigram(DeltaTrigram {
+                        p_a,
+                        p_b,
+                        p_c,
+                        old_freq: old,
+                        new_freq: $new,
+                    }));
+                }
+            }};
+        }
 
         // 1. The exact bigram A->B is fully stolen by A->M
-        set_bg(a, m, self.bg_freq[a][m] + self.bg_freq[a][b]);
-        set_bg(a, b, 0);
+        let new_am = self.bg_freq[a][m] + self.bg_freq[a][b];
+        set_bg!(a, m, new_am);
+        set_bg!(a, b, 0);
 
         // 2. For each key c: B->C is partially stolen by M->C based on trigram A->B->C
         for c in 0..num_keys {
@@ -137,8 +144,10 @@ impl MagicCache {
                 continue;
             }
             debug_assert!(self.bg_freq[b][c] >= tg);
-            set_bg(m, c, self.bg_freq[m][c] + tg);
-            set_bg(b, c, self.bg_freq[b][c] - tg);
+            let new_mc = self.bg_freq[m][c] + tg;
+            let new_bc = self.bg_freq[b][c] - tg;
+            set_bg!(m, c, new_mc);
+            set_bg!(b, c, new_bc);
         }
 
         // 3. For each key z: skipgram Z->B is partially stolen by Z->M based on trigram Z->A->B
@@ -148,8 +157,10 @@ impl MagicCache {
                 continue;
             }
             debug_assert!(self.sg_freq[z][b] >= tg);
-            set_sg(z, m, self.sg_freq[z][m] + tg);
-            set_sg(z, b, self.sg_freq[z][b] - tg);
+            let new_zm = self.sg_freq[z][m] + tg;
+            let new_zb = self.sg_freq[z][b] - tg;
+            set_sg!(z, m, new_zm);
+            set_sg!(z, b, new_zb);
         }
 
         // 4. For each key z: trigram Z->A->B is fully stolen by Z->A->M
@@ -158,8 +169,9 @@ impl MagicCache {
             if tg == 0 {
                 continue;
             }
-            set_tg(z, a, m, self.tg_freq[z][a][m] + tg);
-            set_tg(z, a, b, 0);
+            let new_zam = self.tg_freq[z][a][m] + tg;
+            set_tg!(z, a, m, new_zam);
+            set_tg!(z, a, b, 0);
         }
 
         // 5. For each key c: trigram A->B->C is fully stolen by A->M->C
@@ -168,8 +180,34 @@ impl MagicCache {
             if tg == 0 {
                 continue;
             }
-            set_tg(a, m, c, self.tg_freq[a][m][c] + tg);
-            set_tg(a, b, c, 0);
+            let new_amc = self.tg_freq[a][m][c] + tg;
+            set_tg!(a, m, c, new_amc);
+            set_tg!(a, b, c, 0);
+        }
+    }
+
+    /// Copy only the frequency entries that were affected by a steal operation.
+    /// `affected_grams` should contain the deltas from the steal that was applied to `other`.
+    pub fn copy_from(&mut self, other: &MagicCache, affected_grams: &[DeltaGram], key_at_pos: impl Fn(CachePos) -> CacheKey) {
+        for gram in affected_grams {
+            match gram {
+                DeltaGram::Bigram(bg) => {
+                    let a = key_at_pos(bg.p_a);
+                    let b = key_at_pos(bg.p_b);
+                    self.bg_freq[a][b] = other.bg_freq[a][b];
+                }
+                DeltaGram::Skipgram(sg) => {
+                    let a = key_at_pos(sg.p_a);
+                    let b = key_at_pos(sg.p_b);
+                    self.sg_freq[a][b] = other.sg_freq[a][b];
+                }
+                DeltaGram::Trigram(tg) => {
+                    let a = key_at_pos(tg.p_a);
+                    let b = key_at_pos(tg.p_b);
+                    let c = key_at_pos(tg.p_c);
+                    self.tg_freq[a][b][c] = other.tg_freq[a][b][c];
+                }
+            }
         }
     }
 }

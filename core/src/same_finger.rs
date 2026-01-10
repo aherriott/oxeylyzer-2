@@ -106,4 +106,11 @@ impl SFCache {
             self.sfs_per_finger[finger] += delta;
         }
     }
+
+    /// Copy scoring data from another SFCache. No allocations.
+    #[inline]
+    pub fn copy_from(&mut self, other: &SFCache) {
+        *self.sfb_per_finger = *other.sfb_per_finger;
+        *self.sfs_per_finger = *other.sfs_per_finger;
+    }
 }
