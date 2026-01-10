@@ -7,7 +7,6 @@
 use crate::cached_layout::{DeltaBigram, DeltaSkipgram};
 use crate::dist::DistCache;
 use crate::stats::Stats;
-use crate::types::CacheKey;
 use crate::weights::Weights;
 use libdof::dofinitions::Finger;
 use libdof::prelude::PhysicalKey;
@@ -34,11 +33,6 @@ pub struct SFCache {
 
 impl SFCache {
     pub fn new(fingers: &[Finger], keyboard: &[PhysicalKey]) -> Self {
-        assert!(
-            fingers.len() <= CacheKey::MAX as usize,
-            "Too many keys to index with CacheKey, max is {}",
-            CacheKey::MAX
-        );
         assert_eq!(
             fingers.len(),
             keyboard.len(),

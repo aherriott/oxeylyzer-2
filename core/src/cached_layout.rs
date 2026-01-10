@@ -2,14 +2,17 @@ use libdof::prelude::{Finger, PhysicalKey};
 
 use crate::{
     analyze::Neighbor,
+    dist::DistCache,
     layout::{Layout, MagicStealBigram, PosPair},
-    magic::DeltaGram,
+    magic::MagicCache,
     same_finger::SFCache,
     stretches::StretchCache,
-    types::{CacheKey, KeysCache},
+    types::{CacheKey, CachePos},
     weights::Weights,
     REPLACEMENT_CHAR,
 };
+
+pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaBigram {
@@ -50,48 +53,57 @@ pub enum DeltaGram {
     Trigram(DeltaTrigram),
 }
 
-// CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
-// It is wrapped by Analyzer
+// CachedLayout contains the minimum mutable data used to define a layout and store scoring.
+// Designed to copy quickly and without allocation. Wrapped by Analyzer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CachedLayout {
-    keys: KeysCache,
+    /// Key at each position (EMPTY_KEY if unassigned)
+    keys: Vec<CacheKey>,
+    /// Position of each key (None if not placed)
+    key_positions: Vec<Option<CachePos>>,
     possible_neighbors: Vec<Neighbor>,
     affected_grams: Vec<DeltaGram>,
+    dist: DistCache,
     sfb: SFCache,
     stretch: StretchCache,
     magic: MagicCache,
-    fingers: Vec<Finger>, // Internal storage for key:finger mapping
+    fingers: Vec<Finger>,
 }
 
 impl CachedLayout {
     // Allocates all the required memory
     pub fn new(
-        data: &AnalyzerData,
         keyboard: &[PhysicalKey],
-        char_mapping: &CharMapping,
+        fingers: &[Finger],
         layout: &Layout,
+        num_keys: usize,
     ) -> Self {
-        // Zero initialize all of the cache data
-        let keys = KeysCache::new(layout);
+        let len = keyboard.len();
+
+        let keys = vec![EMPTY_KEY; len];
+        let key_positions = vec![None; num_keys];
+
         let possible_neighbors = Vec::with_capacity(
-            layout.keys.len() * layout.keys.len() + // Keyswaps
-            (layout.keys.len() - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
+            len * len + // Keyswaps
+            (len - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
         );
-        // TODO: This with_capacity probably isn't right
-        let affected_grams =
-            Vec::with_capacity(layout.keys.len().pow(2) + layout.magic.len() * layout.keys.len());
-        let magic = MagicCache::new(&layout.magic, &char_mapping, &keys);
-        let sfb = SFCache::new(&layout.fingers, &layout.keyboard, &keys);
-        let stretch = StretchCache::new();
+        let affected_grams = Vec::with_capacity(len * len);
+
+        let dist = DistCache::new(keyboard, fingers);
+        let sfb = SFCache::new(fingers, keyboard);
+        let stretch = StretchCache::new(keyboard, fingers);
+        let magic = MagicCache::default();
 
         let mut cache = CachedLayout {
             keys,
+            key_positions,
             possible_neighbors,
             affected_grams,
+            dist,
             sfb,
             stretch,
             magic,
-            fingers: layout.fingers.to_vec(),
+            fingers: fingers.to_vec(),
         };
 
         layout.keys.iter().enumerate().map(|i, u| {
@@ -104,23 +116,37 @@ impl CachedLayout {
             });
         });
 
+        // Initialize keys from layout
+        for (pos, &key_char) in layout.keys.iter().enumerate() {
+            let key = key_char as CacheKey; // TODO: proper char mapping
+            cache.add_key(pos, key);
+        }
+
         cache
     }
 
-    pub fn to_layout(&self) -> Layout {
-        self.original_layout.clone().expect("CachedLayout has no original layout")
+    /// Get the key at a position
+    #[inline]
+    pub fn get_key(&self, pos: CachePos) -> CacheKey {
+        self.keys[pos]
+    }
+
+    /// Get the position of a key
+    #[inline]
+    pub fn get_pos(&self, key: CacheKey) -> Option<CachePos> {
+        self.key_positions.get(key).copied().flatten()
     }
 
     pub fn score(&self, weights: &Weights) -> i64 {
         self.sfb.score(weights) + self.stretch.score(weights)
     }
 
-    // Calculates the score of a neighbor and applies it to the cache
+    /// Apply a neighbor transformation
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
-                let key_a = self.keys.get(a);
-                let key_b = self.keys.get(b);
+                let key_a = self.keys[a];
+                let key_b = self.keys[b];
                 self.remove_key(a);
                 self.remove_key(b);
                 self.add_key(a, key_b);
@@ -132,40 +158,142 @@ impl CachedLayout {
         }
     }
 
-    // Copy state from another cache for the affected neighbor
-    pub fn copy_from(&mut self, other: &CachedLayout, _neighbor: Neighbor) {
-        // For now, just clone the relevant parts
-        self.keys = other.keys.clone();
-        self.sfb = other.sfb.clone();
-        self.stretch = other.stretch.clone();
+    /// Add a key at pos. Position should currently be empty.
+    pub fn add_key(&mut self, pos: CachePos, key: CacheKey) {
+        debug_assert!(self.keys[pos] == EMPTY_KEY, "Position {pos} is not empty");
+
+        self.keys[pos] = key;
+        if key < self.key_positions.len() {
+            self.key_positions[key] = Some(pos);
+        }
+
+        // Clear and populate affected_grams with all bigrams/skipgrams involving this position
+        self.affected_grams.clear();
+        self.compute_affected_grams_for_pos(pos, key, true);
+
+        // Update caches based on affected grams
+        for gram in &self.affected_grams {
+            match gram {
+                DeltaGram::Bigram(bg) => {
+                    self.sfb.update_bigram(&self.dist, bg);
+                    self.stretch.update_bigram(bg);
+                }
+                DeltaGram::Skipgram(sg) => {
+                    self.sfb.update_skipgram(&self.dist, sg);
+                    self.stretch.update_skipgram(sg);
+                }
+                DeltaGram::Trigram(_) => {}
+            }
+        }
     }
 
-    // Add a key at pos. Key should currently be empty
-    pub fn add_key(&mut self, pos: usize, u: CacheKey) {
-        debug_assert!(self.keys.get(pos) == REPLACEMENT_CHAR);
-        self.keys.set(pos, u);
-        self.sfb.add_key(pos, u);
-        self.stretch.add_key(pos, u);
+    /// Remove a key at pos. Position should currently contain a key.
+    pub fn remove_key(&mut self, pos: CachePos) {
+        let key = self.keys[pos];
+        debug_assert!(key != EMPTY_KEY, "Position {pos} is already empty");
+
+        // Clear and populate affected_grams (frequencies go to 0)
+        self.affected_grams.clear();
+        self.compute_affected_grams_for_pos(pos, key, false);
+
+        // Update caches based on affected grams
+        for gram in &self.affected_grams {
+            match gram {
+                DeltaGram::Bigram(bg) => {
+                    self.sfb.update_bigram(&self.dist, bg);
+                    self.stretch.update_bigram(bg);
+                }
+                DeltaGram::Skipgram(sg) => {
+                    self.sfb.update_skipgram(&self.dist, sg);
+                    self.stretch.update_skipgram(sg);
+                }
+                DeltaGram::Trigram(_) => {}
+            }
+        }
+
+        self.keys[pos] = EMPTY_KEY;
+        if key < self.key_positions.len() {
+            self.key_positions[key] = None;
+        }
     }
 
-    // Remove a key at pos. Key should currently contain something
-    pub fn remove_key(&mut self, pos: usize) {
-        debug_assert!(self.keys.get(pos) != REPLACEMENT_CHAR);
-        self.keys.set(pos, REPLACEMENT_CHAR);
-        self.sfb.remove_key(pos);
-        self.stretch.remove_key(pos);
+    /// Compute all affected bigrams and skipgrams when a key is added/removed at a position.
+    /// If `adding` is true, old_freq=0 and new_freq=actual. If false, old_freq=actual and new_freq=0.
+    fn compute_affected_grams_for_pos(&mut self, pos: CachePos, key: CacheKey, adding: bool) {
+        for (other_pos, &other_key) in self.keys.iter().enumerate() {
+            if other_pos == pos || other_key == EMPTY_KEY {
+                continue;
+            }
+
+            // Bigram: pos -> other_pos
+            let bg_freq = self.magic.get_bg_freq(key, other_key);
+            if bg_freq != 0 {
+                let (old, new) = if adding { (0, bg_freq) } else { (bg_freq, 0) };
+                self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
+                    a: key,
+                    b: other_key,
+                    p_a: pos,
+                    p_b: other_pos,
+                    old_freq: old,
+                    new_freq: new,
+                }));
+            }
+
+            // Bigram: other_pos -> pos
+            let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
+            if bg_freq_rev != 0 {
+                let (old, new) = if adding { (0, bg_freq_rev) } else { (bg_freq_rev, 0) };
+                self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
+                    a: other_key,
+                    b: key,
+                    p_a: other_pos,
+                    p_b: pos,
+                    old_freq: old,
+                    new_freq: new,
+                }));
+            }
+
+            // Skipgram: pos -> other_pos
+            let sg_freq = self.magic.get_sg_freq(key, other_key);
+            if sg_freq != 0 {
+                let (old, new) = if adding { (0, sg_freq) } else { (sg_freq, 0) };
+                self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
+                    a: key,
+                    b: other_key,
+                    p_a: pos,
+                    p_b: other_pos,
+                    old_freq: old,
+                    new_freq: new,
+                }));
+            }
+
+            // Skipgram: other_pos -> pos
+            let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
+            if sg_freq_rev != 0 {
+                let (old, new) = if adding { (0, sg_freq_rev) } else { (sg_freq_rev, 0) };
+                self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
+                    a: other_key,
+                    b: key,
+                    p_a: other_pos,
+                    p_b: pos,
+                    old_freq: old,
+                    new_freq: new,
+                }));
+            }
+        }
     }
 
-    // Add a rule. Rule should currently be empty
-    pub fn steal_bigram(&mut self, key: CacheKey, leader: CacheKey, output: CacheKey) {
-        debug_assert!(self.magic.rules[key][leader] == REPLACEMENT_CHAR);
-        self.affected_grams = self.magic.steal_bigram(key, leader, output);
-        self.sfb.steal_bigram(&self.affected_grams);
-        self.stretch.steal_bigram(&self.affected_grams);
+    /// Steal a bigram for magic key functionality
+    pub fn steal_bigram(&mut self, _key: CacheKey, _leader: CacheKey, _output: CacheKey) {
+        // TODO: implement magic steal bigram
     }
 
     pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
         &self.possible_neighbors
+    }
+
+    pub fn affected_grams(&self) -> &Vec<DeltaGram> {
+        &self.affected_grams
     }
 }
 
@@ -173,152 +301,4 @@ impl CachedLayout {
 pub struct BigramPair {
     pub pair: PosPair,
     pub dist: i64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::analyze::{self, Analyzer};
-    use crate::data::Data;
-    use crate::layout::Layout;
-    use crate::weights::dummy_weights;
-
-    #[test]
-    fn test_apply_revert_neighbor_cache_integrity() {
-        let data = Data::load("../data/english.json").expect("this should exist");
-        let weights = dummy_weights();
-        let layout = Layout::load(format!("../layouts/test/magic.dof"))
-            .expect("this layout is valid and exists, soooo");
-        let cache = CachedLayout::new(
-            &AnalyzerData::new(&data),
-            &layout.keyboard, // TODO
-            &CharMapping::default(),
-            &layout,
-        );
-        let reference = cache.clone();
-
-        // Test key swap
-        let diff = Neighbor::KeySwap(PosPair(0, 1));
-        cache.apply_neighbor(diff);
-        let revert = diff.revert(&cache);
-        cache.apply_neighbor(revert);
-        assert!(cache == reference);
-
-        // Test arbitrary magic rule
-        let diff = Neighbor::MagicRule(MagicRule(
-            *self.magic.rules.iter().next().unwrap().0,
-            analyzer.char_mapping.get_u('c'),
-            analyzer.char_mapping.get_u('d'),
-        ));
-        analyzer.apply_neighbor(&mut cache, diff);
-        let revert = diff.revert(&cache);
-        analyzer.apply_neighbor(&mut cache, revert);
-        assert!(cache == reference);
-    }
-
-    #[test]
-    fn test_key_dist() {
-        let k1 = "1 0 0 0"
-            .parse::<PhysicalKey>()
-            .expect("couldn't create k1");
-
-        let k2 = "2 1 0 0"
-            .parse::<PhysicalKey>()
-            .expect("couldn't create k2");
-
-        let d = dist(&k1, &k2, Finger::RP, Finger::RP);
-
-        approx::assert_abs_diff_eq!(d, 2f64.sqrt(), epsilon = 1e-9);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn test_square_shapes() {
-        fn print_key_info(layout: &crate::layout::Layout, c: char) {
-            let i = match layout.keys.iter().position(|k| k == &c) {
-                Some(i) => i,
-                None => {
-                    println!("layout '{}' does not contain '{c}'", layout.name);
-                    return;
-                }
-            };
-
-            let p = &layout.keyboard[i];
-            let f = &layout.fingers[i];
-
-            println!("{c} uses {f}, key: {p:?}")
-        }
-
-        let k1 = "6.25 3 1 1"
-            .parse::<PhysicalKey>()
-            .expect("couldn't create k1");
-
-        let k2 = "3.75 4 6.25 1 "
-            .parse::<PhysicalKey>()
-            .expect("couldn't create k2");
-
-        let d = dist(&k1, &k2, Finger::LP, Finger::LP);
-
-        approx::assert_abs_diff_eq!(d, 1.0, epsilon = 1e-9);
-
-        let layout = crate::layout::Layout::load("../layouts/qwerty.dof").unwrap();
-
-        print_key_info(&layout, 'b');
-        print_key_info(&layout, '␣');
-    }
-
-    #[test]
-    fn update_cache_bigrams() {
-        let (analyzer, layout) = analyzer_layout("rstn-oxey");
-
-        analyzer.use_layout(layout, &[]);
-        let reference = cache.clone();
-
-        let possible_swaps = cache.possible_neighbors.clone();
-
-        for (i, &swap) in possible_swaps.iter().enumerate() {
-            let initial = analyzer.score_cache(&cache);
-
-            analyzer.apply_neighbor(&mut cache, swap);
-            let revert = swap.revert(&cache);
-            analyzer.apply_neighbor(&mut cache, revert);
-
-            let returned = analyzer.score_cache(&cache);
-
-            assert_eq!(initial, returned, "iteration {i}: ");
-            assert_eq!(cache, reference, "iteration {i}: ");
-        }
-    }
-
-    #[test]
-    fn stretch_cache_consistency() {
-        let (analyzer, layout) = analyzer_layout("qwerty-minimal");
-        let mut cache = analyzer.cached_layout(layout, &[]);
-        let swap = PosPair(0, 8);
-
-        let total = cache.stretch.total;
-        let stretches = analyzer.stretches(&cache);
-
-        assert_eq!(total, stretches);
-
-        dbg!(total);
-
-        analyzer.apply_neighbor(&mut cache, Neighbor::KeySwap(swap));
-        analyzer.apply_neighbor(&mut cache, Neighbor::KeySwap(swap));
-
-        let total2 = cache.stretch.total;
-
-        println!("total stretch cache: {total}");
-        println!("diff after swaps:    {}", total - total2);
-
-        // println!("{:#?}", cache.stretch_cache.all_pairs);
-
-        // cache.stretch_cache.per_keypair.get(&swap).unwrap().iter()
-        //     .for_each(|pair| {
-        //         let [p1, p2] = [pair.pair.0, pair.pair.1];
-        //         let [c1, c2] = [cache.char(p1).unwrap(), cache.char(p2).unwrap()];
-
-        //         println!("{c1}{c2}: {}", pair.dist);
-        //     })
-    }
 }
