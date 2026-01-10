@@ -20,13 +20,14 @@ pub struct SfPair {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SFCache {
-    sfb_per_finger: Box<[i64; 10]>,
-    total_sfbs: i64,
-    sfs_per_finger: Box<[i64; 10]>,
-    total_sfs: i64,
-    use_per_finger: Box<[i64; 10]>,
-    total_bg: i64,
-    total_sg: i64,
+    /// Weighted SFB score per finger (freq * dist)
+    sfb_score_per_finger: Box<[i64; 10]>,
+    /// Weighted SFS score per finger (freq * dist)
+    sfs_score_per_finger: Box<[i64; 10]>,
+    /// Unweighted SFB frequency per finger (for stats)
+    sfb_freq_per_finger: Box<[i64; 10]>,
+    /// Unweighted SFS frequency per finger (for stats)
+    sfs_freq_per_finger: Box<[i64; 10]>,
     /// For each position, list of other positions on the same finger
     sf_pairs_per_key: Vec<Vec<SfPair>>,
 }
@@ -55,31 +56,46 @@ impl SFCache {
         }
 
         Self {
-            sfb_per_finger: Box::new([0i64; 10]),
-            total_sfbs: 0,
-            sfs_per_finger: Box::new([0i64; 10]),
-            total_sfs: 0,
-            use_per_finger: Box::new([0i64; 10]),
-            total_bg: 0,
-            total_sg: 0,
+            sfb_score_per_finger: Box::new([0i64; 10]),
+            sfs_score_per_finger: Box::new([0i64; 10]),
+            sfb_freq_per_finger: Box::new([0i64; 10]),
+            sfs_freq_per_finger: Box::new([0i64; 10]),
             sf_pairs_per_key,
         }
     }
 
     pub fn score(&self, weights: &Weights) -> i64 {
-        // TODO: normalize
         Finger::FINGERS
             .iter()
             .map(|f| -> i64 {
                 let fi = *f as usize;
-                self.sfb_per_finger[fi] * weights.fingers.get(*f) * weights.sfbs
-                    + self.sfs_per_finger[fi] * weights.fingers.get(*f) * weights.sfs
+                self.sfb_score_per_finger[fi] * weights.fingers.get(*f) * weights.sfbs
+                    + self.sfs_score_per_finger[fi] * weights.fingers.get(*f) * weights.sfs
             })
             .sum()
     }
 
-    pub fn stats(&self, _stats: &mut Stats) {
-        // TODO
+    pub fn stats(&self, stats: &mut Stats, bigram_total: f64, skipgram_total: f64) {
+        // Total SFB/SFS frequencies (sum across all fingers)
+        let total_sfb: i64 = self.sfb_freq_per_finger.iter().sum();
+        let total_sfs: i64 = self.sfs_freq_per_finger.iter().sum();
+
+        stats.sfbs = total_sfb as f64 / bigram_total;
+        stats.sfs = total_sfs as f64 / skipgram_total;
+
+        // Per-finger SFB frequencies
+        for (i, &freq) in self.sfb_freq_per_finger.iter().enumerate() {
+            stats.finger_sfbs[i] = freq as f64 / bigram_total;
+        }
+
+        // Per-finger weighted distance (score / 100 to convert back from centiunits)
+        let total_bg_sg = bigram_total + skipgram_total;
+        for (i, (&sfb_score, &sfs_score)) in self.sfb_score_per_finger.iter()
+            .zip(self.sfs_score_per_finger.iter())
+            .enumerate()
+        {
+            stats.weighted_finger_distance[i] = (sfb_score + sfs_score) as f64 / (total_bg_sg * 100.0);
+        }
     }
 
     /// Check if two positions are on the same finger
@@ -94,23 +110,29 @@ impl SFCache {
     pub fn update_bigram(&mut self, dist_cache: &DistCache, bg: &DeltaBigram) {
         if let Some(finger) = self.is_same_finger(bg.p_a, bg.p_b) {
             let dist = dist_cache.get(bg.p_a, bg.p_b);
-            let delta = (bg.new_freq - bg.old_freq) * dist;
-            self.sfb_per_finger[finger] += delta;
+            let freq_delta = bg.new_freq - bg.old_freq;
+            let score_delta = freq_delta * dist;
+            self.sfb_score_per_finger[finger] += score_delta;
+            self.sfb_freq_per_finger[finger] += freq_delta;
         }
     }
 
     pub fn update_skipgram(&mut self, dist_cache: &DistCache, sg: &DeltaSkipgram) {
         if let Some(finger) = self.is_same_finger(sg.p_a, sg.p_b) {
             let dist = dist_cache.get(sg.p_a, sg.p_b);
-            let delta = (sg.new_freq - sg.old_freq) * dist;
-            self.sfs_per_finger[finger] += delta;
+            let freq_delta = sg.new_freq - sg.old_freq;
+            let score_delta = freq_delta * dist;
+            self.sfs_score_per_finger[finger] += score_delta;
+            self.sfs_freq_per_finger[finger] += freq_delta;
         }
     }
 
     /// Copy scoring data from another SFCache. No allocations.
     #[inline]
     pub fn copy_from(&mut self, other: &SFCache) {
-        *self.sfb_per_finger = *other.sfb_per_finger;
-        *self.sfs_per_finger = *other.sfs_per_finger;
+        *self.sfb_score_per_finger = *other.sfb_score_per_finger;
+        *self.sfs_score_per_finger = *other.sfs_score_per_finger;
+        *self.sfb_freq_per_finger = *other.sfb_freq_per_finger;
+        *self.sfs_freq_per_finger = *other.sfs_freq_per_finger;
     }
 }

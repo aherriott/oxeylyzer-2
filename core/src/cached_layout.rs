@@ -9,6 +9,7 @@ use crate::{
     layout::{Layout, MagicStealBigram, PosPair},
     magic::MagicCache,
     same_finger::SFCache,
+    stats::Stats,
     stretches::StretchCache,
     types::{CacheKey, CachePos},
     weights::Weights,
@@ -234,6 +235,23 @@ impl CachedLayout {
 
     pub fn score(&self, weights: &Weights) -> i64 {
         self.sfb.score(weights) + self.stretch.score(weights)
+    }
+
+    /// Populate stats from the caches. Requires totals for normalization.
+    pub fn stats(&self, stats: &mut Stats, char_total: f64, bigram_total: f64, skipgram_total: f64, chars: &[i64]) {
+        // Finger use: sum character frequencies per finger
+        for (pos, &key) in self.keys.iter().enumerate() {
+            if key != EMPTY_KEY && (key as usize) < chars.len() {
+                let finger = self.fingers[pos] as usize;
+                stats.finger_use[finger] += chars[key as usize] as f64 / char_total;
+            }
+        }
+
+        // SFB/SFS stats
+        self.sfb.stats(stats, bigram_total, skipgram_total);
+
+        // Stretch stats
+        self.stretch.stats(stats, bigram_total);
     }
 
     /// Apply a neighbor transformation

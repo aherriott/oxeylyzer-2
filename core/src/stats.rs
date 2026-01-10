@@ -1,5 +1,3 @@
-use crate::prelude::{Analyzer, Layout};
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stats {
     pub finger_use: [f64; 10],

@@ -7,6 +7,7 @@ use crate::{
     data::Data,
     layout::*,
     analyzer_data::AnalyzerData,
+    stats::Stats,
     weights::Weights,
 };
 
@@ -188,6 +189,25 @@ impl Analyzer {
      *              Stats
      **************************************
      */
+
+    pub fn stats(&self) -> Stats {
+        let cache = self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+
+        let mut stats = Stats::default();
+        stats.score = cache.score(&self.weights);
+
+        cache.stats(
+            &mut stats,
+            self.data.char_total,
+            self.data.bigram_total,
+            self.data.skipgram_total,
+            &self.data.chars,
+        );
+
+        stats
+    }
 
 
     // pub fn sfbs(&self) -> i64 {

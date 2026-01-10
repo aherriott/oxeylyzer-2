@@ -5,7 +5,7 @@
  */
 
 use crate::cached_layout::{DeltaBigram, DeltaSkipgram};
-use crate::dist::{dx_dy, x_overlap, DistCache};
+use crate::dist::{dx_dy, x_overlap};
 use crate::stats::Stats;
 use crate::types::CachePos;
 use crate::weights::Weights;
@@ -73,8 +73,9 @@ impl StretchCache {
         self.total * weights.stretches
     }
 
-    pub fn stats(&self, _stats: &mut Stats) {
-        // TODO
+    pub fn stats(&self, stats: &mut Stats, bigram_total: f64) {
+        // Convert from centiunits back to units, normalized by bigram total
+        stats.stretches = self.total as f64 / (bigram_total * 100.0);
     }
 
     pub fn update_bigram(&mut self, bg: &DeltaBigram) {
