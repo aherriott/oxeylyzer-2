@@ -1,7 +1,10 @@
-use libdof::prelude::{Finger, PhysicalKey};
+use libdof::prelude::{Finger, PhysicalKey, Shape};
+use libdof::magic::MagicKey;
+use fxhash::FxHashMap as HashMap;
 
 use crate::{
     analyze::Neighbor,
+    char_mapping::CharMapping,
     dist::DistCache,
     layout::{Layout, MagicStealBigram, PosPair},
     magic::MagicCache,
@@ -9,7 +12,6 @@ use crate::{
     stretches::StretchCache,
     types::{CacheKey, CachePos},
     weights::Weights,
-    REPLACEMENT_CHAR,
 };
 
 pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
@@ -48,8 +50,14 @@ pub enum DeltaGram {
 
 // CachedLayout contains the minimum mutable data used to define a layout and store scoring.
 // Designed to copy quickly and without allocation. Wrapped by Analyzer.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CachedLayout {
+    // Layout identity
+    name: String,
+    char_mapping: CharMapping,
+    keyboard: Box<[PhysicalKey]>,
+    shape: Shape,
+
     /// Key at each position (EMPTY_KEY if unassigned)
     keys: Vec<CacheKey>,
     /// Position of each key (None if not placed)
@@ -77,20 +85,41 @@ pub struct MagicRule {
     pub possible_outputs: Vec<CacheKey>,
 }
 
+impl Default for CachedLayout {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            char_mapping: CharMapping::default(),
+            keyboard: Box::new([]),
+            shape: Shape::default(),
+            keys: Vec::new(),
+            key_positions: Vec::new(),
+            num_positions: 0,
+            magic_rules: Vec::new(),
+            affected_grams: Vec::new(),
+            dist: DistCache::default(),
+            sfb: SFCache::default(),
+            stretch: StretchCache::default(),
+            magic: MagicCache::default(),
+            fingers: Vec::new(),
+        }
+    }
+}
+
 impl CachedLayout {
-    // Allocates all the required memory
+    /// Create a new CachedLayout from a Layout and CharMapping
     pub fn new(
-        keyboard: &[PhysicalKey],
-        fingers: &[Finger],
         layout: &Layout,
+        char_mapping: CharMapping,
         num_keys: usize,
     ) -> Self {
-        let len = keyboard.len();
+        let len = layout.keyboard.len();
+        let keyboard = &layout.keyboard;
+        let fingers = &layout.fingers;
 
         let keys = vec![EMPTY_KEY; len];
         let key_positions = vec![None; num_keys];
 
-        let magic_rules = Vec::new(); // TODO: populate from layout.magic
         let affected_grams = Vec::with_capacity(len * len);
 
         let dist = DistCache::new(keyboard, fingers);
@@ -98,7 +127,35 @@ impl CachedLayout {
         let stretch = StretchCache::new(keyboard, fingers);
         let magic = MagicCache::default();
 
+        // Build magic rules from layout.magic
+        let mut magic_rules = Vec::new();
+        for (&magic_char, magic_key_def) in layout.magic.iter() {
+            let magic_key = char_mapping.get_u(magic_char);
+            // rules() returns BTreeMap<String, String> where key=leading, value=output
+            // Group by leader to build MagicRule entries
+            let mut leader_outputs: HashMap<CacheKey, Vec<CacheKey>> = HashMap::default();
+            for (leading_str, output_str) in magic_key_def.rules().iter() {
+                let leader = char_mapping.get_u(leading_str.chars().next().unwrap_or(' '));
+                let output = char_mapping.get_u(output_str.chars().next().unwrap_or(' '));
+                leader_outputs.entry(leader).or_default().push(output);
+            }
+            for (leader, outputs) in leader_outputs {
+                if !outputs.is_empty() {
+                    magic_rules.push(MagicRule {
+                        magic_key,
+                        leader,
+                        current_output: outputs[0], // First output is initial
+                        possible_outputs: outputs,
+                    });
+                }
+            }
+        }
+
         let mut cache = CachedLayout {
+            name: layout.name.clone(),
+            char_mapping,
+            keyboard: layout.keyboard.clone(),
+            shape: layout.shape.clone(),
             keys,
             key_positions,
             num_positions: len,
@@ -113,18 +170,54 @@ impl CachedLayout {
 
         // Initialize keys from layout
         for (pos, &key_char) in layout.keys.iter().enumerate() {
-            let key = key_char as CacheKey; // TODO: proper char mapping
+            let key = cache.char_mapping.get_u(key_char);
             cache.add_key(pos, key);
         }
 
-        // TODO: Initialize magic rules from layout.magic
-        // for (magic_char, magic_key) in layout.magic.iter() {
-        //     for rule in magic_key.rules() {
-        //         cache.steal_bigram(magic_char as CacheKey, rule.leader as CacheKey, rule.output as CacheKey);
-        //     }
-        // }
+        // Apply initial magic steals
+        for rule in &cache.magic_rules.clone() {
+            cache.magic.steal_bigram(
+                rule.leader,
+                rule.current_output,
+                rule.magic_key,
+                &cache.key_positions,
+                cache.keys.len(),
+                &mut cache.affected_grams,
+            );
+        }
+        cache.affected_grams.clear();
 
         cache
+    }
+
+    /// Convert back to a Layout
+    pub fn to_layout(&self) -> Layout {
+        // Convert keys back to chars
+        let keys: Box<[char]> = self.keys.iter()
+            .map(|&k| if k == EMPTY_KEY { ' ' } else { self.char_mapping.get_c(k) })
+            .collect();
+
+        // Reconstruct magic HashMap from magic_rules
+        let mut magic: HashMap<char, MagicKey> = HashMap::default();
+        for rule in &self.magic_rules {
+            let magic_char = self.char_mapping.get_c(rule.magic_key);
+            let leader_char = self.char_mapping.get_c(rule.leader);
+            let output_char = self.char_mapping.get_c(rule.current_output);
+
+            let magic_key = magic.entry(magic_char).or_insert_with(|| {
+                MagicKey::new(&magic_char.to_string())
+            });
+            magic_key.steal_bigram(&leader_char.to_string(), &output_char.to_string());
+        }
+
+        Layout {
+            name: self.name.clone(),
+            keys,
+            fingers: self.fingers.clone().into_boxed_slice(),
+            keyboard: self.keyboard.clone(),
+            shape: self.shape.clone(),
+            magic,
+        }
     }
 
     /// Get the key at a position
