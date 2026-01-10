@@ -59,7 +59,7 @@ impl StretchCache {
                 let negative_lsb = 0.0; //(minimum_diff - dx.abs() - 1.0).max(0.0) * 2.0;
                 let dist = dx.hypot(dy);
 
-                let xo = Self::x_overlap(dx, dy, f1, f2);
+                let xo = x_overlap(dx, dy, f1, f2);
 
                 let stretch = dist + xo + negative_lsb - fd;
 
@@ -118,15 +118,7 @@ impl StretchCache {
         }
     }
 
-    pub fn add_key(&mut self, _pos: usize, _key: CacheKey) {
-        // stub
-    }
-
-    pub fn remove_key(&mut self, _pos: usize) {
-        // stub
-    }
-
-    pub fn steal_bigram(&mut self, _affected_grams: &[DeltaGram]) {
+    pub fn update_bigram(&mut self, bg: &DeltaBigram) {
         // stub
     }
 

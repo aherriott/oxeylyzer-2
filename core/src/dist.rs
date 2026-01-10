@@ -1,6 +1,59 @@
-    fn dist(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> f64 {
-        let (dx, dy) = dx_dy(k1, k2, f1, f2);
+/*
+ **************************************
+ *         Distance Cache
+ **************************************
+ */
 
+use crate::types::CachePos;
+use libdof::dofinitions::Finger;
+use libdof::prelude::PhysicalKey;
+
+const KEY_EDGE_OFFSET: f64 = 0.5;
+
+/// Precomputed distances between all pairs of key positions.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DistCache {
+    distances: Vec<Vec<i64>>,
+}
+
+impl DistCache {
+    /// Create a new distance cache from keyboard layout and finger assignments.
+    /// Distances are stored as i64 (multiplied by 100 for precision).
+    pub fn new(keyboard: &[PhysicalKey], fingers: &[Finger]) -> Self {
+        assert_eq!(
+            keyboard.len(),
+            fingers.len(),
+            "keyboard and fingers must have same length"
+        );
+
+        let len = keyboard.len();
+        let distances = (0..len)
+            .map(|i| {
+                (0..len)
+                    .map(|j| {
+                        if i != j {
+                            let dist = Self::compute_dist(&keyboard[i], &keyboard[j], fingers[i], fingers[j]);
+                            (dist * 100.0) as i64
+                        } else {
+                            0
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        Self { distances }
+    }
+
+    /// Get the distance between two positions.
+    #[inline]
+    pub fn get(&self, p1: CachePos, p2: CachePos) -> i64 {
+        self.distances[p1][p2]
+    }
+
+    /// Compute euclidean distance between two keys, accounting for finger lengths.
+    fn compute_dist(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> f64 {
+        let (dx, dy) = Self::dx_dy(k1, k2, f1, f2);
         dx.hypot(dy)
     }
 
@@ -14,9 +67,9 @@
         };
 
         let ox1 = (k1.width() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
-        let ox2 = (k1.width() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
+        let ox2 = (k2.width() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
 
-        let oy1 = (k2.height() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
+        let oy1 = (k1.height() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
         let oy2 = (k2.height() * KEY_EDGE_OFFSET).min(KEY_EDGE_OFFSET);
 
         let l1 = k1.x() + ox1;
@@ -32,29 +85,11 @@
         let dx = (l1.max(l2) - r1.min(r2)).max(0.0);
         let dy = (t1.max(t2) - b1.min(b2)).max(0.0);
 
-        // Checks whether or not a finger is below or to the side of another finger, in which case the
-        // distance is considered negative. To the side meaning, where the distance between qwerty `er`
-        // pressed with middle and index is considered 1, if each key were pressed with the other
-        // finger, the distance is negative (because who the fuck is doing that, that's not good).
-
         let xo = Self::x_finger_overlap(f1, f2);
 
-        // match (f1.hand(), f2.hand()) {
-        //     (Hand::Left, Hand::Left) => match ((f1 as CacheKey) > (f2 as CacheKey), (f1 as CacheKey) < (f2 as CacheKey)) {
-        //         (true, false) if r1 < l2 => (-dx, dy),
-        //         (false, true) if l1 > r2 => (-dx, dy),
-        //         _ => (dx, dy),
-        //     },
-        //     (Hand::Right, Hand::Right) => match ((f2 as CacheKey) > (f1 as CacheKey), (f2 as CacheKey) < (f1 as CacheKey)) {
-        //         (true, false) if r1 > l2 => (-dx, dy),
-        //         (false, true) if l1 < r2 => (-dx, dy),
-        //         _ => (dx, dy),
-        //     },
-        //     _ => (dx, dy)
-        // }
         match (
-            (f1 as CacheKey) > (f2 as CacheKey),
-            (f1 as CacheKey) < (f2 as CacheKey),
+            (f1 as usize) > (f2 as usize),
+            (f1 as usize) < (f2 as usize),
         ) {
             (true, false) if r1 < l2 + xo => (-dx, dy),
             (false, true) if l1 + xo > r2 => (-dx, dy),
@@ -62,7 +97,7 @@
         }
     }
 
-        fn x_overlap(dx: f64, dy: f64, f1: Finger, f2: Finger) -> f64 {
+    pub fn x_overlap(dx: f64, dy: f64, f1: Finger, f2: Finger) -> f64 {
         let x_offset = Self::x_finger_overlap(f1, f2);
 
         let dx_offset = x_offset - dx * 1.3;
@@ -71,25 +106,17 @@
         (dx_offset + dy_offset).max(0.0)
     }
 
-        fn x_finger_overlap(f1: Finger, f2: Finger) -> f64 {
+    pub fn x_finger_overlap(f1: Finger, f2: Finger) -> f64 {
         match (f1, f2) {
-            (Finger::LP, Finger::LR) => 0.8,
-            (Finger::LR, Finger::LP) => 0.8,
-            (Finger::LR, Finger::LM) => 0.4,
-            (Finger::LM, Finger::LR) => 0.4,
-            (Finger::LM, Finger::LI) => 0.1,
-            (Finger::LI, Finger::LM) => 0.1,
-            (Finger::LI, Finger::LT) => -2.5,
-            (Finger::LT, Finger::LI) => -2.5,
-            (Finger::RT, Finger::RI) => -2.5,
-            (Finger::RI, Finger::RT) => -2.5,
-            (Finger::RI, Finger::RM) => 0.1,
-            (Finger::RM, Finger::RI) => 0.1,
-            (Finger::RM, Finger::RR) => 0.4,
-            (Finger::RR, Finger::RM) => 0.4,
-            (Finger::RR, Finger::RP) => 0.8,
-            (Finger::RP, Finger::RR) => 0.8,
+            (Finger::LP, Finger::LR) | (Finger::LR, Finger::LP) => 0.8,
+            (Finger::LR, Finger::LM) | (Finger::LM, Finger::LR) => 0.4,
+            (Finger::LM, Finger::LI) | (Finger::LI, Finger::LM) => 0.1,
+            (Finger::LI, Finger::LT) | (Finger::LT, Finger::LI) => -2.5,
+            (Finger::RT, Finger::RI) | (Finger::RI, Finger::RT) => -2.5,
+            (Finger::RI, Finger::RM) | (Finger::RM, Finger::RI) => 0.1,
+            (Finger::RM, Finger::RR) | (Finger::RR, Finger::RM) => 0.4,
+            (Finger::RR, Finger::RP) | (Finger::RP, Finger::RR) => 0.8,
             _ => 0.0,
         }
     }
-
+}
