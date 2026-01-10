@@ -16,8 +16,6 @@ pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaBigram {
-    pub a: CacheKey,
-    pub b: CacheKey,
     pub p_a: CachePos,
     pub p_b: CachePos,
     pub old_freq: i64,
@@ -26,8 +24,6 @@ pub struct DeltaBigram {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaSkipgram {
-    pub a: CacheKey,
-    pub b: CacheKey,
     pub p_a: CachePos,
     pub p_b: CachePos,
     pub old_freq: i64,
@@ -36,9 +32,6 @@ pub struct DeltaSkipgram {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeltaTrigram {
-    pub a: CacheKey,
-    pub b: CacheKey,
-    pub c: CacheKey,
     pub p_a: CachePos,
     pub p_b: CachePos,
     pub p_c: CachePos,
@@ -230,8 +223,6 @@ impl CachedLayout {
             if bg_freq != 0 {
                 let (old, new) = if adding { (0, bg_freq) } else { (bg_freq, 0) };
                 self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
-                    a: key,
-                    b: other_key,
                     p_a: pos,
                     p_b: other_pos,
                     old_freq: old,
@@ -244,8 +235,6 @@ impl CachedLayout {
             if bg_freq_rev != 0 {
                 let (old, new) = if adding { (0, bg_freq_rev) } else { (bg_freq_rev, 0) };
                 self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
-                    a: other_key,
-                    b: key,
                     p_a: other_pos,
                     p_b: pos,
                     old_freq: old,
@@ -258,8 +247,6 @@ impl CachedLayout {
             if sg_freq != 0 {
                 let (old, new) = if adding { (0, sg_freq) } else { (sg_freq, 0) };
                 self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    a: key,
-                    b: other_key,
                     p_a: pos,
                     p_b: other_pos,
                     old_freq: old,
@@ -272,8 +259,6 @@ impl CachedLayout {
             if sg_freq_rev != 0 {
                 let (old, new) = if adding { (0, sg_freq_rev) } else { (sg_freq_rev, 0) };
                 self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    a: other_key,
-                    b: key,
                     p_a: other_pos,
                     p_b: pos,
                     old_freq: old,
