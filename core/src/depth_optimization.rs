@@ -11,7 +11,9 @@ impl Analyzer {
         loop {
             let mut best_loop_score = i64::MIN;
 
-            for &neighbor in self.possible_neighbors() {
+            let count = self.neighbor_count();
+            for i in 0..count {
+                let neighbor = self.get_neighbor(i);
                 let score = self.test_neighbor(neighbor);
 
                 if score > best_score {
@@ -104,9 +106,11 @@ impl Analyzer {
     ) -> bool {
         if depth > 0 {
             let mut return_best = false;
-            for neighbor in self.possible_neighbors() {
+            let count = self.neighbor_count();
+            for i in 0..count {
+                let neighbor = self.get_neighbor(i);
                 // Apply the neighbor
-                self.apply_neighbor(*neighbor);
+                self.apply_neighbor(neighbor);
 
                 // Recurse
                 let best = self.best_neighbor_recursive(depth - 1, diffs, cur_best);
@@ -116,7 +120,7 @@ impl Analyzer {
 
                 // This chain is the current known best. Update diffs
                 if best {
-                    diffs[depth - 1] = *neighbor;
+                    diffs[depth - 1] = neighbor;
                     return_best = true;
                 }
             }

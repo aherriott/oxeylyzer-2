@@ -91,29 +91,33 @@ impl Analyzer {
      **************************************
      */
 
-    // possible_neighbors only needs to be called once per layout + pins combo
-    pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
-        assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
+    /// Number of possible neighbors for the current layout
+    pub fn neighbor_count(&self) -> usize {
         self.current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .possible_neighbors()
+            .neighbor_count()
+    }
+
+    /// Get neighbor by index
+    pub fn get_neighbor(&self, idx: usize) -> Neighbor {
+        self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .get_neighbor(idx)
     }
 
     pub fn random_neighbor(&self, rng: &mut WyRand) -> Neighbor {
         assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
-        let pos_neighbors = self
-            .current_cache
-            .as_ref()
-            .expect("Analyzer has no Layout set")
-            .possible_neighbors();
-        pos_neighbors[rng.generate_range(0..pos_neighbors.len())]
+        let cache = self.current_cache.as_ref().unwrap();
+        let count = cache.neighbor_count();
+        cache.get_neighbor(rng.generate_range(0..count))
     }
 
     /**
      * Returns the best neighbor
      */
-    pub fn best_neighbor(&self) -> Option<(Neighbor, i64)> {
+    pub fn best_neighbor(&mut self) -> Option<(Neighbor, i64)> {
         let mut best_score = self
             .current_cache
             .as_ref()
@@ -121,16 +125,13 @@ impl Analyzer {
             .score(&self.weights);
         let mut best = None;
 
-        for neighbor in self
-            .current_cache
-            .as_ref()
-            .expect("Analyzer has no Layout set")
-            .possible_neighbors()
-        {
-            let score = self.test_neighbor(*neighbor);
+        let count = self.neighbor_count();
+        for i in 0..count {
+            let neighbor = self.get_neighbor(i);
+            let score = self.test_neighbor(neighbor);
             if score > best_score {
                 best_score = score;
-                best = Some((neighbor.clone(), score));
+                best = Some((neighbor, score));
             }
         }
         best

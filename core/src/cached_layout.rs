@@ -54,7 +54,10 @@ pub struct CachedLayout {
     keys: Vec<CacheKey>,
     /// Position of each key (None if not placed)
     key_positions: Vec<Option<CachePos>>,
-    possible_neighbors: Vec<Neighbor>,
+    /// Number of positions (for KeySwap neighbor calculation)
+    num_positions: usize,
+    /// Magic rules: (magic_key, leader, current_output) - output changes as rules are stolen
+    magic_rules: Vec<(CacheKey, CacheKey, CacheKey)>,
     affected_grams: Vec<DeltaGram>,
     dist: DistCache,
     sfb: SFCache,
@@ -76,10 +79,7 @@ impl CachedLayout {
         let keys = vec![EMPTY_KEY; len];
         let key_positions = vec![None; num_keys];
 
-        let possible_neighbors = Vec::with_capacity(
-            len * len + // Keyswaps
-            (len - layout.magic.len()) * layout.magic.len(), // Steal Bigrams
-        );
+        let magic_rules = Vec::new(); // TODO: populate from layout.magic
         let affected_grams = Vec::with_capacity(len * len);
 
         let dist = DistCache::new(keyboard, fingers);
@@ -90,7 +90,8 @@ impl CachedLayout {
         let mut cache = CachedLayout {
             keys,
             key_positions,
-            possible_neighbors,
+            num_positions: len,
+            magic_rules,
             affected_grams,
             dist,
             sfb,
@@ -295,8 +296,37 @@ impl CachedLayout {
         }
     }
 
-    pub fn possible_neighbors(&self) -> &Vec<Neighbor> {
-        &self.possible_neighbors
+    /// Total number of neighbors (KeySwaps + MagicStealBigrams)
+    #[inline]
+    pub fn neighbor_count(&self) -> usize {
+        self.key_swap_count() + self.magic_rules.len()
+    }
+
+    /// Number of KeySwap neighbors: n*(n-1)/2 for n positions
+    #[inline]
+    fn key_swap_count(&self) -> usize {
+        let n = self.num_positions;
+        n * (n - 1) / 2
+    }
+
+    /// Get neighbor by index. KeySwaps come first, then MagicStealBigrams.
+    #[inline]
+    pub fn get_neighbor(&self, idx: usize) -> Neighbor {
+        let swap_count = self.key_swap_count();
+        if idx < swap_count {
+            // Decode triangular index to (a, b) where a < b
+            // idx = a*n - a*(a+1)/2 + (b - a - 1)
+            // Solve for a: a = floor((2n-1 - sqrt((2n-1)^2 - 8*idx)) / 2)
+            let n = self.num_positions;
+            let a = ((2 * n - 1) as f64 - ((2 * n - 1).pow(2) as f64 - 8.0 * idx as f64).sqrt()) / 2.0;
+            let a = a.floor() as usize;
+            let b = idx - (a * n - a * (a + 1) / 2) + a + 1;
+            Neighbor::KeySwap(PosPair(a, b))
+        } else {
+            let magic_idx = idx - swap_count;
+            let (magic_key, leader, output) = self.magic_rules[magic_idx];
+            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, output))
+        }
     }
 
     pub fn affected_grams(&self) -> &Vec<DeltaGram> {
