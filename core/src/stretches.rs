@@ -16,7 +16,7 @@ use libdof::prelude::PhysicalKey;
 pub struct StretchCache {
     /// Precomputed stretch distances for each position pair
     stretch_dists: Vec<Vec<i64>>,
-    pub total: i64,
+    total: i64,
 }
 
 impl StretchCache {

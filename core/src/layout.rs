@@ -17,13 +17,13 @@ impl<U: Into<CacheKey>> From<(U, U)> for PosPair {
     }
 }
 
-// magic_key, leader, output
+// magic_key, leader, new_output, old_output
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MagicStealBigram(pub CacheKey, pub CacheKey, pub CacheKey);
+pub struct MagicStealBigram(pub CacheKey, pub CacheKey, pub CacheKey, pub CacheKey);
 
-impl<U: Into<CacheKey>> From<(U, U, U)> for MagicStealBigram {
-    fn from((p1, p2, p3): (U, U, U)) -> Self {
-        Self(p1.into(), p2.into(), p3.into())
+impl<U: Into<CacheKey>> From<(U, U, U, U)> for MagicStealBigram {
+    fn from((p1, p2, p3, p4): (U, U, U, U)) -> Self {
+        Self(p1.into(), p2.into(), p3.into(), p4.into())
     }
 }
 

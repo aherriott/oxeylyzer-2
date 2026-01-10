@@ -56,14 +56,25 @@ pub struct CachedLayout {
     key_positions: Vec<Option<CachePos>>,
     /// Number of positions (for KeySwap neighbor calculation)
     num_positions: usize,
-    /// Magic rules: (magic_key, leader, current_output) - output changes as rules are stolen
-    magic_rules: Vec<(CacheKey, CacheKey, CacheKey)>,
+    /// Magic rules: for each (magic_key, leader), stores (current_output, all_possible_outputs)
+    /// Neighbors are generated for each possible output != current_output
+    magic_rules: Vec<MagicRule>,
     affected_grams: Vec<DeltaGram>,
     dist: DistCache,
     sfb: SFCache,
     stretch: StretchCache,
     magic: MagicCache,
     fingers: Vec<Finger>,
+}
+
+/// A magic rule: (magic_key, leader) can steal to any of the possible_outputs.
+/// current_output tracks which one is currently active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MagicRule {
+    pub magic_key: CacheKey,
+    pub leader: CacheKey,
+    pub current_output: CacheKey,
+    pub possible_outputs: Vec<CacheKey>,
 }
 
 impl CachedLayout {
@@ -143,8 +154,8 @@ impl CachedLayout {
                 self.add_key(a, key_b);
                 self.add_key(b, key_a);
             }
-            Neighbor::MagicStealBigram(MagicStealBigram(key, leader, output)) => {
-                self.steal_bigram(key, leader, output);
+            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, new_output, _old_output)) => {
+                self.steal_bigram(magic_key, leader, new_output);
             }
         }
     }
@@ -267,16 +278,19 @@ impl CachedLayout {
 
     /// Steal a bigram for magic key functionality.
     /// When typing leader->output, magic key intercepts and produces output.
-    pub fn steal_bigram(&mut self, magic_key: CacheKey, leader: CacheKey, output: CacheKey) {
+    pub fn steal_bigram(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
         self.affected_grams.clear();
         self.magic.steal_bigram(
             leader,
-            output,
+            new_output,
             magic_key,
             &self.key_positions,
             self.keys.len(),
             &mut self.affected_grams,
         );
+
+        // Update magic rule tracking
+        self.update_magic_rule(magic_key, leader, new_output);
 
         // Update caches based on affected grams
         for gram in &self.affected_grams {
@@ -297,9 +311,13 @@ impl CachedLayout {
     }
 
     /// Total number of neighbors (KeySwaps + MagicStealBigrams)
+    /// For magic, each rule contributes (possible_outputs.len() - 1) neighbors (all except current)
     #[inline]
     pub fn neighbor_count(&self) -> usize {
-        self.key_swap_count() + self.magic_rules.len()
+        let magic_count: usize = self.magic_rules.iter()
+            .map(|r| r.possible_outputs.len().saturating_sub(1))
+            .sum();
+        self.key_swap_count() + magic_count
     }
 
     /// Number of KeySwap neighbors: n*(n-1)/2 for n positions
@@ -323,9 +341,39 @@ impl CachedLayout {
             let b = idx - (a * n - a * (a + 1) / 2) + a + 1;
             Neighbor::KeySwap(PosPair(a, b))
         } else {
-            let magic_idx = idx - swap_count;
-            let (magic_key, leader, output) = self.magic_rules[magic_idx];
-            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, output))
+            // Find which magic rule and which output this index corresponds to
+            let mut magic_idx = idx - swap_count;
+            for rule in &self.magic_rules {
+                let alternatives = rule.possible_outputs.iter()
+                    .filter(|&&o| o != rule.current_output)
+                    .count();
+                if magic_idx < alternatives {
+                    // This is the rule - find the nth alternative output
+                    let new_output = rule.possible_outputs.iter()
+                        .filter(|&&o| o != rule.current_output)
+                        .nth(magic_idx)
+                        .copied()
+                        .unwrap();
+                    return Neighbor::MagicStealBigram(MagicStealBigram(
+                        rule.magic_key,
+                        rule.leader,
+                        new_output,
+                        rule.current_output,
+                    ));
+                }
+                magic_idx -= alternatives;
+            }
+            panic!("Invalid neighbor index");
+        }
+    }
+
+    /// Update magic rule's current output after a steal
+    fn update_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
+        for rule in &mut self.magic_rules {
+            if rule.magic_key == magic_key && rule.leader == leader {
+                rule.current_output = new_output;
+                return;
+            }
         }
     }
 
