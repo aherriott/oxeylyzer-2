@@ -118,7 +118,7 @@ impl CachedLayout {
     // Add a rule. Rule should currently be empty
     pub fn steal_bigram(&mut self, key: CacheKey, leader: CacheKey, output: CacheKey) {
         debug_assert!(self.magic.rules[key][leader] == REPLACEMENT_CHAR);
-        self.affected_grams = self.magic.add_rule(key, leader, output);
+        self.affected_grams = self.magic.steal_bigram(key, leader, output);
         self.sfb.steal_bigram(&self.affected_grams);
         self.stretch.steal_bigram(&self.affected_grams);
     }

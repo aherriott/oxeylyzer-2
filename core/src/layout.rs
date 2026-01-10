@@ -189,7 +189,7 @@ impl From<CachedLayout> for Layout {
                     let c = layout.char_mapping.get_c(*c);
                     let mut magic_key = MagicKey::new(&c.to_string());
                     for (leading, output) in mk.iter() {
-                        magic_key.add_rule(
+                        magic_key.steal_bigram(
                             &layout.char_mapping.get_c(*leading).to_string(),
                             &layout.char_mapping.get_c(*output).to_string(),
                         );
@@ -221,7 +221,7 @@ impl From<&CachedLayout> for Layout {
                     let c = layout.char_mapping.get_c(*c);
                     let mut magic_key = MagicKey::new(&c.to_string());
                     for (leading, output) in mk.iter() {
-                        magic_key.add_rule(
+                        magic_key.steal_bigram(
                             &layout.char_mapping.get_c(*leading).to_string(),
                             &layout.char_mapping.get_c(*output).to_string(),
                         );

@@ -167,7 +167,7 @@ impl SFCache {
         self.keys.reverse_get(key) = EMPTY_KEY;
     }
 
-    pub fn add_rule(&mut self, magic: &MagicCache, affected_grams: &[DeltaGram]) {
+    pub fn steal_bigram(&mut self, magic: &MagicCache, affected_grams: &[DeltaGram]) {
         for gram in &cache.magic.affected_grams {
             match gram {
                 DeltaGram::Bigram(bg) => {

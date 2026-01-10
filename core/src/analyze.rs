@@ -186,8 +186,8 @@ impl Analyzer {
     //                 let u1 = cache.keys[*a as usize] as usize;
     //                 let u2 = cache.keys[*b as usize] as usize;
 
-    //                 cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
-    //                     + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap()
+    //                 cache.magic.get_bg_freq(u1 * mapping_len + u2).unwrap()
+    //                     + cache.magic.get_bg_freq(u2 * mapping_len + u1).unwrap()
     //             },
     //         )
     //         .sum()
@@ -208,8 +208,8 @@ impl Analyzer {
     //                 let u1 = cache.keys[*a as usize] as usize;
     //                 let u2 = cache.keys[*b as usize] as usize;
 
-    //                 cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
-    //                     + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap()
+    //                 cache.magic.get_sg_freq(u1 * mapping_len + u2).unwrap()
+    //                     + cache.magic.get_sg_freq(u2 * mapping_len + u1).unwrap()
     //             },
     //         )
     //         .sum()
