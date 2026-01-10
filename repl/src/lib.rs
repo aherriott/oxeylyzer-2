@@ -2,8 +2,7 @@ mod config;
 mod flags;
 
 use config::Config;
-use itertools::Itertools;
-use oxeylyzer_core::{cached_layout::BigramPair, prelude::*};
+use oxeylyzer_core::prelude::*;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::{
     collections::{HashMap, HashSet},
@@ -85,10 +84,10 @@ impl Repl {
 
     fn analyze(&self, name: &str) -> Result<()> {
         let layout = self.layout(name)?;
-        let stats = self.a.stats(layout);
+        // let stats = self.a.stats(layout);
 
-        let finger_use = stats.finger_use.map(|f| format!("{f:.2}")).join(", ");
-        let finger_sfbs = stats.finger_sfbs.map(|f| format!("{f:.2}")).join(", ");
+        // let finger_use = stats.finger_use.map(|f| format!("{f:.2}")).join(", ");
+        // let finger_sfbs = stats.finger_sfbs.map(|f| format!("{f:.2}")).join(", ");
 
         print!("{}", layout);
 
@@ -108,17 +107,17 @@ impl Repl {
     }
 
     fn rank(&self) {
-        self.layouts
-            .iter()
-            .map(|(n, l)| {
-                let s = self.a.score(l);
-                (n, s)
-            })
-            .sorted_by(|(_, a), (_, b)| a.cmp(b))
-            .for_each(|(n, s)| println!("{n:<15} {s}"));
+        // self.layouts
+        //     .iter()
+        //     .map(|(n, l)| {
+        //         let s = self.a.score(l);
+        //         (n, s)
+        //     })
+        //     .sorted_by(|(_, a), (_, b)| a.cmp(b))
+        //     .for_each(|(n, s)| println!("{n:<15} {s}"));
     }
 
-    fn generate(&self, name: &str, count: Option<usize>, pin_chars: Option<String>) -> Result<()> {
+    fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>) -> Result<()> {
         let layout = self.layout(name)?;
         let count = count.unwrap_or(10);
         let pins = match pin_chars {
@@ -171,121 +170,121 @@ impl Repl {
     }
 
     fn sfbs(&self, name: &str, count: Option<usize>) -> Result<()> {
-        let layout = self.layout(name)?;
-        let cache = self.a.cached_layout(layout.clone(), &[]);
-        let count = count.unwrap_or(10);
+        // let layout = self.layout(name)?;
+        // let cache = self.a.cached_layout(layout.clone(), &[]);
+        // let count = count.unwrap_or(10);
 
-        cache
-            .sfb
-            .weighted_sfb_indices
-            .all
-            .iter()
-            .flat_map(
-                |BigramPair {
-                     pair: PosPair(a, b),
-                     ..
-                 }| {
-                    let u1 = cache.keys[*a as usize];
-                    let u2 = cache.keys[*b as usize];
+        // cache
+        //     .sfb
+        //     .weighted_sfb_indices
+        //     .all
+        //     .iter()
+        //     .flat_map(
+        //         |BigramPair {
+        //              pair: PosPair(a, b),
+        //              ..
+        //          }| {
+        //             let u1 = cache.keys[*a as usize];
+        //             let u2 = cache.keys[*b as usize];
 
-                    let c1 = self.a.mapping().get_c(u1);
-                    let c2 = self.a.mapping().get_c(u2);
+        //             let c1 = self.a.mapping().get_c(u1);
+        //             let c2 = self.a.mapping().get_c(u2);
 
-                    let freq = self.a.data.get_bigram_u([u1, u2]) as f64 / self.a.data.bigram_total;
-                    let freq2 =
-                        self.a.data.get_bigram_u([u2, u1]) as f64 / self.a.data.bigram_total;
+        //             let freq = self.a.data.get_bigram_u([u1, u2]) as f64 / self.a.data.bigram_total;
+        //             let freq2 =
+        //                 self.a.data.get_bigram_u([u2, u1]) as f64 / self.a.data.bigram_total;
 
-                    [([c1, c2], freq), ([c2, c1], freq2)]
-                },
-            )
-            .sorted_by(|(_, f1), (_, f2)| f2.total_cmp(f1))
-            .take(count)
-            .for_each(|([c1, c2], f)| println!("{c1}{c2}: {f:.3}%"));
+        //             [([c1, c2], freq), ([c2, c1], freq2)]
+        //         },
+        //     )
+        //     .sorted_by(|(_, f1), (_, f2)| f2.total_cmp(f1))
+        //     .take(count)
+        //     .for_each(|([c1, c2], f)| println!("{c1}{c2}: {f:.3}%"));
 
         Ok(())
     }
 
     fn stretches(&self, name: &str, count: Option<usize>) -> Result<()> {
-        let layout = self.layout(name)?;
-        let cache = self.a.cached_layout(layout.clone(), &[]);
-        let count = count.unwrap_or(10);
+        // let layout = self.layout(name)?;
+        // let cache = self.a.cached_layout(layout.clone(), &[]);
+        // let count = count.unwrap_or(10);
 
-        cache
-            .stretch
-            .all_pairs
-            .iter()
-            .flat_map(
-                |BigramPair {
-                     pair: PosPair(a, b),
-                     dist,
-                 }| {
-                    let u1 = cache.keys[*a as usize];
-                    let u2 = cache.keys[*b as usize];
+        // cache
+        //     .stretch
+        //     .all_pairs
+        //     .iter()
+        //     .flat_map(
+        //         |BigramPair {
+        //              pair: PosPair(a, b),
+        //              dist,
+        //          }| {
+        //             let u1 = cache.keys[*a as usize];
+        //             let u2 = cache.keys[*b as usize];
 
-                    let c1 = self.a.mapping().get_c(u1);
-                    let c2 = self.a.mapping().get_c(u2);
+        //             let c1 = self.a.mapping().get_c(u1);
+        //             let c2 = self.a.mapping().get_c(u2);
 
-                    let f = self.a.data.get_bigram_u([u1, u2]) as f64 / self.a.data.bigram_total;
-                    let f2 = self.a.data.get_bigram_u([u2, u1]) as f64 / self.a.data.bigram_total;
-                    let dist = *dist as f64;
+        //             let f = self.a.data.get_bigram_u([u1, u2]) as f64 / self.a.data.bigram_total;
+        //             let f2 = self.a.data.get_bigram_u([u2, u1]) as f64 / self.a.data.bigram_total;
+        //             let dist = *dist as f64;
 
-                    [([c1, c2], f * dist), ([c2, c1], f2 * dist)]
-                },
-            )
-            .sorted_by(|(_, f1), (_, f2)| f2.total_cmp(f1))
-            .take(count)
-            .for_each(|([c1, c2], f)| println!("{c1}{c2}: {f:.3}"));
+        //             [([c1, c2], f * dist), ([c2, c1], f2 * dist)]
+        //         },
+        //     )
+        //     .sorted_by(|(_, f1), (_, f2)| f2.total_cmp(f1))
+        //     .take(count)
+        //     .for_each(|([c1, c2], f)| println!("{c1}{c2}: {f:.3}"));
 
         Ok(())
     }
 
     pub fn trigrams(&self, name: &str) -> Result<()> {
-        let layout = self.layout(name)?;
-        let trigram_stats = self.a.stats(layout).trigrams;
+        // let layout = self.layout(name)?;
+        // let trigram_stats = self.a.stats(layout).trigrams;
 
-        if trigram_stats.sft != 0.0 {
-            println!("Sft:          {:.3}%", trigram_stats.sft);
-        }
-        if trigram_stats.sfb != 0.0 {
-            println!("Sfb:          {:.3}%", trigram_stats.sfb);
-        }
-        if trigram_stats.inroll != 0.0 {
-            println!("Inroll:       {:.3}%", trigram_stats.inroll);
-        }
-        if trigram_stats.outroll != 0.0 {
-            println!("Outroll:      {:.3}%", trigram_stats.outroll);
-        }
-        if trigram_stats.alternate != 0.0 {
-            println!("Alternate:    {:.3}%", trigram_stats.alternate);
-        }
-        if trigram_stats.redirect != 0.0 {
-            println!("Redirect:     {:.3}%", trigram_stats.redirect);
-        }
-        if trigram_stats.onehandin != 0.0 {
-            println!("Onehand In:   {:.3}%", trigram_stats.onehandin);
-        }
-        if trigram_stats.onehandout != 0.0 {
-            println!("Onehand Out:  {:.3}%", trigram_stats.onehandout);
-        }
-        if trigram_stats.thumb != 0.0 {
-            println!("Thumb:        {:.3}%", trigram_stats.thumb);
-        }
-        if trigram_stats.invalid != 0.0 {
-            println!("Invalid:      {:.3}%", trigram_stats.invalid);
-        }
+        // if trigram_stats.sft != 0.0 {
+        //     println!("Sft:          {:.3}%", trigram_stats.sft);
+        // }
+        // if trigram_stats.sfb != 0.0 {
+        //     println!("Sfb:          {:.3}%", trigram_stats.sfb);
+        // }
+        // if trigram_stats.inroll != 0.0 {
+        //     println!("Inroll:       {:.3}%", trigram_stats.inroll);
+        // }
+        // if trigram_stats.outroll != 0.0 {
+        //     println!("Outroll:      {:.3}%", trigram_stats.outroll);
+        // }
+        // if trigram_stats.alternate != 0.0 {
+        //     println!("Alternate:    {:.3}%", trigram_stats.alternate);
+        // }
+        // if trigram_stats.redirect != 0.0 {
+        //     println!("Redirect:     {:.3}%", trigram_stats.redirect);
+        // }
+        // if trigram_stats.onehandin != 0.0 {
+        //     println!("Onehand In:   {:.3}%", trigram_stats.onehandin);
+        // }
+        // if trigram_stats.onehandout != 0.0 {
+        //     println!("Onehand Out:  {:.3}%", trigram_stats.onehandout);
+        // }
+        // if trigram_stats.thumb != 0.0 {
+        //     println!("Thumb:        {:.3}%", trigram_stats.thumb);
+        // }
+        // if trigram_stats.invalid != 0.0 {
+        //     println!("Invalid:      {:.3}%", trigram_stats.invalid);
+        // }
 
         Ok(())
     }
 
     pub fn similarity(&self, name: &str) -> Result<()> {
-        let layout = self.layout(name)?;
+        // let layout = self.layout(name)?;
 
-        self.layouts
-            .values()
-            .filter(|cmp| cmp.name.to_lowercase() != name.to_lowercase())
-            .map(|cmp| (cmp.name.as_str(), self.a.similarity(layout, cmp)))
-            .sorted_by(|(_, s1), (_, s2)| s2.cmp(s1))
-            .for_each(|(n, s)| println!("{n:<15} {:.3}", s as f64 / self.a.data.char_total));
+        // self.layouts
+        //     .values()
+        //     .filter(|cmp| cmp.name.to_lowercase() != name.to_lowercase())
+        //     .map(|cmp| (cmp.name.as_str(), self.a.similarity(layout, cmp)))
+        //     .sorted_by(|(_, s1), (_, s2)| s2.cmp(s1))
+        //     .for_each(|(n, s)| println!("{n:<15} {:.3}", s as f64 / self.a.data.char_total));
 
         Ok(())
     }

@@ -1,19 +1,13 @@
-use fxhash::FxHashMap as HashMap;
-use itertools::Itertools;
-use libdof::prelude::{Finger, PhysicalKey, Shape};
-use std::sync::Arc;
+use libdof::prelude::{Finger, PhysicalKey};
 
 use crate::{
     analyze::Neighbor,
-    analyzer_data::AnalyzerData,
-    char_mapping::CharMapping,
     layout::{Layout, MagicStealBigram, PosPair},
     magic::DeltaGram,
-    magic::MagicCache,
     same_finger::SFCache,
     stretches::StretchCache,
     types::{CacheKey, KeysCache},
-    weights::{FingerWeights, Weights},
+    weights::Weights,
     REPLACEMENT_CHAR,
 };
 
@@ -51,7 +45,7 @@ impl CachedLayout {
         let sfb = SFCache::new(&layout.fingers, &layout.keyboard, &keys);
         let stretch = StretchCache::new();
 
-        let cache = CachedLayout {
+        let mut cache = CachedLayout {
             keys,
             possible_neighbors,
             affected_grams,
@@ -74,8 +68,12 @@ impl CachedLayout {
         cache
     }
 
+    pub fn to_layout(&self) -> Layout {
+        self.original_layout.clone().expect("CachedLayout has no original layout")
+    }
+
     pub fn score(&self, weights: &Weights) -> i64 {
-        return self.sfb.score(weights) + self.stretch.score(weights);
+        self.sfb.score(weights) + self.stretch.score(weights)
     }
 
     // Calculates the score of a neighbor and applies it to the cache
@@ -95,14 +93,20 @@ impl CachedLayout {
         }
     }
 
+    // Copy state from another cache for the affected neighbor
+    pub fn copy_from(&mut self, other: &CachedLayout, _neighbor: Neighbor) {
+        // For now, just clone the relevant parts
+        self.keys = other.keys.clone();
+        self.sfb = other.sfb.clone();
+        self.stretch = other.stretch.clone();
+    }
+
     // Add a key at pos. Key should currently be empty
     pub fn add_key(&mut self, pos: usize, u: CacheKey) {
         debug_assert!(self.keys.get(pos) == REPLACEMENT_CHAR);
         self.keys.set(pos, u);
         self.sfb.add_key(pos, u);
         self.stretch.add_key(pos, u);
-
-        // update fingers (no-op, fingers are static)
     }
 
     // Remove a key at pos. Key should currently contain something
@@ -111,8 +115,6 @@ impl CachedLayout {
         self.keys.set(pos, REPLACEMENT_CHAR);
         self.sfb.remove_key(pos);
         self.stretch.remove_key(pos);
-
-        // update fingers
     }
 
     // Add a rule. Rule should currently be empty

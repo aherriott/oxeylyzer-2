@@ -1,7 +1,7 @@
 use crate::{analyze::Analyzer, layout::Layout};
 
 pub trait OptimizeLayout {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64);
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64);
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ pub enum OptimizationMethod {
 }
 
 impl OptimizationMethod {
-    pub fn optimize(&self, a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    pub fn optimize(&self, a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         use OptimizationMethod as OM;
 
         match self {
@@ -51,37 +51,37 @@ impl OptimizationMethod {
 }
 
 impl OptimizeLayout for Greedy {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
-        a.greedy_improve(layout, &[])
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
+        a.greedy_improve(&layout, &[])
     }
 }
 
 impl OptimizeLayout for GreedyDepth2 {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         a.greedy_depth2_improve(layout, &[])
     }
 }
 
 impl OptimizeLayout for GreedyDepth3 {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         a.greedy_depth3_improve(layout, &[])
     }
 }
 
 impl OptimizeLayout for GreedyDepth4 {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         a.optimize_depth4(layout, &[])
     }
 }
 
 impl OptimizeLayout for GreedyAlternative {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         a.always_better_swap(layout, &[])
     }
 }
 
 impl OptimizeLayout for GreedyAlternativeD3 {
-    fn optimize(a: &Analyzer, layout: Layout) -> (Layout, i64) {
+    fn optimize(a: &mut Analyzer, layout: Layout) -> (Layout, i64) {
         a.alternative_d3(layout, &[])
     }
 }

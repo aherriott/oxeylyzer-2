@@ -4,7 +4,7 @@ use libdof::prelude::{Dof, Finger, Keyboard, PhysicalKey, Shape};
 use nanorand::{tls_rng, Rng as _};
 
 use crate::{
-    cached_layout::CachedLayout, types::CacheKey, Result, MAGIC_CHARS, REPEAT_KEY,
+    types::CacheKey, Result, MAGIC_CHARS, REPEAT_KEY,
     REPLACEMENT_CHAR, SHIFT_CHAR, SPACE_CHAR,
 };
 

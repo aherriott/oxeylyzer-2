@@ -78,10 +78,11 @@ impl MagicCache {
         let bg_freq = data.bigrams.clone();
         let sg_freq = data.skipgrams.clone();
         let tg_freq = data.trigrams.clone();
-        let mut magic = MagicCache {
+        let magic = MagicCache {
             bg_freq,
             sg_freq,
             tg_freq,
+            rules: HashMap::default(),
         };
 
         // First, flesh out possible_neighbors with magic rules. steal_bigram will update as needed

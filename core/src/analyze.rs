@@ -1,22 +1,13 @@
-use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
-use itertools::Itertools;
-use libdof::{
-    dofinitions::Finger,
-    magic::MagicKey,
-    prelude::{PhysicalKey, Shape},
-};
+use libdof::dofinitions::Finger;
 use nanorand::{Rng, WyRand};
-use std::sync::Arc;
 
-use crate::cached_layout;
 use crate::{
-    analyzer_data::AnalyzerData,
-    cached_layout::*,
+    cached_layout::CachedLayout,
     data::Data,
     layout::*,
-    trigrams::TRIGRAMS,
-    weights::{FingerWeights, Weights},
+    analyzer_data::AnalyzerData,
+    weights::Weights,
 };
 
 // The difference between two neighboring layouts.
@@ -29,6 +20,15 @@ pub enum Neighbor {
 impl Neighbor {
     pub fn default() -> Self {
         Neighbor::KeySwap(PosPair(0, 0))
+    }
+
+    pub fn revert(&self) -> Self {
+        match self {
+            // KeySwap is its own inverse
+            Neighbor::KeySwap(pair) => Neighbor::KeySwap(*pair),
+            // TODO: MagicStealBigram revert would need the old output - for now just return self
+            Neighbor::MagicStealBigram(msb) => Neighbor::MagicStealBigram(*msb),
+        }
     }
 }
 
@@ -61,13 +61,11 @@ impl Analyzer {
         }
     }
 
-    pub fn use_layout(&mut self, layout: &Layout, pins: &[usize]) {
+    pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
+        // TODO: use pins
         self.current_cache = Some(CachedLayout::new(
-            &self.data,
             &layout.keyboard,
-            &self.data.mapping,
             layout,
-            &self.weights,
         ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
@@ -77,7 +75,7 @@ impl Analyzer {
         self.current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .into()
+            .to_layout()
     }
 
     pub fn score(&self) -> i64 {
@@ -139,8 +137,7 @@ impl Analyzer {
     }
 
     // Calculates the score of a neighbor without updating the cache
-    pub fn test_neighbor(&self, neighbor: Neighbor) -> i64 {
-        // Copy the current cache to the working cache
+    pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         let working = self
             .working_cache
             .as_ref()
@@ -153,15 +150,31 @@ impl Analyzer {
             working, current,
             "Working cache out of sync with current cache"
         );
+
         working.apply_neighbor(neighbor);
         let score = working.score();
         working.copy_from(current, neighbor);
+        score
     }
 
     // Calculates the score of a neighbor without updating the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        // Copy the current cache to the working cache
-        return Self::apply_neighbor_to_cache(neighbor);
+        let working = self
+            .working_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+        let current = self
+            .current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set");
+        debug_assert_eq!(
+            working, current,
+            "Working cache out of sync with current cache"
+        );
+
+        current.apply_neighbor(neighbor);
+        working.copy_from(current, neighbor);
+        current.score()
     }
 
     /*
@@ -386,7 +399,8 @@ mod tests {
 
     use super::*;
 
-    fn analyzer_layout(layout_name: &str) -> (Analyzer, Layout) {
+    // TODO
+    fn _analyzer_layout(layout_name: &str) -> (Analyzer, Layout) {
         let data = Data::load("../data/english.json").expect("this should exist");
 
         let weights = dummy_weights();

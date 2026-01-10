@@ -8,23 +8,24 @@ use crate::char_mapping::EMPTY_KEY;
 use crate::magic::{DeltaGram, MagicCache};
 use crate::stats::Stats;
 use crate::types::CacheKey;
-use crate::weights::{FingerWeights, Weights};
+use crate::weights::Weights;
 use libdof::dofinitions::Finger;
 use libdof::prelude::PhysicalKey;
 use std::fmt::{self, Debug};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct SfBigramPair {
     pub other_pos: usize,
     pub dist: i64,
+    pub finger: usize, // finger index for this position
 }
 
 impl Debug for SfBigramPair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SfBigramPair {{ other_pos: {}, dist: {} }}",
-            self.other_pos, self.dist
+            "SfBigramPair {{ other_pos: {}, dist: {}, finger: {} }}",
+            self.other_pos, self.dist, self.finger
         )
     }
 }
@@ -54,9 +55,10 @@ impl SFCache {
             keyboard.len(),
             "finger len is not the same as keyboard len: "
         );
-        let mut sfb_per_finger = Box::new([0i64; 10]);
-        let mut sfs_per_finger = Box::new([0i64; 10]);
-        let mut use_per_finger = Box::new([0i64; 10]);
+        let sfb_per_finger = Box::new([0i64; 10]);
+        let sfs_per_finger = Box::new([0i64; 10]);
+        let use_per_finger = Box::new([0i64; 10]);
+
         // compute distances
         let mut sfbg_dist_per_key = Vec::with_capacity(fingers.len());
         for (i, (finger1, _phys1)) in fingers.iter().zip(keyboard).enumerate() {
@@ -65,7 +67,11 @@ impl SFCache {
                 if finger1 == finger2 && i != j {
                     // distance function placeholder
                     let dist = 0i64; // TODO: compute actual distance
-                    pairs.push(SfBigramPair { other_pos: j, dist });
+                    pairs.push(SfBigramPair {
+                        other_pos: j,
+                        dist,
+                        finger: *finger1 as usize,
+                    });
                 }
             }
             sfbg_dist_per_key.push(pairs);
@@ -79,20 +85,18 @@ impl SFCache {
             total_bg: 0,
             total_sg: 0,
             sfbg_dist_per_key,
+            fingers: finger_indices,
         }
-    }
-
-    pub fn initialize(&mut self, _fingers: &[Finger], _keyboard: &[PhysicalKey]) {
-        // stub
     }
 
     pub fn score(&self, weights: &Weights) -> i64 {
         // TODO: normalize
-        Fingers::FINGERS
+        Finger::FINGERS
             .iter()
             .map(|f| -> i64 {
-                self.sfb_per_finger[f] * weights.finger[f] * weights.sfb
-                    + self.sfs_per_finger[f] * weights.finger[f] * weights.sfs
+                let fi = *f as usize;
+                self.sfb_per_finger[fi] * weights.fingers.get(*f) * weights.sfbs
+                    + self.sfs_per_finger[fi] * weights.fingers.get(*f) * weights.sfs
             })
             .sum()
     }

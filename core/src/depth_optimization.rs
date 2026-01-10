@@ -1,6 +1,5 @@
 use crate::{
     analyze::{Analyzer, Neighbor},
-    cached_layout::CachedLayout,
     layout::Layout,
 };
 
@@ -66,20 +65,20 @@ impl Analyzer {
         (self.layout(), best_score)
     }
 
-    pub fn greedy_depth2_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+    pub fn greedy_depth2_improve(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         self.greedy_improve_depth_n(layout, pins, 2)
     }
 
-    pub fn greedy_depth4_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+    pub fn greedy_depth4_improve(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         self.greedy_improve_depth_n(layout, pins, 4)
     }
 
-    pub fn greedy_depth3_improve(&self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
+    pub fn greedy_depth3_improve(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         self.greedy_improve_depth_n(layout, pins, 3)
     }
 
     fn greedy_improve_depth_n(
-        &self,
+        &mut self,
         layout: Layout,
         pins: &[usize],
         depth: usize,
@@ -98,7 +97,7 @@ impl Analyzer {
     }
 
     fn best_neighbor_recursive(
-        &self,
+        &mut self,
         depth: usize,
         diffs: &mut Vec<Neighbor>,
         cur_best: &mut i64,

@@ -31,7 +31,6 @@ impl StretchCache {
         keys: &[CacheKey],
         fingers: &[Finger],
         keyboard: &[PhysicalKey],
-        weights: &Weights,
         magic: &MagicCache,
     ) -> Self {
         assert!(
@@ -73,9 +72,7 @@ impl StretchCache {
                     dist: (stretch * 100.0) as i64,
                 })
             })
-            .collect::<Box<[_]>>();
-
-        // println!("pair count: {}", all_pairs.len());
+            .collect();
 
         let per_keypair = (0..(fingers.len() as CacheKey))
             .cartesian_product(0..(fingers.len() as CacheKey))
