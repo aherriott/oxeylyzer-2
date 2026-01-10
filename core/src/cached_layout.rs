@@ -11,6 +11,45 @@ use crate::{
     REPLACEMENT_CHAR,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeltaBigram {
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub p_a: CachePos,
+    pub p_b: CachePos,
+    pub old_freq: i64,
+    pub new_freq: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeltaSkipgram {
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub p_a: CachePos,
+    pub p_b: CachePos,
+    pub old_freq: i64,
+    pub new_freq: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeltaTrigram {
+    pub a: CacheKey,
+    pub b: CacheKey,
+    pub c: CacheKey,
+    pub p_a: CachePos,
+    pub p_b: CachePos,
+    pub p_c: CachePos,
+    pub old_freq: i64,
+    pub new_freq: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeltaGram {
+    Bigram(DeltaBigram),
+    Skipgram(DeltaSkipgram),
+    Trigram(DeltaTrigram),
+}
+
 // CachedLayout contains the minimum mutable data used to define a layout and store scoring. Designed to copy quickly and without allocation.
 // It is wrapped by Analyzer
 #[derive(Debug, Clone, Default, PartialEq)]

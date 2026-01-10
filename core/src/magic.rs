@@ -13,38 +13,6 @@ use crate::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeltaBigram {
-    pub a: CacheKey,
-    pub b: CacheKey,
-    pub old_freq: i64,
-    pub new_freq: i64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeltaSkipgram {
-    pub a: CacheKey,
-    pub b: CacheKey,
-    pub old_freq: i64,
-    pub new_freq: i64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeltaTrigram {
-    pub a: CacheKey,
-    pub b: CacheKey,
-    pub c: CacheKey,
-    pub old_freq: i64,
-    pub new_freq: i64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DeltaGram {
-    Bigram(DeltaBigram),
-    Skipgram(DeltaSkipgram),
-    Trigram(DeltaTrigram),
-}
-
 // For now, only "simple" magic rules are supported. One leader key -> one output key.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
