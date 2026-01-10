@@ -149,20 +149,12 @@ impl Repl {
 
         for i in 0..count {
             let random_layout = layout.random_with_pins(&pins);
-            self.a.use_layout(&random_layout, &pins);
 
-            // Greedy hill-climb using best_neighbor
-            loop {
-                match self.a.best_neighbor() {
-                    Some((neighbor, _score)) => {
-                        self.a.apply_neighbor(neighbor);
-                    }
-                    None => break,
-                }
-            }
+            // Simulated annealing followed by greedy depth-3 optimization
+            let (annealed_layout, _) =
+                self.a.annealing_improve(random_layout, &pins, 10.0, 1E-5, 10_000_000);
+            let (final_layout, final_score) = self.a.alternative_d3(annealed_layout, &pins);
 
-            let final_layout = self.a.layout();
-            let final_score = self.a.score();
             results.push((final_layout, final_score));
 
             print!("\rgenerated {}/{}", i + 1, count);
