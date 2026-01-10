@@ -20,6 +20,9 @@ pub mod trigrams;
 pub mod types;
 pub mod weights;
 
+#[cfg(test)]
+mod cache_tests;
+
 pub mod prelude {
     pub use super::{
         analyze::Analyzer,

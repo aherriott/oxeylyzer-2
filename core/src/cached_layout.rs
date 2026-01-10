@@ -113,6 +113,9 @@ impl CachedLayout {
         layout: &Layout,
         char_mapping: CharMapping,
         num_keys: usize,
+        bigrams: &[Vec<i64>],
+        skipgrams: &[Vec<i64>],
+        trigrams: &[Vec<Vec<i64>>],
     ) -> Self {
         let len = layout.keyboard.len();
         let keyboard = &layout.keyboard;
@@ -126,7 +129,8 @@ impl CachedLayout {
         let dist = DistCache::new(keyboard, fingers);
         let sfb = SFCache::new(fingers, keyboard);
         let stretch = StretchCache::new(keyboard, fingers);
-        let magic = MagicCache::default();
+        let mut magic = MagicCache::new(num_keys);
+        magic.init_from_data(bigrams, skipgrams, trigrams);
 
         // Build magic rules from layout.magic
         let mut magic_rules = Vec::new();

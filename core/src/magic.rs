@@ -214,132 +214,121 @@ impl MagicCache {
 
 
 #[cfg(test)]
-mod test {
-    // TODO: fix these tests after refactoring is complete
-}
+mod tests {
+    use super::*;
+    use crate::cached_layout::DeltaGram;
 
-#[test]
-fn test_magic_bigram_frequency_basic() {
-    // Test basic magic key frequency calculation
-    let (analyzer, layout) = analyzer_layout("test/magic");
-    let cache = analyzer.cached_layout(layout, &[]);
+    #[test]
+    fn magic_cache_new() {
+        let cache = MagicCache::new(10);
+        assert_eq!(cache.bg_freq.len(), 10);
+        assert_eq!(cache.sg_freq.len(), 10);
+        assert_eq!(cache.tg_freq.len(), 10);
+    }
 
-    // Test that 'a' -> 'b' bigram returns 0 (stolen by magic)
-    let a = cache.char_mapping.get_u('a');
-    let b = cache.char_mapping.get_u('b');
+    #[test]
+    fn magic_cache_get_freq_empty() {
+        let cache = MagicCache::new(10);
+        assert_eq!(cache.get_bg_freq(0, 1), 0);
+        assert_eq!(cache.get_sg_freq(0, 1), 0);
+        assert_eq!(cache.get_tg_freq(0, 1, 2), 0);
+    }
 
-    let freq = analyzer.get_bigram_frequency_magic(&cache, a, b);
-    assert_eq!(freq, 0, "a->b should be stolen by magic key");
+    #[test]
+    fn magic_cache_init_from_data() {
+        let mut cache = MagicCache::new(3);
+        let bigrams = vec![
+            vec![0, 100, 200],
+            vec![300, 0, 400],
+            vec![500, 600, 0],
+        ];
+        let skipgrams = vec![
+            vec![0, 10, 20],
+            vec![30, 0, 40],
+            vec![50, 60, 0],
+        ];
+        let trigrams = vec![
+            vec![vec![0, 1, 2], vec![3, 4, 5], vec![6, 7, 8]],
+            vec![vec![9, 10, 11], vec![12, 13, 14], vec![15, 16, 17]],
+            vec![vec![18, 19, 20], vec![21, 22, 23], vec![24, 25, 26]],
+        ];
 
-    // Test that 'a' -> 'z' bigram is unaffected
-    let z = cache.char_mapping.get_u('z');
+        cache.init_from_data(&bigrams, &skipgrams, &trigrams);
 
-    let freq = analyzer.get_bigram_frequency_magic(&cache, a, z);
-    assert_ne!(freq, 0, "a->z should be unaffected");
+        assert_eq!(cache.get_bg_freq(0, 1), 100);
+        assert_eq!(cache.get_bg_freq(1, 2), 400);
+        assert_eq!(cache.get_sg_freq(2, 1), 60);
+        assert_eq!(cache.get_tg_freq(1, 2, 0), 15);
+    }
 
-    // Todo: test that the mag -> 'z' bigram is zero
-    // Todo: test that 'a' -> mag has the stolen frequency
-    // Todo: test that 'z' -> mag is zero
-}
+    #[test]
+    fn magic_cache_steal_bigram_basic() {
+        let mut cache = MagicCache::new(4);
+        // Setup: a=0, b=1, m=2, c=3
+        // Bigram a->b = 100
+        cache.bg_freq[0][1] = 100;
+        cache.bg_freq[0][2] = 0; // a->m initially 0
 
-#[test]
-fn test_magic_bigram_multiple_keys() {
-    // Test priority ordering when multiple magic keys have same rules
-    // test/magic has two magic keys. The first has rule 'a'->'b', the second has 'a'->'b' and 'b'->'c'
-    let (analyzer, _) = analyzer_layout("test/magic");
+        let key_positions: Vec<Option<usize>> = vec![Some(0), Some(1), Some(2), Some(3)];
+        let mut affected = Vec::new();
 
-    // Todo: test that 'a' -> mag returns bg(a,b)
-    // Todo: test that 'a' -> mag2 returns 0
-    // Todo: test that 'b' -> mag2 returns bg(b,c)
-}
+        // Steal bigram a->b with magic key m
+        cache.steal_bigram(0, 1, 2, &key_positions, 4, &mut affected);
 
-#[test]
-fn test_magic_skipgram_frequency() {
-    let (analyzer, layout) = analyzer_layout("test/magic");
-    let cache = analyzer.cached_layout(layout, &[]);
+        // a->b should now be 0
+        assert_eq!(cache.get_bg_freq(0, 1), 0, "a->b should be stolen");
+        // a->m should now have the stolen frequency
+        assert_eq!(cache.get_bg_freq(0, 2), 100, "a->m should have stolen frequency");
+    }
 
-    // Test skipgram calculation with magic keys
-    let a = cache.char_mapping.get_u('a');
-    let b = cache.char_mapping.get_u('b');
+    #[test]
+    fn magic_cache_steal_records_affected_grams() {
+        let mut cache = MagicCache::new(4);
+        cache.bg_freq[0][1] = 100;
 
-    let freq = analyzer.get_skipgram_frequency_magic(&cache, a, b);
+        let key_positions: Vec<Option<usize>> = vec![Some(0), Some(1), Some(2), Some(3)];
+        let mut affected = Vec::new();
 
-    // Should be base skipgram minus any stolen by magic rules
-    let base = analyzer.data.get_skipgram_u([a, b]);
-    assert!(
-        freq <= base,
-        "Magic keys can only reduce skipgram frequency"
-    );
-}
+        cache.steal_bigram(0, 1, 2, &key_positions, 4, &mut affected);
 
-#[test]
-fn test_magic_trigram_frequency() {
-    let (analyzer, layout) = analyzer_layout("test/magic");
-    let cache = analyzer.cached_layout(layout, &[]);
+        // Should have recorded at least the two bigram changes (a->b and a->m)
+        let bigram_count = affected.iter().filter(|g| matches!(g, DeltaGram::Bigram(_))).count();
+        assert!(bigram_count >= 2, "Should record at least 2 bigram changes, got {bigram_count}");
+    }
 
-    // Test trigram calculation with magic keys
-    let a = cache.char_mapping.get_u('a');
-    let b = cache.char_mapping.get_u('b');
-    let c = cache.char_mapping.get_u('c');
+    #[test]
+    fn magic_cache_copy_from_selective() {
+        let mut cache1 = MagicCache::new(4);
+        let mut cache2 = MagicCache::new(4);
 
-    let freq = analyzer.get_trigram_frequency_magic(&cache, a, b, c);
+        // Setup cache1 with some data
+        cache1.bg_freq[0][1] = 100;
+        cache1.bg_freq[1][2] = 200;
+        cache1.sg_freq[0][2] = 50;
 
-    // Trigram should either be 0 (stolen) or base frequency
-    let base = analyzer.data.get_trigram_u([a, b, c]);
-    assert!(
-        freq == 0 || freq == base,
-        "Trigram should be either stolen (0) or not ({base}), got {freq}"
-    );
-}
+        // Setup cache2 differently
+        cache2.bg_freq[0][1] = 999;
+        cache2.bg_freq[1][2] = 999;
+        cache2.sg_freq[0][2] = 999;
 
-#[test]
-fn test_magic_frequency_symmetry() {
-    // Test that changing a rule and reverting it preserves frequencies
-    let (analyzer, layout) = analyzer_layout("test/magic");
-    let mut cache = analyzer.cached_layout(layout, &[]);
+        // Create affected grams that only include [0][1] bigram
+        let affected = vec![
+            DeltaGram::Bigram(DeltaBigram {
+                p_a: 0,
+                p_b: 1,
+                old_freq: 999,
+                new_freq: 100,
+            }),
+        ];
 
-    // Extract values first to avoid borrow conflicts
-    let (magic_key, leader, output) = if let Some((mk, rules)) = cache.magic.rules.iter().next() {
-        if let Some((&l, &o)) = rules.iter().next() {
-            (*mk, l, o)
-        } else {
-            return; // No rules
-        }
-    } else {
-        return; // No magic keys
-    };
+        // Copy only affected entries from cache1 to cache2
+        cache2.copy_from(&cache1, &affected, |pos| pos);
 
-    let a = cache.char_mapping.get_u('t');
-    let b = cache.char_mapping.get_u('e');
-
-    // Get initial frequency
-    let initial_bg = analyzer.get_bigram_frequency_magic(&cache, a, b);
-    let initial_sg = analyzer.get_skipgram_frequency_magic(&cache, a, b);
-
-    // Change the rule
-    let new_output = cache.char_mapping.get_u('x');
-    cache
-        .magic
-        .rules
-        .get_mut(&magic_key)
-        .unwrap()
-        .insert(leader, new_output);
-
-    // Revert the rule
-    cache
-        .magic
-        .rules
-        .get_mut(&magic_key)
-        .unwrap()
-        .insert(leader, output);
-
-    // Frequencies should be restored
-    let final_bg = analyzer.get_bigram_frequency_magic(&cache, a, b);
-    let final_sg = analyzer.get_skipgram_frequency_magic(&cache, a, b);
-
-    assert_eq!(initial_bg, final_bg, "Bigram frequency should be restored");
-    assert_eq!(
-        initial_sg, final_sg,
-        "Skipgram frequency should be restored"
-    );
+        // [0][1] should be copied
+        assert_eq!(cache2.get_bg_freq(0, 1), 100, "Affected bigram should be copied");
+        // [1][2] should NOT be copied (not in affected)
+        assert_eq!(cache2.get_bg_freq(1, 2), 999, "Unaffected bigram should not be copied");
+        // skipgram should NOT be copied
+        assert_eq!(cache2.get_sg_freq(0, 2), 999, "Unaffected skipgram should not be copied");
+    }
 }

@@ -149,16 +149,17 @@ mod tests {
     fn test_annealing_improve() {
         let data = Data::load("../data/english.json").expect("this should exist");
         let weights = dummy_weights();
-        let analyzer = Analyzer::new(data, weights);
-        let layout = Layout::load(format!("../layouts/sturdy.dof"))
+        let mut analyzer = Analyzer::new(data, weights);
+        let layout = Layout::load(format!("../layouts/qwerty.dof"))
             .expect("this layout is valid and exists, soooo");
         let pins = vec![];
-        // Tempertaures set to exploit to speed up the test
+        // Temperatures set to exploit to speed up the test
         let initial_temperature = 1E-4;
         let final_temperature = 1E-7;
         let max_iterations = 10_000;
 
-        let qwerty_score = analyzer.score(&layout);
+        analyzer.use_layout(&layout, &pins);
+        let initial_score = analyzer.score();
         let (new_layout, score) = analyzer.annealing_improve(
             layout,
             &pins,
@@ -166,9 +167,10 @@ mod tests {
             final_temperature,
             max_iterations,
         );
-        assert_eq!(score, analyzer.score(&new_layout));
+        analyzer.use_layout(&new_layout, &pins);
+        assert_eq!(score, analyzer.score());
 
-        // After 1000 iterations, this better have made it better
-        assert!(score > qwerty_score);
+        // After 10000 iterations, this better have made it better
+        assert!(score > initial_score);
     }
 }

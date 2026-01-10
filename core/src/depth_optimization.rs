@@ -157,36 +157,41 @@ mod tests {
     }
 
     #[test]
-    fn cache_intact() {
-        let (analyzer, layout) = analyzer_layout("rstn-oxey");
+    fn cache_intact_after_recursive_search() {
+        let (mut analyzer, layout) = analyzer_layout("rstn-oxey");
         analyzer.use_layout(&layout, &[]);
-        let reference = cache.clone();
+        let reference_score = analyzer.score();
         let mut diffs = vec![Neighbor::default(); 4];
         let mut cur_best = i64::MIN;
 
+        // After recursive search, cache should be intact (score unchanged)
         analyzer.best_neighbor_recursive(1, &mut diffs, &mut cur_best);
-        assert_eq!(cache, reference);
+        assert_eq!(analyzer.score(), reference_score, "Cache should be intact after depth-1 search");
 
-        analyzer.best_neighbor_recursive(&mut cache, 2, &mut diffs, &mut cur_best, &neighbors);
-        assert_eq!(cache, reference);
+        cur_best = i64::MIN;
+        analyzer.best_neighbor_recursive(2, &mut diffs, &mut cur_best);
+        assert_eq!(analyzer.score(), reference_score, "Cache should be intact after depth-2 search");
 
         // TODO: This test is too slow
-        // analyzer.best_neighbor_recursive(&mut cache, 3, &mut diffs, &mut cur_best);
-        //assert_eq!(cache, reference);
+        // cur_best = i64::MIN;
+        // analyzer.best_neighbor_recursive(3, &mut diffs, &mut cur_best);
+        // assert_eq!(analyzer.score(), reference_score);
     }
 
     #[test]
-    fn strectch_cache_integrity() {
-        let (analyzer, layout) = analyzer_layout("rstn-oxey");
-        let mut cache = analyzer.cached_layout(layout, &[]);
+    fn stretch_cache_integrity() {
+        let (mut analyzer, layout) = analyzer_layout("rstn-oxey");
+        analyzer.use_layout(&layout, &[]);
 
-        println!("stretches before swap: {}", analyzer.stretches(&cache));
+        let stats_before = analyzer.stats();
+        println!("stretches before swap: {}", stats_before.stretches);
 
-        match analyzer.best_neighbor(&mut cache) {
-            Some((pair, score)) => {
-                println!("pair: {:?}, score: {}", pair, score);
-                analyzer.apply_neighbor(&mut cache, pair);
-                println!("stretches after swap: {}", analyzer.stretches(&cache));
+        match analyzer.best_neighbor() {
+            Some((neighbor, score)) => {
+                println!("neighbor: {:?}, score: {}", neighbor, score);
+                analyzer.apply_neighbor(neighbor);
+                let stats_after = analyzer.stats();
+                println!("stretches after swap: {}", stats_after.stretches);
             }
             None => println!("No improvement found"),
         }

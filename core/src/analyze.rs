@@ -72,6 +72,9 @@ impl Analyzer {
             layout,
             char_mapping,
             num_keys,
+            &self.data.bigrams,
+            &self.data.skipgrams,
+            &self.data.trigrams,
         ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
