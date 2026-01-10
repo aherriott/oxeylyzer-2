@@ -13,7 +13,7 @@ use libdof::dofinitions::Finger;
 use libdof::prelude::PhysicalKey;
 use std::fmt::{self, Debug};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct SfBigramPair {
     pub other_pos: usize,
     pub dist: i64,
@@ -86,108 +86,28 @@ impl SFCache {
         // stub
     }
 
-    pub fn score(&self, weights: &Weights) -> i64 {
+    pub fn score(&self, _weights: &Weights) -> i64 {
         // TODO: normalize
-        Fingers::FINGERS
-            .iter()
-            .map(|f| -> i64 {
-                self.sfb_per_finger[f] * weights.finger[f] * weights.sfb
-                    + self.sfs_per_finger[f] * weights.finger[f] * weights.sfs
-            })
-            .sum()
+        0
     }
 
     pub fn stats(&self, _stats: &mut Stats) {
         // TODO
     }
 
-    pub fn add_key(
-        &mut self,
-        keys: &Box<[CacheKey]>,
-        magic: &MagicCache,
-        pos: usize,
-        key: CacheKey,
-    ) {
-        let sfb = self.sfbg_dist_per_key[pos]
-            .iter()
-            .map(|sfbg: SfBigramPair| -> i64 {
-                let u1 = keys[pos];
-                let u2 = keys[sfbg.other_pos];
-
-                (magic.get_bg_freq(u1, u2) + magic.get_bg_freq(u2, u1)) * sfbg.dist
-            })
-            .sum();
-        self.sfb_per_finger[fingers[pos]] += sfb;
-        // TODO: sfb count, normalizing
-
-        let sfs = self.sfbg_dist_per_key[pos]
-            .iter()
-            .map(|sfbg: SfBigramPair| -> i64 {
-                let u1 = keys[pos];
-                let u2 = keys[sfbg.other_pos];
-
-                (magic.get_sg_freq(u1, u2) + magic.get_sg_freq(u2, u1)) * sfbg.dist
-            })
-            .sum();
-        self.sfs_per_finger[fingers[pos]] += sfs;
-
-        self.keys.reverse_get(key) = pos;
+    pub fn add_key(&mut self, _pos: usize, _key: CacheKey) {
+        // stub
     }
 
-    pub fn remove_key(
-        &mut self,
-        keys: &Box<[CacheKey]>,
-        magic: &MagicCache,
-        pos: usize,
-        key: CacheKey,
-    ) {
-        let sfb = self.sfbg_dist_per_key[pos]
-            .iter()
-            .map(|sfbg: SfBigramPair| -> i64 {
-                let u1 = keys[pos];
-                let u2 = keys[sfbg.other_pos];
-
-                (magic.get_bg_freq(u1, u2) + magic.get_bg_freq(u2, u1)) * sfbg.dist
-            })
-            .sum();
-        self.sfb_per_finger[fingers[pos]] -= sfb;
-        // TODO: sfb count, normalizing
-
-        let sfs = self.sfbg_dist_per_key[pos]
-            .iter()
-            .map(|sfbg: SfBigramPair| -> i64 {
-                let u1 = keys[pos];
-                let u2 = keys[sfbg.other_pos];
-
-                (magic.get_sg_freq(u1, u2) + magic.get_sg_freq(u2, u1)) * sfbg.dist
-            })
-            .sum();
-        self.sfs_per_finger[fingers[pos]] -= sfs;
-
-        self.keys.reverse_get(key) = EMPTY_KEY;
+    pub fn remove_key(&mut self, _pos: usize) {
+        // stub
     }
 
-    pub fn add_rule(&mut self, magic: &MagicCache, affected_grams: &[DeltaGram]) {
-        for gram in &cache.magic.affected_grams {
-            match gram {
-                DeltaGram::Bigram(bg) => {
-                    self.sfbg_dist_per_key[self.keys.reverse_get(bg.a)]
-                        .iter_mut()
-                        .filter(|(pos, dist)| (self.keys.reverse_get(bg.b) == pos)) // Is SF
-                        .map(|(pos, dist)| {
-                            self.sfb_per_finger(fingers[pos]) += (bg.new - bg.old) * dist;
-                        })
-                }
-                DeltaGram::Skipgram(bg) => {
-                    self.sfbg_dist_per_key[self.keys.reverse_get(bg.a)]
-                        .iter_mut()
-                        .filter(|(pos, dist)| (self.keys.reverse_get(bg.b) == pos)) // Is SF
-                        .map(|(pos, dist)| {
-                            self.sfs_per_finger(fingers[pos]) += (bg.new - bg.old) * dist;
-                        })
-                }
-                _ => { /* Trigrams are not part of SFBs */ }
-            }
-        }
+    pub fn steal_bigram(&mut self, _affected_grams: &[DeltaGram]) {
+        // stub
+    }
+
+    pub fn add_rule(&mut self, _magic: &MagicCache, _affected_grams: &[DeltaGram]) {
+        // stub
     }
 }

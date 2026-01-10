@@ -41,6 +41,9 @@ pub struct Analyzer {
     analyze_trigrams: bool,
     current_cache: Option<CachedLayout>,
     working_cache: Option<CachedLayout>,
+    current_keyboard: Option<Box<[PhysicalKey]>>,
+    current_shape: Option<Shape>,
+    current_name: Option<String>,
 }
 
 impl Analyzer {
@@ -58,6 +61,9 @@ impl Analyzer {
             analyze_trigrams,
             current_cache: None,
             working_cache: None,
+            current_keyboard: None,
+            current_shape: None,
+            current_name: None,
         }
     }
 
@@ -71,6 +77,9 @@ impl Analyzer {
         ));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
+        self.current_keyboard = Some(layout.keyboard.clone());
+        self.current_shape = Some(layout.shape.clone());
+        self.current_name = Some(layout.name.clone());
     }
 
     pub fn layout(&self) -> Layout {
@@ -141,27 +150,34 @@ impl Analyzer {
     // Calculates the score of a neighbor without updating the cache
     pub fn test_neighbor(&self, neighbor: Neighbor) -> i64 {
         // Copy the current cache to the working cache
-        let working = self
+        let mut working = self
             .working_cache
             .as_ref()
-            .expect("Analyzer has no Layout set");
+            .expect("Analyzer has no Layout set")
+            .clone();
         let current = self
             .current_cache
             .as_ref()
             .expect("Analyzer has no Layout set");
         debug_assert_eq!(
-            working, current,
+            &working, current,
             "Working cache out of sync with current cache"
         );
         working.apply_neighbor(neighbor);
-        let score = working.score();
-        working.copy_from(current, neighbor);
+        let score = working.score(&self.weights);
+        // No need to copy back because we used a clone
+        score
     }
 
     // Calculates the score of a neighbor without updating the cache
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        // Copy the current cache to the working cache
-        return Self::apply_neighbor_to_cache(neighbor);
+        // Apply neighbor to current cache
+        let current = self
+            .current_cache
+            .as_mut()
+            .expect("Analyzer has no Layout set");
+        current.apply_neighbor(neighbor);
+        current.score(&self.weights)
     }
 
     /*
@@ -358,26 +374,26 @@ impl Analyzer {
     }
 }
 
-impl std::fmt::Display for Analyzer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.keys.iter().map(|&u| self.char_mapping.get_c(u));
-
-        for l in self.shape.inner().iter() {
-            let mut i = 0;
-            for c in iter.by_ref() {
-                write!(f, "{c} ")?;
-                i += 1;
-
-                if *l == i {
-                    break;
-                }
-            }
-            writeln!(f)?;
-        }
-
-        Ok(())
-    }
-}
+// impl std::fmt::Display for Analyzer {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let mut iter = self.keys.iter().map(|&u| self.char_mapping.get_c(u));
+//
+//         for l in self.shape.inner().iter() {
+//             let mut i = 0;
+//             for c in iter.by_ref() {
+//                 write!(f, "{c} ")?;
+//                 i += 1;
+//
+//                 if *l == i {
+//                     break;
+//                 }
+//             }
+//             writeln!(f)?;
+//         }
+//
+//         Ok(())
+//     }
+// }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]

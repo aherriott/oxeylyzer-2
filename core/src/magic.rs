@@ -49,10 +49,13 @@ pub enum DeltaGram {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
     // Freq lists are the mapped frequencies of bg, sg, tg post-magic rule
-    bg_freq: Vec<Vec<i64>>,
-    sg_freq: Vec<Vec<i64>>,
-    tg_freq: Vec<Vec<Vec<i64>>>,
-    rules: HashMap<CacheKey, HashMap<CacheKey, CacheKey>>,
+    pub bg_freq: Vec<Vec<i64>>,
+    pub sg_freq: Vec<Vec<i64>>,
+    pub tg_freq: Vec<Vec<Vec<i64>>>,
+    pub rules: HashMap<CacheKey, HashMap<CacheKey, CacheKey>>,
+    // Flattened versions for fast indexing
+    pub bigrams: Vec<i64>,
+    pub skipgrams: Vec<i64>,
 }
 
 impl MagicCache {
@@ -78,33 +81,47 @@ impl MagicCache {
         let bg_freq = data.bigrams.clone();
         let sg_freq = data.skipgrams.clone();
         let tg_freq = data.trigrams.clone();
+        // Flatten bigrams and skipgrams for fast indexing
+        let n = bg_freq.len();
+        let mut bigrams = Vec::with_capacity(n * n);
+        let mut skipgrams = Vec::with_capacity(n * n);
+        for i in 0..n {
+            for j in 0..n {
+                bigrams.push(bg_freq[i][j]);
+                skipgrams.push(sg_freq[i][j]);
+            }
+        }
         let mut magic = MagicCache {
             bg_freq,
             sg_freq,
             tg_freq,
+            rules: HashMap::new(),
+            bigrams,
+            skipgrams,
         };
 
         // First, flesh out possible_neighbors with magic rules. steal_bigram will update as needed
-        layout.magic.iter().map(|mag, rules| {
-            rules.iter().map(|lead, out| {
-                for m in 0..keys.magic.len() {
-                    possible_neighbors.push(Neighbor::MagicStealBigram(MagicStealBigram {
-                        key: keys.magic[m], // TODO need the CacheKey, not the layout version
-                        m_old: *out,
-                        leader: *lead,
-                        output: *out,
-                    }));
-                }
-            });
-        });
+        // TODO: fix keys.magic missing
+        // layout.magic.iter().map(|mag, rules| {
+        //     rules.iter().map(|lead, out| {
+        //         for m in 0..keys.magic.len() {
+        //             possible_neighbors.push(Neighbor::MagicStealBigram(MagicStealBigram {
+        //                 key: keys.magic[m], // TODO need the CacheKey, not the layout version
+        //                 m_old: *out,
+        //                 leader: *lead,
+        //                 output: *out,
+        //             }));
+        //         }
+        //     });
+        // });
 
         // Call steal_bigram for all magic rules to set frequencies & possible neighbors
-        layout.magic.iter().map(|mag, rules| {
-            rules.iter().map(|lead, out| {
-                // Ignore affected_grams. Magic needs to run first to set all the freqs anyways before other metrics can init.
-                magic.steal_bigram(lead, out, mag, lead, possible_neighbors, keys, None);
-            });
-        });
+        // layout.magic.iter().map(|mag, rules| {
+        //     rules.iter().map(|lead, out| {
+        //         // Ignore affected_grams. Magic needs to run first to set all the freqs anyways before other metrics can init.
+        //         magic.steal_bigram(lead, out, mag, lead, possible_neighbors, keys, None);
+        //     });
+        // });
 
         magic
     }
@@ -182,39 +199,45 @@ impl MagicCache {
         set_bg(a, m, self.bg_freq[a][m] + self.bg_freq[a][b]);
         set_bg(a, b, 0i64);
 
-        for c in keys {
+        for c in 0..self.bg_freq.len() {
             debug_assert!(self.bg_freq[b][c] - self.tg_freq[a][b][c] >= 0);
             set_bg(m, c, self.bg_freq[m][c] + self.tg_freq[a][b][c]);
             set_bg(b, c, self.bg_freq[b][c] - self.tg_freq[a][b][c]);
         }
 
-        for z in keys {
+        for z in 0..self.sg_freq.len() {
             debug_assert!(self.sg_freq[z][b] - self.tg_freq[z][a][b] >= 0);
             set_sg(z, m, self.sg_freq[z][m] + self.tg_freq[z][a][b]);
             set_sg(z, b, self.sg_freq[z][b] - self.tg_freq[z][a][b]);
         }
 
-        for z in keys {
+        for z in 0..self.tg_freq.len() {
             set_tg(z, a, m, self.tg_freq[z][a][m] + self.tg_freq[z][a][b]);
             set_tg(z, a, b, 0i64);
         }
 
-        for c in keys {
+        for c in 0..self.tg_freq[a].len() {
             set_tg(a, m, c, self.tg_freq[a][m][c] + self.tg_freq[a][b][c]);
             set_tg(a, b, c, 0i64);
         }
 
         // Update possible neighbors with the revert of the steal
-        for m in 0..keys.magic.len() {
-            // TODO update with m_old being the original magic key
-            possible_neighbors[(a * keys.len() + b) * keys.magic.len() + m] =
-                Neighbor::MagicStealBigram(MagicStealBigram {
-                    key: keys.magic[m],
-                    m_old: m,
-                    leader: a,
-                    output: b,
-                });
-        }
+        // Since keys.magic doesn't exist, we need to know the magic keys from layout.
+        // For now, stub.
+        // possible_neighbors[(a * keys.len() + b) * layout.magic.len() + m] =
+        //     Neighbor::MagicStealBigram(MagicStealBigram(key, leader, output));
+        // TODO: implement
+    }
+    // Add a rule and return affected grams
+    pub fn add_rule(
+        &mut self,
+        key: CacheKey,
+        leader: CacheKey,
+        output: CacheKey,
+    ) -> Vec<DeltaGram> {
+        // This is a stub; real implementation should compute delta grams
+        // For now, return empty vec
+        Vec::new()
     }
 }
 

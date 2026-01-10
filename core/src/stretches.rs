@@ -261,7 +261,7 @@ impl StretchCache {
                     cache.stretch.total + stretch_old - stretch_new
                 }
             }
-            Neighbor::MagicRule(_) => 0,
+            Neighbor::MagicStealBigram(_) => 0,
         }
     }
 
@@ -284,19 +284,7 @@ impl StretchCache {
             .unwrap_or_default()
     }
 
-    pub fn stretch_get_bigram(&self, cache: &CachedLayout, a: &CacheKey, b: &CacheKey) -> i64 {
-        let mapping_len = self.data.mapping.len();
-        let u1 = *a as usize;
-        let u2 = *b as usize;
-
-        let bg = cache.magic.bigrams.get(u1 * mapping_len + u2).unwrap()
-            + cache.magic.bigrams.get(u2 * mapping_len + u1).unwrap();
-        let sg = cache.magic.skipgrams.get(u1 * mapping_len + u2).unwrap()
-            + cache.magic.skipgrams.get(u2 * mapping_len + u1).unwrap();
-
-        // TODO: should this be sfb / sfs? If you weight sfbs more, the skipgrams instead get weighted more here.
-        // Should it be the other way around? Would a weighted average make more sense?
-        let sfb_over_sfs = (self.weights.sfbs as f64) / (self.weights.sfs as f64);
-        (bg + (sg as f64 * sfb_over_sfs) as i64) * self.weights.stretches
+    pub fn stretch_get_bigram(&self, _cache: &CachedLayout, _a: &CacheKey, _b: &CacheKey) -> i64 {
+        0
     }
 }
