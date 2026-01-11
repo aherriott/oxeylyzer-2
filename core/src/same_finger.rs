@@ -4,7 +4,6 @@
  **************************************
  */
 
-use crate::cached_layout::{DeltaBigram, DeltaSkipgram};
 use crate::dist::DistCache;
 use crate::stats::Stats;
 use crate::weights::Weights;
@@ -113,20 +112,20 @@ impl SFCache {
             .map(|sf| sf.finger)
     }
 
-    pub fn update_bigram(&mut self, dist_cache: &DistCache, bg: &DeltaBigram) {
-        if let Some(finger) = self.is_same_finger(bg.p_a, bg.p_b) {
-            let dist = dist_cache.get(bg.p_a, bg.p_b);
-            let freq_delta = bg.new_freq - bg.old_freq;
+    pub fn update_bigram(&mut self, dist_cache: &DistCache, p_a: usize, p_b: usize, old_freq: i64, new_freq: i64) {
+        if let Some(finger) = self.is_same_finger(p_a, p_b) {
+            let dist = dist_cache.get(p_a, p_b);
+            let freq_delta = new_freq - old_freq;
             let score_delta = freq_delta * dist;
             self.sfb_score_per_finger[finger] += score_delta;
             self.sfb_freq_per_finger[finger] += freq_delta;
         }
     }
 
-    pub fn update_skipgram(&mut self, dist_cache: &DistCache, sg: &DeltaSkipgram) {
-        if let Some(finger) = self.is_same_finger(sg.p_a, sg.p_b) {
-            let dist = dist_cache.get(sg.p_a, sg.p_b);
-            let freq_delta = sg.new_freq - sg.old_freq;
+    pub fn update_skipgram(&mut self, dist_cache: &DistCache, p_a: usize, p_b: usize, old_freq: i64, new_freq: i64) {
+        if let Some(finger) = self.is_same_finger(p_a, p_b) {
+            let dist = dist_cache.get(p_a, p_b);
+            let freq_delta = new_freq - old_freq;
             let score_delta = freq_delta * dist;
             self.sfs_score_per_finger[finger] += score_delta;
             self.sfs_freq_per_finger[finger] += freq_delta;

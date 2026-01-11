@@ -4,7 +4,6 @@
  **************************************
  */
 
-use crate::cached_layout::{DeltaBigram, DeltaSkipgram};
 use crate::dist::{dx_dy, x_overlap};
 use crate::stats::Stats;
 use crate::types::CachePos;
@@ -78,15 +77,15 @@ impl StretchCache {
         stats.stretches = self.total as f64 / (bigram_total * 100.0);
     }
 
-    pub fn update_bigram(&mut self, bg: &DeltaBigram) {
-        let stretch_dist = self.get_stretch(bg.p_a, bg.p_b);
+    pub fn update_bigram(&mut self, p_a: CachePos, p_b: CachePos, old_freq: i64, new_freq: i64) {
+        let stretch_dist = self.get_stretch(p_a, p_b);
         if stretch_dist > 0 {
-            let delta = (bg.new_freq - bg.old_freq) * stretch_dist;
+            let delta = (new_freq - old_freq) * stretch_dist;
             self.total += delta;
         }
     }
 
-    pub fn update_skipgram(&mut self, _sg: &DeltaSkipgram) {
+    pub fn update_skipgram(&mut self, _p_a: CachePos, _p_b: CachePos, _old_freq: i64, _new_freq: i64) {
         // Stretches don't track skipgrams
     }
 

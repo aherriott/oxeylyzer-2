@@ -339,6 +339,7 @@ impl CachedLayout {
     }
 
     /// Add a key at pos. Position should currently be empty.
+    #[inline]
     pub fn add_key(&mut self, pos: CachePos, key: CacheKey) {
         debug_assert!(self.keys[pos] == EMPTY_KEY, "Position {pos} is not empty");
 
@@ -347,58 +348,7 @@ impl CachedLayout {
             self.key_positions[key] = Some(pos);
         }
 
-        // Clear and populate affected_grams with all bigrams/skipgrams involving this position
-        self.affected_grams.clear();
-        self.compute_affected_grams_for_pos(pos, key, true);
-
-        // Update caches based on affected grams
-        for gram in &self.affected_grams {
-            match gram {
-                DeltaGram::Bigram(bg) => {
-                    self.sfb.update_bigram(&self.dist, bg);
-                    self.stretch.update_bigram(bg);
-                }
-                DeltaGram::Skipgram(sg) => {
-                    self.sfb.update_skipgram(&self.dist, sg);
-                    self.stretch.update_skipgram(sg);
-                }
-                DeltaGram::Trigram(_) => {}
-            }
-        }
-    }
-
-    /// Remove a key at pos. Position should currently contain a key.
-    pub fn remove_key(&mut self, pos: CachePos) {
-        let key = self.keys[pos];
-        debug_assert!(key != EMPTY_KEY, "Position {pos} is already empty");
-
-        // Clear and populate affected_grams (frequencies go to 0)
-        self.affected_grams.clear();
-        self.compute_affected_grams_for_pos(pos, key, false);
-
-        // Update caches based on affected grams
-        for gram in &self.affected_grams {
-            match gram {
-                DeltaGram::Bigram(bg) => {
-                    self.sfb.update_bigram(&self.dist, bg);
-                    self.stretch.update_bigram(bg);
-                }
-                DeltaGram::Skipgram(sg) => {
-                    self.sfb.update_skipgram(&self.dist, sg);
-                }
-                DeltaGram::Trigram(_) => {}
-            }
-        }
-
-        self.keys[pos] = EMPTY_KEY;
-        if key < self.key_positions.len() {
-            self.key_positions[key] = None;
-        }
-    }
-
-    /// Compute all affected bigrams and skipgrams when a key is added/removed at a position.
-    /// If `adding` is true, old_freq=0 and new_freq=actual. If false, old_freq=actual and new_freq=0.
-    fn compute_affected_grams_for_pos(&mut self, pos: CachePos, key: CacheKey, adding: bool) {
+        // Inline cache updates - adding means old_freq=0, new_freq=actual
         for (other_pos, &other_key) in self.keys.iter().enumerate() {
             if other_pos == pos || other_key == EMPTY_KEY {
                 continue;
@@ -407,50 +357,73 @@ impl CachedLayout {
             // Bigram: pos -> other_pos
             let bg_freq = self.magic.get_bg_freq(key, other_key);
             if bg_freq != 0 {
-                let (old, new) = if adding { (0, bg_freq) } else { (bg_freq, 0) };
-                self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
-                    p_a: pos,
-                    p_b: other_pos,
-                    old_freq: old,
-                    new_freq: new,
-                }));
+                self.sfb.update_bigram(&self.dist, pos, other_pos, 0, bg_freq);
+                self.stretch.update_bigram(pos, other_pos, 0, bg_freq);
             }
 
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
             if bg_freq_rev != 0 {
-                let (old, new) = if adding { (0, bg_freq_rev) } else { (bg_freq_rev, 0) };
-                self.affected_grams.push(DeltaGram::Bigram(DeltaBigram {
-                    p_a: other_pos,
-                    p_b: pos,
-                    old_freq: old,
-                    new_freq: new,
-                }));
+                self.sfb.update_bigram(&self.dist, other_pos, pos, 0, bg_freq_rev);
+                self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
             }
 
             // Skipgram: pos -> other_pos
             let sg_freq = self.magic.get_sg_freq(key, other_key);
             if sg_freq != 0 {
-                let (old, new) = if adding { (0, sg_freq) } else { (sg_freq, 0) };
-                self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    p_a: pos,
-                    p_b: other_pos,
-                    old_freq: old,
-                    new_freq: new,
-                }));
+                self.sfb.update_skipgram(&self.dist, pos, other_pos, 0, sg_freq);
             }
 
             // Skipgram: other_pos -> pos
             let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
             if sg_freq_rev != 0 {
-                let (old, new) = if adding { (0, sg_freq_rev) } else { (sg_freq_rev, 0) };
-                self.affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
-                    p_a: other_pos,
-                    p_b: pos,
-                    old_freq: old,
-                    new_freq: new,
-                }));
+                self.sfb.update_skipgram(&self.dist, other_pos, pos, 0, sg_freq_rev);
             }
+        }
+    }
+
+    /// Remove a key at pos. Position should currently contain a key.
+    #[inline]
+    pub fn remove_key(&mut self, pos: CachePos) {
+        let key = self.keys[pos];
+        debug_assert!(key != EMPTY_KEY, "Position {pos} is already empty");
+
+        // Inline cache updates - removing means old_freq=actual, new_freq=0
+        for (other_pos, &other_key) in self.keys.iter().enumerate() {
+            if other_pos == pos || other_key == EMPTY_KEY {
+                continue;
+            }
+
+            // Bigram: pos -> other_pos
+            let bg_freq = self.magic.get_bg_freq(key, other_key);
+            if bg_freq != 0 {
+                self.sfb.update_bigram(&self.dist, pos, other_pos, bg_freq, 0);
+                self.stretch.update_bigram(pos, other_pos, bg_freq, 0);
+            }
+
+            // Bigram: other_pos -> pos
+            let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
+            if bg_freq_rev != 0 {
+                self.sfb.update_bigram(&self.dist, other_pos, pos, bg_freq_rev, 0);
+                self.stretch.update_bigram(other_pos, pos, bg_freq_rev, 0);
+            }
+
+            // Skipgram: pos -> other_pos
+            let sg_freq = self.magic.get_sg_freq(key, other_key);
+            if sg_freq != 0 {
+                self.sfb.update_skipgram(&self.dist, pos, other_pos, sg_freq, 0);
+            }
+
+            // Skipgram: other_pos -> pos
+            let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
+            if sg_freq_rev != 0 {
+                self.sfb.update_skipgram(&self.dist, other_pos, pos, sg_freq_rev, 0);
+            }
+        }
+
+        self.keys[pos] = EMPTY_KEY;
+        if key < self.key_positions.len() {
+            self.key_positions[key] = None;
         }
     }
 
@@ -474,12 +447,11 @@ impl CachedLayout {
         for gram in &self.affected_grams {
             match gram {
                 DeltaGram::Bigram(bg) => {
-                    self.sfb.update_bigram(&self.dist, bg);
-                    self.stretch.update_bigram(bg);
+                    self.sfb.update_bigram(&self.dist, bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
+                    self.stretch.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
                 }
                 DeltaGram::Skipgram(sg) => {
-                    self.sfb.update_skipgram(&self.dist, sg);
-                    self.stretch.update_skipgram(sg);
+                    self.sfb.update_skipgram(&self.dist, sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                 }
                 DeltaGram::Trigram(_) => {
                     // Trigrams don't affect SFB/stretch scores directly
