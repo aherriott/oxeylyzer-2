@@ -173,7 +173,7 @@ impl Analyzer {
             .working_cache
             .as_mut()
             .expect("Analyzer has no Layout set");
-        working.apply_neighbor(neighbor);
+        working.copy_from(&current, neighbor);
 
         score
     }
