@@ -348,21 +348,22 @@ impl CachedLayout {
             self.key_positions[key] = Some(pos);
         }
 
-        // Inline cache updates - adding means old_freq=0, new_freq=actual
-        for (other_pos, &other_key) in self.keys.iter().enumerate() {
-            if other_pos == pos || other_key == EMPTY_KEY {
+        // Update SFB cache - only iterate same-finger pairs
+        let sf_pair_count = self.sfb.sf_pairs(pos).len();
+        for i in 0..sf_pair_count {
+            let other_pos = self.sfb.sf_pairs(pos)[i].other_pos;
+            let other_key = self.keys[other_pos];
+            if other_key == EMPTY_KEY {
                 continue;
             }
 
             // Bigram: pos -> other_pos
             let bg_freq = self.magic.get_bg_freq(key, other_key);
             self.sfb.update_bigram(&self.dist, pos, other_pos, 0, bg_freq);
-            self.stretch.update_bigram(pos, other_pos, 0, bg_freq);
 
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
             self.sfb.update_bigram(&self.dist, other_pos, pos, 0, bg_freq_rev);
-            self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
 
             // Skipgram: pos -> other_pos
             let sg_freq = self.magic.get_sg_freq(key, other_key);
@@ -372,6 +373,24 @@ impl CachedLayout {
             let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
             self.sfb.update_skipgram(&self.dist, other_pos, pos, 0, sg_freq_rev);
         }
+
+        // Update stretch cache - only iterate stretch pairs
+        let stretch_pair_count = self.stretch.stretch_pairs(pos).len();
+        for i in 0..stretch_pair_count {
+            let other_pos = self.stretch.stretch_pairs(pos)[i];
+            let other_key = self.keys[other_pos];
+            if other_key == EMPTY_KEY {
+                continue;
+            }
+
+            // Bigram: pos -> other_pos
+            let bg_freq = self.magic.get_bg_freq(key, other_key);
+            self.stretch.update_bigram(pos, other_pos, 0, bg_freq);
+
+            // Bigram: other_pos -> pos
+            let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
+            self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
+        }
     }
 
     /// Remove a key at pos. Position should currently contain a key.
@@ -380,21 +399,22 @@ impl CachedLayout {
         let key = self.keys[pos];
         debug_assert!(key != EMPTY_KEY, "Position {pos} is already empty");
 
-        // Inline cache updates - removing means old_freq=actual, new_freq=0
-        for (other_pos, &other_key) in self.keys.iter().enumerate() {
-            if other_pos == pos || other_key == EMPTY_KEY {
+        // Update SFB cache - only iterate same-finger pairs
+        let sf_pair_count = self.sfb.sf_pairs(pos).len();
+        for i in 0..sf_pair_count {
+            let other_pos = self.sfb.sf_pairs(pos)[i].other_pos;
+            let other_key = self.keys[other_pos];
+            if other_key == EMPTY_KEY {
                 continue;
             }
 
             // Bigram: pos -> other_pos
             let bg_freq = self.magic.get_bg_freq(key, other_key);
             self.sfb.update_bigram(&self.dist, pos, other_pos, bg_freq, 0);
-            self.stretch.update_bigram(pos, other_pos, bg_freq, 0);
 
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
             self.sfb.update_bigram(&self.dist, other_pos, pos, bg_freq_rev, 0);
-            self.stretch.update_bigram(other_pos, pos, bg_freq_rev, 0);
 
             // Skipgram: pos -> other_pos
             let sg_freq = self.magic.get_sg_freq(key, other_key);
@@ -403,6 +423,24 @@ impl CachedLayout {
             // Skipgram: other_pos -> pos
             let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
             self.sfb.update_skipgram(&self.dist, other_pos, pos, sg_freq_rev, 0);
+        }
+
+        // Update stretch cache - only iterate stretch pairs
+        let stretch_pair_count = self.stretch.stretch_pairs(pos).len();
+        for i in 0..stretch_pair_count {
+            let other_pos = self.stretch.stretch_pairs(pos)[i];
+            let other_key = self.keys[other_pos];
+            if other_key == EMPTY_KEY {
+                continue;
+            }
+
+            // Bigram: pos -> other_pos
+            let bg_freq = self.magic.get_bg_freq(key, other_key);
+            self.stretch.update_bigram(pos, other_pos, bg_freq, 0);
+
+            // Bigram: other_pos -> pos
+            let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
+            self.stretch.update_bigram(other_pos, pos, bg_freq_rev, 0);
         }
 
         self.keys[pos] = EMPTY_KEY;

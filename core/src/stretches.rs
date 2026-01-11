@@ -15,13 +15,15 @@ use libdof::prelude::PhysicalKey;
 pub struct StretchCache {
     /// Precomputed stretch distances for each position pair
     stretch_dists: Vec<Vec<i64>>,
+    /// For each position, list of other positions that form a stretch pair
+    stretch_pairs_per_key: Vec<Vec<usize>>,
     total: i64,
 }
 
 impl StretchCache {
     pub fn new(keyboard: &[PhysicalKey], fingers: &[Finger]) -> Self {
         let len = keyboard.len();
-        let stretch_dists = (0..len)
+        let stretch_dists: Vec<Vec<i64>> = (0..len)
             .map(|i| {
                 (0..len)
                     .map(|j| {
@@ -35,8 +37,18 @@ impl StretchCache {
             })
             .collect();
 
+        // Build stretch pair lookup - for each position, which other positions form a stretch
+        let stretch_pairs_per_key: Vec<Vec<usize>> = (0..len)
+            .map(|i| {
+                (0..len)
+                    .filter(|&j| i != j && stretch_dists[i][j] > 0)
+                    .collect()
+            })
+            .collect();
+
         Self {
             stretch_dists,
+            stretch_pairs_per_key,
             total: 0,
         }
     }
@@ -87,6 +99,12 @@ impl StretchCache {
 
     pub fn update_skipgram(&mut self, _p_a: CachePos, _p_b: CachePos, _old_freq: i64, _new_freq: i64) {
         // Stretches don't track skipgrams
+    }
+
+    /// Get stretch pairs for a position (for optimized add_key/remove_key)
+    #[inline]
+    pub fn stretch_pairs(&self, pos: usize) -> &[usize] {
+        &self.stretch_pairs_per_key[pos]
     }
 
     /// Copy scoring data from another StretchCache. No allocations.

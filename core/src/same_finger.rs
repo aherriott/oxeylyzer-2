@@ -132,6 +132,12 @@ impl SFCache {
         }
     }
 
+    /// Get same-finger pairs for a position (for optimized add_key/remove_key)
+    #[inline]
+    pub fn sf_pairs(&self, pos: usize) -> &[SfPair] {
+        &self.sf_pairs_per_key[pos]
+    }
+
     /// Copy scoring data from another SFCache. No allocations.
     #[inline]
     pub fn copy_from(&mut self, other: &SFCache) {
