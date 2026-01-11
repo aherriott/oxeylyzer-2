@@ -356,29 +356,21 @@ impl CachedLayout {
 
             // Bigram: pos -> other_pos
             let bg_freq = self.magic.get_bg_freq(key, other_key);
-            if bg_freq != 0 {
-                self.sfb.update_bigram(&self.dist, pos, other_pos, 0, bg_freq);
-                self.stretch.update_bigram(pos, other_pos, 0, bg_freq);
-            }
+            self.sfb.update_bigram(&self.dist, pos, other_pos, 0, bg_freq);
+            self.stretch.update_bigram(pos, other_pos, 0, bg_freq);
 
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
-            if bg_freq_rev != 0 {
-                self.sfb.update_bigram(&self.dist, other_pos, pos, 0, bg_freq_rev);
-                self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
-            }
+            self.sfb.update_bigram(&self.dist, other_pos, pos, 0, bg_freq_rev);
+            self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
 
             // Skipgram: pos -> other_pos
             let sg_freq = self.magic.get_sg_freq(key, other_key);
-            if sg_freq != 0 {
-                self.sfb.update_skipgram(&self.dist, pos, other_pos, 0, sg_freq);
-            }
+            self.sfb.update_skipgram(&self.dist, pos, other_pos, 0, sg_freq);
 
             // Skipgram: other_pos -> pos
             let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
-            if sg_freq_rev != 0 {
-                self.sfb.update_skipgram(&self.dist, other_pos, pos, 0, sg_freq_rev);
-            }
+            self.sfb.update_skipgram(&self.dist, other_pos, pos, 0, sg_freq_rev);
         }
     }
 
@@ -396,29 +388,21 @@ impl CachedLayout {
 
             // Bigram: pos -> other_pos
             let bg_freq = self.magic.get_bg_freq(key, other_key);
-            if bg_freq != 0 {
-                self.sfb.update_bigram(&self.dist, pos, other_pos, bg_freq, 0);
-                self.stretch.update_bigram(pos, other_pos, bg_freq, 0);
-            }
+            self.sfb.update_bigram(&self.dist, pos, other_pos, bg_freq, 0);
+            self.stretch.update_bigram(pos, other_pos, bg_freq, 0);
 
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
-            if bg_freq_rev != 0 {
-                self.sfb.update_bigram(&self.dist, other_pos, pos, bg_freq_rev, 0);
-                self.stretch.update_bigram(other_pos, pos, bg_freq_rev, 0);
-            }
+            self.sfb.update_bigram(&self.dist, other_pos, pos, bg_freq_rev, 0);
+            self.stretch.update_bigram(other_pos, pos, bg_freq_rev, 0);
 
             // Skipgram: pos -> other_pos
             let sg_freq = self.magic.get_sg_freq(key, other_key);
-            if sg_freq != 0 {
-                self.sfb.update_skipgram(&self.dist, pos, other_pos, sg_freq, 0);
-            }
+            self.sfb.update_skipgram(&self.dist, pos, other_pos, sg_freq, 0);
 
             // Skipgram: other_pos -> pos
             let sg_freq_rev = self.magic.get_sg_freq(other_key, key);
-            if sg_freq_rev != 0 {
-                self.sfb.update_skipgram(&self.dist, other_pos, pos, sg_freq_rev, 0);
-            }
+            self.sfb.update_skipgram(&self.dist, other_pos, pos, sg_freq_rev, 0);
         }
 
         self.keys[pos] = EMPTY_KEY;
