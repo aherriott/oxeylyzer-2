@@ -40,6 +40,7 @@ impl Analyzer {
 
         // let mut scores = Vec::<i64>::new();
         let mut best = self.layout();
+        let mut best_neighbor: Option<crate::analyze::Neighbor> = None;
         for _ in 0..max_iterations {
             let diff = self.random_neighbor(&mut rng);
             let new_score = self.test_neighbor(diff);
@@ -49,7 +50,8 @@ impl Analyzer {
             }
             if new_score > best_score {
                 best_score = new_score;
-                best = self.layout();
+                // Record the neighbor that produces the best score
+                best_neighbor = Some(diff);
             }
 
             // Odds we take this swap
@@ -58,6 +60,11 @@ impl Analyzer {
             if ap > f64::random(&mut rng) {
                 current_score = new_score;
                 self.apply_neighbor(diff);
+                // If we just applied the best neighbor, capture the layout
+                if best_neighbor == Some(diff) {
+                    best = self.layout();
+                    best_neighbor = None; // Clear it since we've captured the layout
+                }
             }
             // scores.push(current_score);
 

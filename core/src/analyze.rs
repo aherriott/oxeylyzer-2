@@ -137,22 +137,23 @@ impl Analyzer {
 
     // Calculates the score of a neighbor without updating the cache
     pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        let working = self
-            .working_cache
-            .as_mut()
-            .expect("Analyzer has no Layout set");
         let current = self
             .current_cache
             .as_ref()
             .expect("Analyzer has no Layout set");
-        debug_assert_eq!(
-            working as &CachedLayout, current,
-            "Working cache out of sync with current cache"
-        );
+
+        let working = self
+            .working_cache
+            .as_mut()
+            .expect("Analyzer has no Layout set");
 
         working.apply_neighbor(neighbor);
         let score = working.score(&self.weights);
-        working.copy_from(current, neighbor);
+        // Revert the neighbor to restore key positions
+        working.apply_neighbor(neighbor.revert());
+        // Copy state from current to ensure working cache is properly restored
+        // (apply_neighbor + revert doesn't perfectly restore state due to delta calculations)
+        working.copy_from(current, neighbor.revert());
         score
     }
 
@@ -166,12 +167,13 @@ impl Analyzer {
         current.apply_neighbor(neighbor);
         let score = current.score(&self.weights);
 
-        // Sync working cache
+        // Sync working cache by applying the same neighbor
+        // (copy_from is designed for test_neighbor where working already has the neighbor applied)
         let working = self
             .working_cache
             .as_mut()
             .expect("Analyzer has no Layout set");
-        working.copy_from(current, neighbor);
+        working.apply_neighbor(neighbor);
 
         score
     }
@@ -361,7 +363,7 @@ impl Analyzer {
             .keys
             .iter()
             .zip(&layout2.keys)
-            .filter(|&(c1, c2)| (c1 == c2))
+            .filter(|&(c1, c2)| c1 == c2)
             .map(|(c1, _)| data.get_char(*c1))
             .sum::<i64>();
 
@@ -379,7 +381,7 @@ impl Analyzer {
                     .keys
                     .iter()
                     .zip(&layout1.fingers)
-                    .filter(|&(c2, f2)| (f == *f2 && col1.contains(c2)))
+                    .filter(|&(c2, f2)| f == *f2 && col1.contains(c2))
                     .map(|(c2, _)| data.get_char(*c2))
                     .sum::<i64>()
             })

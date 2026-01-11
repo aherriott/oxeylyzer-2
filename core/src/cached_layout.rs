@@ -333,6 +333,9 @@ impl CachedLayout {
         // Copy scoring caches - these use fixed-size arrays, no allocation
         self.sfb.copy_from(&other.sfb);
         self.stretch.copy_from(&other.stretch);
+
+        // Clear affected_grams to match the original state (it's a working buffer)
+        self.affected_grams.clear();
     }
 
     /// Add a key at pos. Position should currently be empty.

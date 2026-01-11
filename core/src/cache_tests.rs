@@ -8,7 +8,6 @@
 #[cfg(test)]
 mod tests {
     use crate::analyze::{Analyzer, Neighbor};
-    use crate::cached_layout::{CachedLayout, DeltaBigram, DeltaSkipgram};
     use crate::data::Data;
     use crate::layout::{Layout, PosPair};
     use crate::weights::dummy_weights;
@@ -23,6 +22,7 @@ mod tests {
     }
 
     /// Test fixture: loads sturdy layout with english corpus
+    #[allow(dead_code)]
     fn sturdy_fixture() -> (Analyzer, Layout) {
         let data = Data::load("../data/english.json").expect("english.json should exist");
         let weights = dummy_weights();
@@ -70,7 +70,7 @@ mod tests {
         // Apply a swap
         let swap = Neighbor::KeySwap(PosPair(0, 1));
         analyzer.apply_neighbor(swap);
-        let swapped_score = analyzer.score();
+        let _swapped_score = analyzer.score();
 
         // Scores should differ (unless the two keys happen to be identical)
         // Apply the same swap again to revert
@@ -264,18 +264,24 @@ mod tests {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
         let initial_score = analyzer.score();
+        eprintln!("Initial score: {}", initial_score);
 
         // Do a few greedy improvements
-        for _ in 0..5 {
-            if let Some((neighbor, _)) = analyzer.best_neighbor() {
+        for i in 0..5 {
+            if let Some((neighbor, expected_score)) = analyzer.best_neighbor() {
+                eprintln!("Iteration {}: applying neighbor {:?}, expected score: {}", i, neighbor, expected_score);
                 analyzer.apply_neighbor(neighbor);
+                let actual_score = analyzer.score();
+                eprintln!("Iteration {}: actual score after apply: {}", i, actual_score);
             } else {
+                eprintln!("Iteration {}: no improvement found", i);
                 break;
             }
         }
 
         let improved_score = analyzer.score();
-        assert!(improved_score >= initial_score, "Greedy optimization should not make score worse");
+        eprintln!("Final improved score: {}", improved_score);
+        assert!(improved_score >= initial_score, "Greedy optimization should not make score worse: initial={}, improved={}", initial_score, improved_score);
     }
 
     // ==================== Neighbor Count Tests ====================
