@@ -112,4 +112,76 @@ impl StretchCache {
     pub fn copy_from(&mut self, other: &StretchCache) {
         self.total = other.total;
     }
+
+    /// Optimized key swap: update scores for swapping keys at pos_a and pos_b.
+    /// More efficient than remove_key(a) + remove_key(b) + add_key(a, new) + add_key(b, new)
+    /// because it only iterates each relevant pair once.
+    ///
+    /// `keys` is the current key array (before swap), `get_bg_freq` returns bigram frequency.
+    #[inline]
+    pub fn key_swap<F>(
+        &mut self,
+        pos_a: CachePos,
+        pos_b: CachePos,
+        key_a: usize,  // old key at pos_a, will move to pos_b
+        key_b: usize,  // old key at pos_b, will move to pos_a
+        keys: &[usize],
+        get_bg_freq: F,
+    ) where
+        F: Fn(usize, usize) -> i64,
+    {
+        // Check if pos_a and pos_b form a stretch pair
+        let stretch_ab = self.get_stretch(pos_a, pos_b);
+        if stretch_ab > 0 {
+            // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
+            let old_bg_ab = get_bg_freq(key_a, key_b);
+            let new_bg_ab = get_bg_freq(key_b, key_a);
+            self.total += (new_bg_ab - old_bg_ab) * stretch_ab;
+
+            // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
+            let old_bg_ba = get_bg_freq(key_b, key_a);
+            let new_bg_ba = get_bg_freq(key_a, key_b);
+            self.total += (new_bg_ba - old_bg_ba) * stretch_ab;
+        }
+
+        // Process stretch pairs for pos_a (excluding pos_b)
+        for &other_pos in &self.stretch_pairs_per_key[pos_a] {
+            if other_pos == pos_b {
+                continue; // Already handled above
+            }
+            let stretch_dist = self.stretch_dists[pos_a][other_pos];
+            let other_key = keys[other_pos];
+
+            // At pos_a: old key was key_a, new key is key_b
+            // Bigram: pos_a -> other_pos
+            let old_bg = get_bg_freq(key_a, other_key);
+            let new_bg = get_bg_freq(key_b, other_key);
+            self.total += (new_bg - old_bg) * stretch_dist;
+
+            // Bigram: other_pos -> pos_a
+            let old_bg_rev = get_bg_freq(other_key, key_a);
+            let new_bg_rev = get_bg_freq(other_key, key_b);
+            self.total += (new_bg_rev - old_bg_rev) * stretch_dist;
+        }
+
+        // Process stretch pairs for pos_b (excluding pos_a)
+        for &other_pos in &self.stretch_pairs_per_key[pos_b] {
+            if other_pos == pos_a {
+                continue; // Already handled above
+            }
+            let stretch_dist = self.stretch_dists[pos_b][other_pos];
+            let other_key = keys[other_pos];
+
+            // At pos_b: old key was key_b, new key is key_a
+            // Bigram: pos_b -> other_pos
+            let old_bg = get_bg_freq(key_b, other_key);
+            let new_bg = get_bg_freq(key_a, other_key);
+            self.total += (new_bg - old_bg) * stretch_dist;
+
+            // Bigram: other_pos -> pos_b
+            let old_bg_rev = get_bg_freq(other_key, key_b);
+            let new_bg_rev = get_bg_freq(other_key, key_a);
+            self.total += (new_bg_rev - old_bg_rev) * stretch_dist;
+        }
+    }
 }

@@ -282,12 +282,7 @@ impl CachedLayout {
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
-                let key_a = self.keys[a];
-                let key_b = self.keys[b];
-                self.remove_key(a);
-                self.remove_key(b);
-                self.add_key(a, key_b);
-                self.add_key(b, key_a);
+                self.swap_keys(a, b);
             }
             Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, new_output, _old_output)) => {
                 self.steal_bigram(magic_key, leader, new_output);
@@ -390,6 +385,49 @@ impl CachedLayout {
             // Bigram: other_pos -> pos
             let bg_freq_rev = self.magic.get_bg_freq(other_key, key);
             self.stretch.update_bigram(other_pos, pos, 0, bg_freq_rev);
+        }
+    }
+
+    /// Swap keys at two positions using optimized cache methods.
+    /// More efficient than remove_key(a) + remove_key(b) + add_key(a, key_b) + add_key(b, key_a).
+    #[inline]
+    pub fn swap_keys(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        let key_a = self.keys[pos_a];
+        let key_b = self.keys[pos_b];
+
+        debug_assert!(key_a != EMPTY_KEY, "Position {pos_a} is empty");
+        debug_assert!(key_b != EMPTY_KEY, "Position {pos_b} is empty");
+
+        // Update SFB cache using optimized key_swap
+        self.sfb.key_swap(
+            &self.dist,
+            pos_a,
+            pos_b,
+            key_a,
+            key_b,
+            &self.keys,
+            |k1, k2| self.magic.get_bg_freq(k1, k2),
+            |k1, k2| self.magic.get_sg_freq(k1, k2),
+        );
+
+        // Update stretch cache using optimized key_swap
+        self.stretch.key_swap(
+            pos_a,
+            pos_b,
+            key_a,
+            key_b,
+            &self.keys,
+            |k1, k2| self.magic.get_bg_freq(k1, k2),
+        );
+
+        // Update key positions
+        self.keys[pos_a] = key_b;
+        self.keys[pos_b] = key_a;
+        if key_a < self.key_positions.len() {
+            self.key_positions[key_a] = Some(pos_b);
+        }
+        if key_b < self.key_positions.len() {
+            self.key_positions[key_b] = Some(pos_a);
         }
     }
 
