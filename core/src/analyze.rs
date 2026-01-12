@@ -149,8 +149,6 @@ impl Analyzer {
 
         working.apply_neighbor(neighbor);
         let score = working.score(&self.weights);
-        // Revert the neighbor to restore key positions
-        working.apply_neighbor(neighbor.revert());
         // Copy state from current to ensure working cache is properly restored
         // (apply_neighbor + revert doesn't perfectly restore state due to delta calculations)
         working.copy_from(current, neighbor.revert());
@@ -163,16 +161,16 @@ impl Analyzer {
             .current_cache
             .as_mut()
             .expect("Analyzer has no Layout set");
+        let working = self
+            .working_cache
+            .as_mut()
+            .expect("Analyzer has no Layout set");
 
         current.apply_neighbor(neighbor);
         let score = current.score(&self.weights);
 
         // Sync working cache by applying the same neighbor
         // (copy_from is designed for test_neighbor where working already has the neighbor applied)
-        let working = self
-            .working_cache
-            .as_mut()
-            .expect("Analyzer has no Layout set");
         working.copy_from(&current, neighbor);
 
         score
