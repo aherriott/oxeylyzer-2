@@ -53,7 +53,7 @@ impl Analyzer {
 
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
-        self.current_cache = Some(CachedLayout::new(layout, self.data.clone()));
+        self.current_cache = Some(CachedLayout::new(layout, self.data.clone(), &self.weights));
         // Clone the current cache to allocate the memory we need. Everything from here is alloc-free
         self.working_cache = self.current_cache.clone();
     }
@@ -69,7 +69,7 @@ impl Analyzer {
         self.current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .score(&self.weights)
+            .score()
     }
 
     /*
@@ -118,7 +118,7 @@ impl Analyzer {
             .current_cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .score(&self.weights);
+            .score();
         let mut best = None;
 
         let count = self.neighbor_count();
@@ -146,7 +146,7 @@ impl Analyzer {
             .expect("Analyzer has no Layout set");
 
         working.apply_neighbor(neighbor);
-        let score = working.score(&self.weights);
+        let score = working.score();
         // Copy state from current to ensure working cache is properly restored
         working.copy_from(current, neighbor);
         score
@@ -164,7 +164,7 @@ impl Analyzer {
             .expect("Analyzer has no Layout set");
 
         current.apply_neighbor(neighbor);
-        let score = current.score(&self.weights);
+        let score = current.score();
 
         // Sync working cache by applying the same neighbor
         // (copy_from is designed for test_neighbor where working already has the neighbor applied)
@@ -185,7 +185,7 @@ impl Analyzer {
             .expect("Analyzer has no Layout set");
 
         let mut stats = Stats::default();
-        stats.score = cache.score(&self.weights);
+        stats.score = cache.score();
 
         cache.stats(&mut stats);
 

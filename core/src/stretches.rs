@@ -24,7 +24,10 @@ pub struct StretchCache {
     stretch_pairs_per_key: Vec<Vec<StretchPair>>,
     /// Number of keys for frequency array indexing
     num_keys: usize,
+    /// Running total (freq * dist, not yet weighted)
     total: i64,
+    /// Pre-computed stretch weight
+    stretch_weight: i64,
 }
 
 impl StretchCache {
@@ -66,7 +69,13 @@ impl StretchCache {
             stretch_pairs_per_key,
             num_keys,
             total: 0,
+            stretch_weight: 0,
         }
+    }
+
+    /// Set weights
+    pub fn set_weights(&mut self, weights: &Weights) {
+        self.stretch_weight = weights.stretches;
     }
 
     /// Compute stretch distance for a key pair.
@@ -101,8 +110,9 @@ impl StretchCache {
             .unwrap_or(0)
     }
 
-    pub fn score(&self, weights: &Weights) -> i64 {
-        self.total * weights.stretches
+    #[inline]
+    pub fn score(&self) -> i64 {
+        self.total * self.stretch_weight
     }
 
     pub fn stats(&self, stats: &mut Stats, bigram_total: f64) {

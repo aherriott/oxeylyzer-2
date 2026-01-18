@@ -369,7 +369,7 @@ impl Default for CachedLayout {
 
 impl CachedLayout {
     /// Create a new CachedLayout from a Layout and Data
-    pub fn new(layout: &Layout, data: Data) -> Self {
+    pub fn new(layout: &Layout, data: Data, weights: &Weights) -> Self {
         let mut analyzer_data = AnalyzerData::new(data);
 
         // Ensure all layout keys are in the char_mapping for proper roundtrip
@@ -389,8 +389,10 @@ impl CachedLayout {
 
         let dist = DistCache::new(keyboard, fingers);
         // Pass distances and num_keys to SFCache and StretchCache
-        let sfb = SFCache::new(fingers, keyboard, dist.distances(), num_keys);
-        let stretch = StretchCache::new(keyboard, fingers, num_keys);
+        let mut sfb = SFCache::new(fingers, keyboard, dist.distances(), num_keys);
+        sfb.set_weights(weights);
+        let mut stretch = StretchCache::new(keyboard, fingers, num_keys);
+        stretch.set_weights(weights);
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -519,8 +521,8 @@ impl CachedLayout {
         self.key_positions.get(key).copied().flatten()
     }
 
-    pub fn score(&self, weights: &Weights) -> i64 {
-        self.sfb.score(weights) + self.stretch.score(weights)
+    pub fn score(&self) -> i64 {
+        self.sfb.score() + self.stretch.score()
     }
 
     /// Populate stats from the caches. Uses internal data for normalization.

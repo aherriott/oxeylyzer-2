@@ -202,7 +202,7 @@ impl BranchBound {
 
     /// Create an empty CachedLayout and initialize keys_by_freq
     fn create_empty_cache(&mut self) -> CachedLayout {
-        let mut cache = CachedLayout::new(&self.base_layout, self.data.clone());
+        let mut cache = CachedLayout::new(&self.base_layout, self.data.clone(), &self.weights);
 
         // Initialize keys_by_freq from the cache's char mapping
         if self.keys_by_freq.is_empty() {
@@ -294,7 +294,7 @@ impl BranchBound {
         stats.max_depth_reached = stats.max_depth_reached.max(depth);
         stats.nodes_visited += 1;
 
-        let current_score = cache.score(&self.weights);
+        let current_score = cache.score();
 
         // Pruning: if current partial score is already worse than bound, prune
         if current_score < bound {
@@ -475,7 +475,7 @@ impl BranchBound {
         stats.max_depth_reached = stats.max_depth_reached.max(depth);
         stats.nodes_visited += 1;
 
-        let current_score = cache.score(&self.weights);
+        let current_score = cache.score();
 
         // Pruning: if current partial score is already worse than bound, prune
         if current_score < bound {

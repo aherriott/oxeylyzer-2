@@ -247,10 +247,12 @@ mod bench {
     /// Benchmark remove_key operation
     fn remove_key(bencher: Bencher, swap: Neighbor) {
         use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
 
         let (_, layout) = util::analyzer_layout("english", "qwerty");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
-        let mut cached = CachedLayout::new(&layout, data.clone());
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
 
         // Get position from the swap neighbor
         let pos = match swap {
@@ -271,10 +273,12 @@ mod bench {
     /// Benchmark add_key operation
     fn add_key(bencher: Bencher, swap: Neighbor) {
         use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
 
         let (_, layout) = util::analyzer_layout("english", "qwerty");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
-        let mut cached = CachedLayout::new(&layout, data.clone());
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
 
         // Get position from the swap neighbor
         let pos = match swap {
@@ -294,10 +298,12 @@ mod bench {
     /// Benchmark key_swap operation (remove_key x2 + add_key x2)
     fn key_swap(bencher: Bencher, swap: Neighbor) {
         use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
 
         let (_, layout) = util::analyzer_layout("english", "qwerty");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
-        let mut cached = CachedLayout::new(&layout, data.clone());
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
 
         let (pos_a, pos_b) = match swap {
             Neighbor::KeySwap(PosPair(a, b)) => (a, b),
@@ -326,12 +332,14 @@ mod bench {
     /// Benchmark apply_magic_rule operation (magic key functionality)
     fn steal_bigram(bencher: Bencher, _layout_name: &str) {
         use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
 
         // Use the magic test layout which has magic keys defined
         let layout = oxeylyzer_core::layout::Layout::load("./layouts/test/magic.dof")
             .expect("magic layout should exist");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
-        let mut cached = CachedLayout::new(&layout, data.clone());
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
 
         // Get magic key info from the layout's char_mapping
         // The magic layout has: mag2 with rules "a" -> "b" and "b" -> "c"

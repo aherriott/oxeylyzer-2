@@ -19,6 +19,8 @@ pub struct SfPair {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SFCache {
+    /// Running total weighted score (updated incrementally)
+    total_score: i64,
     /// Weighted SFB score per finger (freq * dist)
     sfb_score_per_finger: Box<[i64; 10]>,
     /// Weighted SFS score per finger (freq * dist)
@@ -31,6 +33,10 @@ pub struct SFCache {
     sf_pairs_per_key: Vec<Vec<SfPair>>,
     /// Number of keys for frequency array indexing
     num_keys: usize,
+    /// Pre-computed: finger_weight * sfb_weight for each finger
+    sfb_finger_weights: Box<[i64; 10]>,
+    /// Pre-computed: finger_weight * sfs_weight for each finger
+    sfs_finger_weights: Box<[i64; 10]>,
 }
 
 impl SFCache {
@@ -58,24 +64,42 @@ impl SFCache {
         }
 
         Self {
+            total_score: 0,
             sfb_score_per_finger: Box::new([0i64; 10]),
             sfs_score_per_finger: Box::new([0i64; 10]),
             sfb_freq_per_finger: Box::new([0i64; 10]),
             sfs_freq_per_finger: Box::new([0i64; 10]),
             sf_pairs_per_key,
             num_keys,
+            sfb_finger_weights: Box::new([0i64; 10]),
+            sfs_finger_weights: Box::new([0i64; 10]),
         }
     }
 
-    pub fn score(&self, weights: &Weights) -> i64 {
-        Finger::FINGERS
-            .iter()
-            .map(|f| -> i64 {
-                let fi = *f as usize;
-                self.sfb_score_per_finger[fi] * weights.fingers.get(*f) * weights.sfbs
-                    + self.sfs_score_per_finger[fi] * weights.fingers.get(*f) * weights.sfs
-            })
-            .sum()
+    /// Set weights and pre-compute finger weight products
+    pub fn set_weights(&mut self, weights: &Weights) {
+        for f in Finger::FINGERS {
+            let fi = f as usize;
+            let finger_weight = weights.fingers.get(f);
+            self.sfb_finger_weights[fi] = finger_weight * weights.sfbs;
+            self.sfs_finger_weights[fi] = finger_weight * weights.sfs;
+        }
+        // Recompute total score with new weights
+        self.recompute_total_score();
+    }
+
+    /// Recompute total score from per-finger scores
+    fn recompute_total_score(&mut self) {
+        self.total_score = 0;
+        for fi in 0..10 {
+            self.total_score += self.sfb_score_per_finger[fi] * self.sfb_finger_weights[fi]
+                + self.sfs_score_per_finger[fi] * self.sfs_finger_weights[fi];
+        }
+    }
+
+    #[inline]
+    pub fn score(&self) -> i64 {
+        self.total_score
     }
 
     pub fn stats(&self, stats: &mut Stats, bigram_total: f64, skipgram_total: f64) {
@@ -122,6 +146,8 @@ impl SFCache {
             let score_delta = freq_delta * dist;
             self.sfb_score_per_finger[finger] += score_delta;
             self.sfb_freq_per_finger[finger] += freq_delta;
+            // Update running total
+            self.total_score += score_delta * self.sfb_finger_weights[finger];
         }
     }
 
@@ -131,12 +157,15 @@ impl SFCache {
             let score_delta = freq_delta * dist;
             self.sfs_score_per_finger[finger] += score_delta;
             self.sfs_freq_per_finger[finger] += freq_delta;
+            // Update running total
+            self.total_score += score_delta * self.sfs_finger_weights[finger];
         }
     }
 
     /// Copy scoring data from another SFCache. No allocations.
     #[inline]
     pub fn copy_from(&mut self, other: &SFCache) {
+        self.total_score = other.total_score;
         *self.sfb_score_per_finger = *other.sfb_score_per_finger;
         *self.sfs_score_per_finger = *other.sfs_score_per_finger;
         *self.sfb_freq_per_finger = *other.sfb_freq_per_finger;
@@ -180,29 +209,37 @@ impl SFCache {
             let old_bg = if old_valid { bg_freq[old_key * num_keys + other_key] } else { 0 };
             let new_bg = if new_valid { bg_freq[new_key * num_keys + other_key] } else { 0 };
             let bg_delta = new_bg - old_bg;
-            self.sfb_score_per_finger[finger] += bg_delta * dist;
+            let bg_score_delta = bg_delta * dist;
+            self.sfb_score_per_finger[finger] += bg_score_delta;
             self.sfb_freq_per_finger[finger] += bg_delta;
+            self.total_score += bg_score_delta * self.sfb_finger_weights[finger];
 
             // Bigram: other_pos -> pos
             let old_bg_rev = if old_valid { bg_freq[other_key * num_keys + old_key] } else { 0 };
             let new_bg_rev = if new_valid { bg_freq[other_key * num_keys + new_key] } else { 0 };
             let bg_delta_rev = new_bg_rev - old_bg_rev;
-            self.sfb_score_per_finger[finger] += bg_delta_rev * dist;
+            let bg_score_delta_rev = bg_delta_rev * dist;
+            self.sfb_score_per_finger[finger] += bg_score_delta_rev;
             self.sfb_freq_per_finger[finger] += bg_delta_rev;
+            self.total_score += bg_score_delta_rev * self.sfb_finger_weights[finger];
 
             // Skipgram: pos -> other_pos
             let old_sg = if old_valid { sg_freq[old_key * num_keys + other_key] } else { 0 };
             let new_sg = if new_valid { sg_freq[new_key * num_keys + other_key] } else { 0 };
             let sg_delta = new_sg - old_sg;
-            self.sfs_score_per_finger[finger] += sg_delta * dist;
+            let sg_score_delta = sg_delta * dist;
+            self.sfs_score_per_finger[finger] += sg_score_delta;
             self.sfs_freq_per_finger[finger] += sg_delta;
+            self.total_score += sg_score_delta * self.sfs_finger_weights[finger];
 
             // Skipgram: other_pos -> pos
             let old_sg_rev = if old_valid { sg_freq[other_key * num_keys + old_key] } else { 0 };
             let new_sg_rev = if new_valid { sg_freq[other_key * num_keys + new_key] } else { 0 };
             let sg_delta_rev = new_sg_rev - old_sg_rev;
-            self.sfs_score_per_finger[finger] += sg_delta_rev * dist;
+            let sg_score_delta_rev = sg_delta_rev * dist;
+            self.sfs_score_per_finger[finger] += sg_score_delta_rev;
             self.sfs_freq_per_finger[finger] += sg_delta_rev;
+            self.total_score += sg_score_delta_rev * self.sfs_finger_weights[finger];
         }
     }
 
@@ -227,23 +264,31 @@ impl SFCache {
             if let Some((finger, dist)) = self.is_same_finger(pos_a, pos_b) {
                 // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
                 let bg_delta_ab = bg_freq[key_b * num_keys + key_a] - bg_freq[key_a * num_keys + key_b];
-                self.sfb_score_per_finger[finger] += bg_delta_ab * dist;
+                let bg_score_ab = bg_delta_ab * dist;
+                self.sfb_score_per_finger[finger] += bg_score_ab;
                 self.sfb_freq_per_finger[finger] += bg_delta_ab;
+                self.total_score += bg_score_ab * self.sfb_finger_weights[finger];
 
                 // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
                 let bg_delta_ba = bg_freq[key_a * num_keys + key_b] - bg_freq[key_b * num_keys + key_a];
-                self.sfb_score_per_finger[finger] += bg_delta_ba * dist;
+                let bg_score_ba = bg_delta_ba * dist;
+                self.sfb_score_per_finger[finger] += bg_score_ba;
                 self.sfb_freq_per_finger[finger] += bg_delta_ba;
+                self.total_score += bg_score_ba * self.sfb_finger_weights[finger];
 
                 // Skipgram a->b
                 let sg_delta_ab = sg_freq[key_b * num_keys + key_a] - sg_freq[key_a * num_keys + key_b];
-                self.sfs_score_per_finger[finger] += sg_delta_ab * dist;
+                let sg_score_ab = sg_delta_ab * dist;
+                self.sfs_score_per_finger[finger] += sg_score_ab;
                 self.sfs_freq_per_finger[finger] += sg_delta_ab;
+                self.total_score += sg_score_ab * self.sfs_finger_weights[finger];
 
                 // Skipgram b->a
                 let sg_delta_ba = sg_freq[key_a * num_keys + key_b] - sg_freq[key_b * num_keys + key_a];
-                self.sfs_score_per_finger[finger] += sg_delta_ba * dist;
+                let sg_score_ba = sg_delta_ba * dist;
+                self.sfs_score_per_finger[finger] += sg_score_ba;
                 self.sfs_freq_per_finger[finger] += sg_delta_ba;
+                self.total_score += sg_score_ba * self.sfs_finger_weights[finger];
             }
         }
 
