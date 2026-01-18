@@ -191,13 +191,15 @@ impl SFCache {
         let old_valid = old_key < num_keys;
         let new_valid = new_key < num_keys;
 
+        // Pre-compute row offsets for old and new keys (only if valid)
+        let old_row = if old_valid { old_key * num_keys } else { 0 };
+        let new_row = if new_valid { new_key * num_keys } else { 0 };
+
         for sf in &self.sf_pairs_per_key[pos] {
             let other_pos = sf.other_pos;
             if skip_pos == Some(other_pos) {
                 continue;
             }
-            let finger = sf.finger;
-            let dist = sf.dist;
             let other_key = keys[other_pos];
 
             // Skip if other_key is EMPTY_KEY
@@ -205,47 +207,46 @@ impl SFCache {
                 continue;
             }
 
-            // Bigram: pos -> other_pos
-            let old_bg = if old_valid { bg_freq[old_key * num_keys + other_key] } else { 0 };
-            let new_bg = if new_valid { bg_freq[new_key * num_keys + other_key] } else { 0 };
-            let bg_delta = new_bg - old_bg;
+            let finger = sf.finger;
+            let dist = sf.dist;
+            let other_row = other_key * num_keys;
+
+            // Compute all frequency deltas
+            let old_bg = if old_valid { bg_freq[old_row + other_key] } else { 0 };
+            let new_bg = if new_valid { bg_freq[new_row + other_key] } else { 0 };
+            let old_bg_rev = if old_valid { bg_freq[other_row + old_key] } else { 0 };
+            let new_bg_rev = if new_valid { bg_freq[other_row + new_key] } else { 0 };
+            let old_sg = if old_valid { sg_freq[old_row + other_key] } else { 0 };
+            let new_sg = if new_valid { sg_freq[new_row + other_key] } else { 0 };
+            let old_sg_rev = if old_valid { sg_freq[other_row + old_key] } else { 0 };
+            let new_sg_rev = if new_valid { sg_freq[other_row + new_key] } else { 0 };
+
+            // Compute deltas
+            let bg_delta = (new_bg - old_bg) + (new_bg_rev - old_bg_rev);
+            let sg_delta = (new_sg - old_sg) + (new_sg_rev - old_sg_rev);
+
+            // Update per-finger scores (freq * dist)
             let bg_score_delta = bg_delta * dist;
+            let sg_score_delta = sg_delta * dist;
             self.sfb_score_per_finger[finger] += bg_score_delta;
             self.sfb_freq_per_finger[finger] += bg_delta;
-            self.total_score += bg_score_delta * self.sfb_finger_weights[finger];
-
-            // Bigram: other_pos -> pos
-            let old_bg_rev = if old_valid { bg_freq[other_key * num_keys + old_key] } else { 0 };
-            let new_bg_rev = if new_valid { bg_freq[other_key * num_keys + new_key] } else { 0 };
-            let bg_delta_rev = new_bg_rev - old_bg_rev;
-            let bg_score_delta_rev = bg_delta_rev * dist;
-            self.sfb_score_per_finger[finger] += bg_score_delta_rev;
-            self.sfb_freq_per_finger[finger] += bg_delta_rev;
-            self.total_score += bg_score_delta_rev * self.sfb_finger_weights[finger];
-
-            // Skipgram: pos -> other_pos
-            let old_sg = if old_valid { sg_freq[old_key * num_keys + other_key] } else { 0 };
-            let new_sg = if new_valid { sg_freq[new_key * num_keys + other_key] } else { 0 };
-            let sg_delta = new_sg - old_sg;
-            let sg_score_delta = sg_delta * dist;
             self.sfs_score_per_finger[finger] += sg_score_delta;
             self.sfs_freq_per_finger[finger] += sg_delta;
-            self.total_score += sg_score_delta * self.sfs_finger_weights[finger];
 
-            // Skipgram: other_pos -> pos
-            let old_sg_rev = if old_valid { sg_freq[other_key * num_keys + old_key] } else { 0 };
-            let new_sg_rev = if new_valid { sg_freq[other_key * num_keys + new_key] } else { 0 };
-            let sg_delta_rev = new_sg_rev - old_sg_rev;
-            let sg_score_delta_rev = sg_delta_rev * dist;
-            self.sfs_score_per_finger[finger] += sg_score_delta_rev;
-            self.sfs_freq_per_finger[finger] += sg_delta_rev;
-            self.total_score += sg_score_delta_rev * self.sfs_finger_weights[finger];
+            // Update running total (batched)
+            self.total_score += bg_score_delta * self.sfb_finger_weights[finger]
+                + sg_score_delta * self.sfs_finger_weights[finger];
         }
     }
 
     /// Optimized key swap: update scores for swapping keys at pos_a and pos_b.
-    /// Handles the direct pair between pos_a and pos_b specially to avoid double-counting.
     /// `bg_freq` and `sg_freq` are flat arrays indexed by `a * num_keys + b`.
+    ///
+    /// Note: The direct pair between pos_a and pos_b doesn't need special handling.
+    /// When swapping, bigram (a->b) changes from freq[key_a,key_b] to freq[key_b,key_a],
+    /// and bigram (b->a) changes from freq[key_b,key_a] to freq[key_a,key_b].
+    /// These deltas cancel out (delta_ab = -delta_ba), so there's no net change
+    /// to scores or frequencies from the direct pair.
     #[inline]
     pub fn key_swap(
         &mut self,
@@ -257,41 +258,6 @@ impl SFCache {
         bg_freq: &[i64],
         sg_freq: &[i64],
     ) {
-        let num_keys = self.num_keys;
-
-        // Handle the direct pair between pos_a and pos_b (if same finger and both keys valid)
-        if key_a < num_keys && key_b < num_keys {
-            if let Some((finger, dist)) = self.is_same_finger(pos_a, pos_b) {
-                // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
-                let bg_delta_ab = bg_freq[key_b * num_keys + key_a] - bg_freq[key_a * num_keys + key_b];
-                let bg_score_ab = bg_delta_ab * dist;
-                self.sfb_score_per_finger[finger] += bg_score_ab;
-                self.sfb_freq_per_finger[finger] += bg_delta_ab;
-                self.total_score += bg_score_ab * self.sfb_finger_weights[finger];
-
-                // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
-                let bg_delta_ba = bg_freq[key_a * num_keys + key_b] - bg_freq[key_b * num_keys + key_a];
-                let bg_score_ba = bg_delta_ba * dist;
-                self.sfb_score_per_finger[finger] += bg_score_ba;
-                self.sfb_freq_per_finger[finger] += bg_delta_ba;
-                self.total_score += bg_score_ba * self.sfb_finger_weights[finger];
-
-                // Skipgram a->b
-                let sg_delta_ab = sg_freq[key_b * num_keys + key_a] - sg_freq[key_a * num_keys + key_b];
-                let sg_score_ab = sg_delta_ab * dist;
-                self.sfs_score_per_finger[finger] += sg_score_ab;
-                self.sfs_freq_per_finger[finger] += sg_delta_ab;
-                self.total_score += sg_score_ab * self.sfs_finger_weights[finger];
-
-                // Skipgram b->a
-                let sg_delta_ba = sg_freq[key_a * num_keys + key_b] - sg_freq[key_b * num_keys + key_a];
-                let sg_score_ba = sg_delta_ba * dist;
-                self.sfs_score_per_finger[finger] += sg_score_ba;
-                self.sfs_freq_per_finger[finger] += sg_delta_ba;
-                self.total_score += sg_score_ba * self.sfs_finger_weights[finger];
-            }
-        }
-
         // Replace key at pos_a (key_a -> key_b), skipping pos_b
         self.replace_key(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq);
         // Replace key at pos_b (key_b -> key_a), skipping pos_a

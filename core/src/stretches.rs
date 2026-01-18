@@ -156,12 +156,15 @@ impl StretchCache {
         let old_valid = old_key < num_keys;
         let new_valid = new_key < num_keys;
 
+        // Pre-compute row offsets (only if valid)
+        let old_row = if old_valid { old_key * num_keys } else { 0 };
+        let new_row = if new_valid { new_key * num_keys } else { 0 };
+
         for sp in &self.stretch_pairs_per_key[pos] {
             let other_pos = sp.other_pos;
             if skip_pos == Some(other_pos) {
                 continue;
             }
-            let stretch_dist = sp.dist;
             let other_key = keys[other_pos];
 
             // Skip if other_key is EMPTY_KEY
@@ -169,23 +172,25 @@ impl StretchCache {
                 continue;
             }
 
-            // Bigram: pos -> other_pos
-            let old_bg = if old_valid { bg_freq[old_key * num_keys + other_key] } else { 0 };
-            let new_bg = if new_valid { bg_freq[new_key * num_keys + other_key] } else { 0 };
-            let bg_delta = new_bg - old_bg;
-            self.total += bg_delta * stretch_dist;
+            let stretch_dist = sp.dist;
+            let other_row = other_key * num_keys;
 
-            // Bigram: other_pos -> pos
-            let old_bg_rev = if old_valid { bg_freq[other_key * num_keys + old_key] } else { 0 };
-            let new_bg_rev = if new_valid { bg_freq[other_key * num_keys + new_key] } else { 0 };
-            let bg_delta_rev = new_bg_rev - old_bg_rev;
-            self.total += bg_delta_rev * stretch_dist;
+            // Compute both bigram deltas and combine
+            let old_bg = if old_valid { bg_freq[old_row + other_key] } else { 0 };
+            let new_bg = if new_valid { bg_freq[new_row + other_key] } else { 0 };
+            let old_bg_rev = if old_valid { bg_freq[other_row + old_key] } else { 0 };
+            let new_bg_rev = if new_valid { bg_freq[other_row + new_key] } else { 0 };
+
+            let bg_delta = (new_bg - old_bg) + (new_bg_rev - old_bg_rev);
+            self.total += bg_delta * stretch_dist;
         }
     }
 
     /// Optimized key swap: update scores for swapping keys at pos_a and pos_b.
-    /// Handles the direct pair between pos_a and pos_b specially to avoid double-counting.
     /// `bg_freq` is a flat array indexed by `a * num_keys + b`.
+    ///
+    /// Note: The direct pair between pos_a and pos_b doesn't need special handling.
+    /// When swapping, the bigram deltas cancel out (delta_ab = -delta_ba).
     #[inline]
     pub fn key_swap(
         &mut self,
@@ -196,23 +201,6 @@ impl StretchCache {
         keys: &[usize],
         bg_freq: &[i64],
     ) {
-        let num_keys = self.num_keys;
-
-        // Handle the direct pair between pos_a and pos_b (only if both keys are valid)
-        if key_a < num_keys && key_b < num_keys {
-            if let Some(sp) = self.stretch_pairs_per_key[pos_a].iter().find(|sp| sp.other_pos == pos_b) {
-                let stretch_ab = sp.dist;
-
-                // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
-                let bg_delta_ab = bg_freq[key_b * num_keys + key_a] - bg_freq[key_a * num_keys + key_b];
-                self.total += bg_delta_ab * stretch_ab;
-
-                // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
-                let bg_delta_ba = bg_freq[key_a * num_keys + key_b] - bg_freq[key_b * num_keys + key_a];
-                self.total += bg_delta_ba * stretch_ab;
-            }
-        }
-
         // Replace key at pos_a (key_a -> key_b), skipping pos_b
         self.replace_key(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
         // Replace key at pos_b (key_b -> key_a), skipping pos_a
