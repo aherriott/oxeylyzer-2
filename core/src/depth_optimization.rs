@@ -109,6 +109,9 @@ impl Analyzer {
             let count = self.neighbor_count();
             for i in 0..count {
                 let neighbor = self.get_neighbor(i);
+                // Get the revert neighbor BEFORE applying (needs current state)
+                let revert = self.get_revert_neighbor(neighbor);
+
                 // Apply the neighbor
                 self.apply_neighbor(neighbor);
 
@@ -116,7 +119,7 @@ impl Analyzer {
                 let best = self.best_neighbor_recursive(depth - 1, diffs, cur_best);
 
                 // Revert the neighbor
-                self.apply_neighbor(neighbor.revert());
+                self.apply_neighbor(revert);
 
                 // This chain is the current known best. Update diffs
                 if best {

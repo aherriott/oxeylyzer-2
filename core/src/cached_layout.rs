@@ -8,13 +8,22 @@ use crate::{
     char_mapping::CharMapping,
     data::Data,
     dist::DistCache,
-    layout::{Layout, MagicStealBigram, PosPair},
+    layout::{Layout, MagicRule, PosPair},
     same_finger::SFCache,
     stats::Stats,
     stretches::StretchCache,
     types::{CacheKey, CachePos},
     weights::Weights,
 };
+
+/// Represents a possible magic rule neighbor: (magic_key, leader, output)
+/// These are pre-computed for all valid combinations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MagicRuleNeighbor {
+    pub magic_key: CacheKey,
+    pub leader: CacheKey,
+    pub output: CacheKey,  // Can be EMPTY_KEY to clear the rule
+}
 
 pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
@@ -277,25 +286,18 @@ pub struct CachedLayout {
     key_positions: Vec<Option<CachePos>>,
     /// Number of positions (for KeySwap neighbor calculation)
     num_positions: usize,
-    /// Magic rules: for each (magic_key, leader), stores (current_output, all_possible_outputs)
-    /// Neighbors are generated for each possible output != current_output
-    magic_rules: Vec<MagicRule>,
+    /// Pre-computed magic rule neighbors (constant for the layout)
+    /// Each entry is a (magic_key, leader, output) that can be set
+    magic_rule_neighbors: Vec<MagicRuleNeighbor>,
+    /// Current magic rules: maps (magic_key, leader) -> output
+    /// If not present, no rule is active for that pair
+    current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey>,
     affected_grams: Vec<DeltaGram>,
     dist: DistCache,
     sfb: SFCache,
     stretch: StretchCache,
     magic: MagicCache,
     fingers: Vec<Finger>,
-}
-
-/// A magic rule: (magic_key, leader) can steal to any of the possible_outputs.
-/// current_output tracks which one is currently active.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MagicRule {
-    pub magic_key: CacheKey,
-    pub leader: CacheKey,
-    pub current_output: CacheKey,
-    pub possible_outputs: Vec<CacheKey>,
 }
 
 impl Default for CachedLayout {
@@ -308,7 +310,8 @@ impl Default for CachedLayout {
             keys: Vec::new(),
             key_positions: Vec::new(),
             num_positions: 0,
-            magic_rules: Vec::new(),
+            magic_rule_neighbors: Vec::new(),
+            current_magic_rules: HashMap::default(),
             affected_grams: Vec::new(),
             dist: DistCache::default(),
             sfb: SFCache::default(),
@@ -345,25 +348,41 @@ impl CachedLayout {
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
-        // Build magic rules from layout.magic
-        let mut magic_rules = Vec::new();
+        // Build magic rule neighbors from layout.magic
+        // For each (magic_key, leader), we can set any output (including EMPTY_KEY to clear)
+        let mut magic_rule_neighbors = Vec::new();
+        let mut current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey> = HashMap::default();
+
         for (&magic_char, magic_key_def) in layout.magic.iter() {
             let magic_key = analyzer_data.char_mapping().get_u(magic_char);
-            // rules() returns BTreeMap<String, String> where key=leading, value=output
-            // Group by leader to build MagicRule entries
-            let mut leader_outputs: HashMap<CacheKey, Vec<CacheKey>> = HashMap::default();
+
+            // Collect all possible outputs for this magic key
+            let mut all_outputs: Vec<CacheKey> = Vec::new();
+
             for (leading_str, output_str) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
                 let output = analyzer_data.char_mapping().get_u(output_str.chars().next().unwrap_or(' '));
-                leader_outputs.entry(leader).or_default().push(output);
+
+                // Track the initial rule
+                current_magic_rules.insert((magic_key, leader), output);
+
+                if !all_outputs.contains(&output) {
+                    all_outputs.push(output);
+                }
             }
-            for (leader, outputs) in leader_outputs {
-                if !outputs.is_empty() {
-                    magic_rules.push(MagicRule {
+
+            // Add EMPTY_KEY as a possible output (to clear rules)
+            all_outputs.push(EMPTY_KEY);
+
+            // For each leader that has a rule, create neighbors for all possible outputs
+            for (leading_str, _) in magic_key_def.rules().iter() {
+                let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
+
+                for &output in &all_outputs {
+                    magic_rule_neighbors.push(MagicRuleNeighbor {
                         magic_key,
                         leader,
-                        current_output: outputs[0], // First output is initial
-                        possible_outputs: outputs,
+                        output,
                     });
                 }
             }
@@ -377,7 +396,8 @@ impl CachedLayout {
             keys,
             key_positions,
             num_positions: len,
-            magic_rules,
+            magic_rule_neighbors,
+            current_magic_rules,
             affected_grams,
             dist,
             sfb,
@@ -392,18 +412,6 @@ impl CachedLayout {
             cache.add_key(pos, key);
         }
 
-        // Apply initial magic steals
-        for rule in &cache.magic_rules.clone() {
-            cache.magic.steal_bigram(
-                rule.leader,
-                rule.current_output,
-                rule.magic_key,
-                &cache.key_positions,
-                cache.keys.len(),
-                &mut cache.affected_grams,
-            );
-        }
-        cache.affected_grams.clear();
 
         cache
     }
@@ -425,12 +433,17 @@ impl CachedLayout {
             .map(|&k| if k == EMPTY_KEY { ' ' } else { self.data.char_mapping().get_c(k) })
             .collect();
 
-        // Reconstruct magic HashMap from magic_rules
+        // Reconstruct magic HashMap from current_magic_rules
         let mut magic: HashMap<char, MagicKey> = HashMap::default();
-        for rule in &self.magic_rules {
-            let magic_char = self.data.char_mapping().get_c(rule.magic_key);
-            let leader_char = self.data.char_mapping().get_c(rule.leader);
-            let output_char = self.data.char_mapping().get_c(rule.current_output);
+
+        for (&(magic_key_id, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY {
+                continue; // Skip cleared rules
+            }
+
+            let magic_char = self.data.char_mapping().get_c(magic_key_id);
+            let leader_char = self.data.char_mapping().get_c(leader);
+            let output_char = self.data.char_mapping().get_c(output);
 
             let magic_key = magic.entry(magic_char).or_insert_with(|| {
                 MagicKey::new(&magic_char.to_string())
@@ -492,8 +505,8 @@ impl CachedLayout {
             Neighbor::KeySwap(PosPair(a, b)) => {
                 self.swap_keys(a, b);
             }
-            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, new_output, _old_output)) => {
-                self.steal_bigram(magic_key, leader, new_output);
+            Neighbor::MagicRule(rule) => {
+                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output);
             }
         }
     }
@@ -518,18 +531,22 @@ impl CachedLayout {
                     self.key_positions[key_b] = other.key_positions[key_b];
                 }
             }
-            Neighbor::MagicStealBigram(MagicStealBigram(magic_key, leader, _new_output, _old_output)) => {
-                // Copy the magic rule's current_output
-                for (self_rule, other_rule) in self.magic_rules.iter_mut().zip(other.magic_rules.iter()) {
-                    if self_rule.magic_key == magic_key && self_rule.leader == leader {
-                        self_rule.current_output = other_rule.current_output;
-                        break;
-                    }
-                }
-
+            Neighbor::MagicRule(rule) => {
                 // Copy only affected magic frequency entries
                 let keys = &other.keys;
                 self.magic.copy_from(&other.magic, other.affected_grams(), |pos| keys[pos]);
+
+                // Copy the affected magic rule state
+                let key = (rule.magic_key, rule.leader);
+                if let Some(&output) = other.current_magic_rules.get(&key) {
+                    if output == EMPTY_KEY {
+                        self.current_magic_rules.remove(&key);
+                    } else {
+                        self.current_magic_rules.insert(key, output);
+                    }
+                } else {
+                    self.current_magic_rules.remove(&key);
+                }
             }
         }
 
@@ -695,21 +712,73 @@ impl CachedLayout {
         }
     }
 
-    /// Steal a bigram for magic key functionality.
-    /// When typing leader->output, magic key intercepts and produces output.
-    pub fn steal_bigram(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
+    /// Apply a magic rule: set the output for (magic_key, leader).
+    /// If output is EMPTY_KEY, clears the rule.
+    /// If another magic key had this same (leader, output) pair, clears it from that key.
+    pub fn apply_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
         self.affected_grams.clear();
-        self.magic.steal_bigram(
-            leader,
-            new_output,
-            magic_key,
-            &self.key_positions,
-            self.keys.len(),
-            &mut self.affected_grams,
-        );
 
-        // Update magic rule tracking
-        self.update_magic_rule(magic_key, leader, new_output);
+        let key = (magic_key, leader);
+        let old_output = self.current_magic_rules.get(&key).copied();
+
+        // If the rule is already set to this output, nothing to do
+        if old_output == Some(new_output) || (old_output.is_none() && new_output == EMPTY_KEY) {
+            return;
+        }
+
+        // If we're setting a non-empty output, check if another magic key has this (leader, output)
+        // and clear it from that key
+        if new_output != EMPTY_KEY {
+            let mut key_to_clear = None;
+            for (&(other_magic, other_leader), &other_output) in &self.current_magic_rules {
+                if other_leader == leader && other_output == new_output && other_magic != magic_key {
+                    key_to_clear = Some((other_magic, other_leader));
+                    break;
+                }
+            }
+            if let Some(clear_key) = key_to_clear {
+                // Unsteal from the other magic key
+                let other_magic = clear_key.0;
+                self.magic.steal_bigram(
+                    leader,
+                    other_magic,  // "steal" from other magic key
+                    new_output,   // back to the output
+                    &self.key_positions,
+                    self.keys.len(),
+                    &mut self.affected_grams,
+                );
+                self.current_magic_rules.remove(&clear_key);
+            }
+        }
+
+        // Unsteal the old output if there was one
+        if let Some(old_out) = old_output {
+            if old_out != EMPTY_KEY {
+                self.magic.steal_bigram(
+                    leader,
+                    magic_key,   // "steal" from magic_key
+                    old_out,     // back to old_output
+                    &self.key_positions,
+                    self.keys.len(),
+                    &mut self.affected_grams,
+                );
+            }
+        }
+
+        // Steal the new output if it's not EMPTY_KEY
+        if new_output != EMPTY_KEY {
+            self.magic.steal_bigram(
+                leader,
+                new_output,
+                magic_key,
+                &self.key_positions,
+                self.keys.len(),
+                &mut self.affected_grams,
+            );
+            self.current_magic_rules.insert(key, new_output);
+        } else {
+            self.current_magic_rules.remove(&key);
+        }
 
         // Update caches based on affected grams
         for gram in &self.affected_grams {
@@ -728,14 +797,11 @@ impl CachedLayout {
         }
     }
 
-    /// Total number of neighbors (KeySwaps + MagicStealBigrams)
-    /// For magic, each rule contributes (possible_outputs.len() - 1) neighbors (all except current)
+    /// Total number of neighbors (KeySwaps + MagicRules)
+    /// Magic rule count is constant - all possible (magic_key, leader, output) combinations are pre-computed
     #[inline]
     pub fn neighbor_count(&self) -> usize {
-        let magic_count: usize = self.magic_rules.iter()
-            .map(|r| r.possible_outputs.len().saturating_sub(1))
-            .sum();
-        self.key_swap_count() + magic_count
+        self.key_swap_count() + self.magic_rule_neighbors.len()
     }
 
     /// Number of KeySwap neighbors: n*(n-1)/2 for n positions
@@ -745,7 +811,7 @@ impl CachedLayout {
         n * (n - 1) / 2
     }
 
-    /// Get neighbor by index. KeySwaps come first, then MagicStealBigrams.
+    /// Get neighbor by index. KeySwaps come first, then MagicRules.
     #[inline]
     pub fn get_neighbor(&self, idx: usize) -> Neighbor {
         let swap_count = self.key_swap_count();
@@ -759,38 +825,30 @@ impl CachedLayout {
             let b = idx - (a * n - a * (a + 1) / 2) + a + 1;
             Neighbor::KeySwap(PosPair(a, b))
         } else {
-            // Find which magic rule and which output this index corresponds to
-            let mut magic_idx = idx - swap_count;
-            for rule in &self.magic_rules {
-                let alternatives = rule.possible_outputs.iter()
-                    .filter(|&&o| o != rule.current_output)
-                    .count();
-                if magic_idx < alternatives {
-                    // This is the rule - find the nth alternative output
-                    let new_output = rule.possible_outputs.iter()
-                        .filter(|&&o| o != rule.current_output)
-                        .nth(magic_idx)
-                        .copied()
-                        .unwrap();
-                    return Neighbor::MagicStealBigram(MagicStealBigram(
-                        rule.magic_key,
-                        rule.leader,
-                        new_output,
-                        rule.current_output,
-                    ));
-                }
-                magic_idx -= alternatives;
-            }
-            panic!("Invalid neighbor index");
+            // Direct lookup into pre-computed magic rule neighbors
+            let magic_idx = idx - swap_count;
+            let rule_neighbor = &self.magic_rule_neighbors[magic_idx];
+            Neighbor::MagicRule(MagicRule::new(
+                rule_neighbor.magic_key,
+                rule_neighbor.leader,
+                rule_neighbor.output,
+            ))
         }
     }
 
-    /// Update magic rule's current output after a steal
-    fn update_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
-        for rule in &mut self.magic_rules {
-            if rule.magic_key == magic_key && rule.leader == leader {
-                rule.current_output = new_output;
-                return;
+    /// Get the neighbor that would revert the given neighbor.
+    /// Must be called BEFORE apply_neighbor since it needs the current state.
+    pub fn get_revert_neighbor(&self, neighbor: Neighbor) -> Neighbor {
+        match neighbor {
+            Neighbor::KeySwap(pair) => {
+                // KeySwap is its own inverse
+                Neighbor::KeySwap(pair)
+            }
+            Neighbor::MagicRule(rule) => {
+                // To revert, we need to set the rule back to its current output
+                let key = (rule.magic_key, rule.leader);
+                let current_output = self.current_magic_rules.get(&key).copied().unwrap_or(EMPTY_KEY);
+                Neighbor::MagicRule(MagicRule::new(rule.magic_key, rule.leader, current_output))
             }
         }
     }

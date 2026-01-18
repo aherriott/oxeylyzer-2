@@ -158,9 +158,10 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
+                let revert = analyzer.get_revert_neighbor(black_box(neighbor));
                 analyzer.apply_neighbor(black_box(neighbor));
                 black_box(analyzer.score());
-                analyzer.apply_neighbor(black_box(neighbor.revert()));
+                analyzer.apply_neighbor(black_box(revert));
             }
         })
     }
@@ -322,7 +323,7 @@ mod bench {
         })
     }
 
-    /// Benchmark steal_bigram operation (magic key functionality)
+    /// Benchmark apply_magic_rule operation (magic key functionality)
     fn steal_bigram(bencher: Bencher, _layout_name: &str) {
         use oxeylyzer_core::cached_layout::CachedLayout;
 
@@ -342,9 +343,9 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                // Alternate between stealing to 'b' and 'c'
-                cached.steal_bigram(magic_key, leader_a, output_c);
-                cached.steal_bigram(magic_key, leader_a, output_b);
+                // Alternate between setting output to 'c' and 'b'
+                cached.apply_magic_rule(magic_key, leader_a, output_c);
+                cached.apply_magic_rule(magic_key, leader_a, output_b);
             }
         })
     }

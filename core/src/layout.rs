@@ -17,13 +17,29 @@ impl<U: Into<CacheKey>> From<(U, U)> for PosPair {
     }
 }
 
-// magic_key, leader, new_output, old_output
+/// MagicRule represents setting a magic output for a leader key.
+/// (magic_key, leader, output) - when leader is typed before magic_key, output is produced.
+/// output can be EMPTY_KEY to clear the rule.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MagicStealBigram(pub CacheKey, pub CacheKey, pub CacheKey, pub CacheKey);
+pub struct MagicRule {
+    pub magic_key: CacheKey,
+    pub leader: CacheKey,
+    pub output: CacheKey,
+}
 
-impl<U: Into<CacheKey>> From<(U, U, U, U)> for MagicStealBigram {
-    fn from((p1, p2, p3, p4): (U, U, U, U)) -> Self {
-        Self(p1.into(), p2.into(), p3.into(), p4.into())
+impl MagicRule {
+    pub fn new(magic_key: CacheKey, leader: CacheKey, output: CacheKey) -> Self {
+        Self { magic_key, leader, output }
+    }
+}
+
+impl<U: Into<CacheKey>> From<(U, U, U)> for MagicRule {
+    fn from((magic_key, leader, output): (U, U, U)) -> Self {
+        Self {
+            magic_key: magic_key.into(),
+            leader: leader.into(),
+            output: output.into(),
+        }
     }
 }
 

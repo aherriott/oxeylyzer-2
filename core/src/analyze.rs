@@ -14,23 +14,12 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Neighbor {
     KeySwap(PosPair),
-    MagicStealBigram(MagicStealBigram),
+    MagicRule(MagicRule),
 }
 
 impl Neighbor {
     pub fn default() -> Self {
         Neighbor::KeySwap(PosPair(0, 0))
-    }
-
-    pub fn revert(&self) -> Self {
-        match self {
-            // KeySwap is its own inverse
-            Neighbor::KeySwap(pair) => Neighbor::KeySwap(*pair),
-            // MagicStealBigram revert: swap new_output and old_output
-            Neighbor::MagicStealBigram(MagicStealBigram(m, leader, new_out, old_out)) => {
-                Neighbor::MagicStealBigram(MagicStealBigram(*m, *leader, *old_out, *new_out))
-            }
-        }
     }
 }
 
@@ -105,6 +94,15 @@ impl Analyzer {
             .get_neighbor(idx)
     }
 
+    /// Get the neighbor that would revert the given neighbor.
+    /// Must be called BEFORE apply_neighbor since it needs the current state.
+    pub fn get_revert_neighbor(&self, neighbor: Neighbor) -> Neighbor {
+        self.current_cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .get_revert_neighbor(neighbor)
+    }
+
     pub fn random_neighbor(&self, rng: &mut WyRand) -> Neighbor {
         assert!(self.current_cache.is_some(), "Analyzer has no Layout set");
         let cache = self.current_cache.as_ref().unwrap();
@@ -150,8 +148,7 @@ impl Analyzer {
         working.apply_neighbor(neighbor);
         let score = working.score(&self.weights);
         // Copy state from current to ensure working cache is properly restored
-        // (apply_neighbor + revert doesn't perfectly restore state due to delta calculations)
-        working.copy_from(current, neighbor.revert());
+        working.copy_from(current, neighbor);
         score
     }
 
