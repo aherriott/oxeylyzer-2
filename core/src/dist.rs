@@ -50,6 +50,12 @@ impl DistCache {
     pub fn get(&self, p1: CachePos, p2: CachePos) -> i64 {
         self.distances[p1][p2]
     }
+
+    /// Get the raw distances array for pre-computation
+    #[inline]
+    pub fn distances(&self) -> &[Vec<i64>] {
+        &self.distances
+    }
 }
 
 /// Compute dx/dy between two keys, accounting for finger lengths and key edges.

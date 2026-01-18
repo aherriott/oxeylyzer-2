@@ -35,37 +35,75 @@ pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
 /// MagicCache stores frequency tables that get modified by magic key rules.
 /// When a magic rule "steals" a bigram, the frequencies are redistributed.
+/// Uses flat arrays for better cache locality.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
-    bg_freq: Vec<Vec<i64>>,
-    sg_freq: Vec<Vec<i64>>,
+    /// Flat bigram frequencies: bg_freq[a * num_keys + b]
+    bg_freq: Vec<i64>,
+    /// Flat skipgram frequencies: sg_freq[a * num_keys + b]
+    sg_freq: Vec<i64>,
+    /// Trigram frequencies (kept as 3D for now - less frequently accessed)
     tg_freq: Vec<Vec<Vec<i64>>>,
+    /// Number of keys for indexing
+    num_keys: usize,
 }
 
 impl MagicCache {
     pub fn new(num_keys: usize) -> Self {
         Self {
-            bg_freq: vec![vec![0; num_keys]; num_keys],
-            sg_freq: vec![vec![0; num_keys]; num_keys],
+            bg_freq: vec![0; num_keys * num_keys],
+            sg_freq: vec![0; num_keys * num_keys],
             tg_freq: vec![vec![vec![0; num_keys]; num_keys]; num_keys],
+            num_keys,
         }
     }
 
-    /// Initialize frequencies from corpus data
+    /// Initialize frequencies from corpus data (2D arrays)
     pub fn init_from_data(&mut self, bigrams: &[Vec<i64>], skipgrams: &[Vec<i64>], trigrams: &[Vec<Vec<i64>>]) {
-        self.bg_freq = bigrams.to_vec();
-        self.sg_freq = skipgrams.to_vec();
+        let num_keys = self.num_keys;
+        // Flatten bigrams
+        for (a, row) in bigrams.iter().enumerate() {
+            for (b, &freq) in row.iter().enumerate() {
+                self.bg_freq[a * num_keys + b] = freq;
+            }
+        }
+        // Flatten skipgrams
+        for (a, row) in skipgrams.iter().enumerate() {
+            for (b, &freq) in row.iter().enumerate() {
+                self.sg_freq[a * num_keys + b] = freq;
+            }
+        }
         self.tg_freq = trigrams.to_vec();
+    }
+
+    /// Get flat bigram frequency array for direct indexing
+    #[inline]
+    pub fn bg_freq_flat(&self) -> &[i64] {
+        &self.bg_freq
+    }
+
+    /// Get flat skipgram frequency array for direct indexing
+    #[inline]
+    pub fn sg_freq_flat(&self) -> &[i64] {
+        &self.sg_freq
     }
 
     #[inline]
     pub fn get_bg_freq(&self, a: CacheKey, b: CacheKey) -> i64 {
-        self.bg_freq.get(a).and_then(|row| row.get(b)).copied().unwrap_or(0)
+        if a < self.num_keys && b < self.num_keys {
+            self.bg_freq[a * self.num_keys + b]
+        } else {
+            0
+        }
     }
 
     #[inline]
     pub fn get_sg_freq(&self, a: CacheKey, b: CacheKey) -> i64 {
-        self.sg_freq.get(a).and_then(|row| row.get(b)).copied().unwrap_or(0)
+        if a < self.num_keys && b < self.num_keys {
+            self.sg_freq[a * self.num_keys + b]
+        } else {
+            0
+        }
     }
 
     #[inline]
@@ -104,6 +142,8 @@ impl MagicCache {
         num_keys: usize,
         affected_grams: &mut Vec<DeltaGram>,
     ) {
+        let nk = self.num_keys;
+
         // Helper to get position
         let get_pos = |k: CacheKey| -> Option<CachePos> {
             key_positions.get(k).copied().flatten()
@@ -112,8 +152,9 @@ impl MagicCache {
         // Inline helper for setting bigram freq and recording delta
         macro_rules! set_bg {
             ($ka:expr, $kb:expr, $new:expr) => {{
-                let old = self.bg_freq[$ka][$kb];
-                self.bg_freq[$ka][$kb] = $new;
+                let idx = $ka * nk + $kb;
+                let old = self.bg_freq[idx];
+                self.bg_freq[idx] = $new;
                 if let (Some(p_a), Some(p_b)) = (get_pos($ka), get_pos($kb)) {
                     affected_grams.push(DeltaGram::Bigram(DeltaBigram {
                         p_a,
@@ -127,8 +168,9 @@ impl MagicCache {
 
         macro_rules! set_sg {
             ($ka:expr, $kb:expr, $new:expr) => {{
-                let old = self.sg_freq[$ka][$kb];
-                self.sg_freq[$ka][$kb] = $new;
+                let idx = $ka * nk + $kb;
+                let old = self.sg_freq[idx];
+                self.sg_freq[idx] = $new;
                 if let (Some(p_a), Some(p_b)) = (get_pos($ka), get_pos($kb)) {
                     affected_grams.push(DeltaGram::Skipgram(DeltaSkipgram {
                         p_a,
@@ -157,7 +199,7 @@ impl MagicCache {
         }
 
         // 1. The exact bigram A->B is fully stolen by A->M
-        let new_am = self.bg_freq[a][m] + self.bg_freq[a][b];
+        let new_am = self.bg_freq[a * nk + m] + self.bg_freq[a * nk + b];
         set_bg!(a, m, new_am);
         set_bg!(a, b, 0);
 
@@ -167,9 +209,9 @@ impl MagicCache {
             if tg == 0 {
                 continue;
             }
-            debug_assert!(self.bg_freq[b][c] >= tg);
-            let new_mc = self.bg_freq[m][c] + tg;
-            let new_bc = self.bg_freq[b][c] - tg;
+            debug_assert!(self.bg_freq[b * nk + c] >= tg);
+            let new_mc = self.bg_freq[m * nk + c] + tg;
+            let new_bc = self.bg_freq[b * nk + c] - tg;
             set_bg!(m, c, new_mc);
             set_bg!(b, c, new_bc);
         }
@@ -180,9 +222,9 @@ impl MagicCache {
             if tg == 0 {
                 continue;
             }
-            debug_assert!(self.sg_freq[z][b] >= tg);
-            let new_zm = self.sg_freq[z][m] + tg;
-            let new_zb = self.sg_freq[z][b] - tg;
+            debug_assert!(self.sg_freq[z * nk + b] >= tg);
+            let new_zm = self.sg_freq[z * nk + m] + tg;
+            let new_zb = self.sg_freq[z * nk + b] - tg;
             set_sg!(z, m, new_zm);
             set_sg!(z, b, new_zb);
         }
@@ -213,17 +255,20 @@ impl MagicCache {
     /// Copy only the frequency entries that were affected by a steal operation.
     /// `affected_grams` should contain the deltas from the steal that was applied to `other`.
     pub fn copy_from(&mut self, other: &MagicCache, affected_grams: &[DeltaGram], key_at_pos: impl Fn(CachePos) -> CacheKey) {
+        let nk = self.num_keys;
         for gram in affected_grams {
             match gram {
                 DeltaGram::Bigram(bg) => {
                     let a = key_at_pos(bg.p_a);
                     let b = key_at_pos(bg.p_b);
-                    self.bg_freq[a][b] = other.bg_freq[a][b];
+                    let idx = a * nk + b;
+                    self.bg_freq[idx] = other.bg_freq[idx];
                 }
                 DeltaGram::Skipgram(sg) => {
                     let a = key_at_pos(sg.p_a);
                     let b = key_at_pos(sg.p_b);
-                    self.sg_freq[a][b] = other.sg_freq[a][b];
+                    let idx = a * nk + b;
+                    self.sg_freq[idx] = other.sg_freq[idx];
                 }
                 DeltaGram::Trigram(tg) => {
                     let a = key_at_pos(tg.p_a);
@@ -343,8 +388,9 @@ impl CachedLayout {
         let affected_grams = Vec::with_capacity(len * len);
 
         let dist = DistCache::new(keyboard, fingers);
-        let sfb = SFCache::new(fingers, keyboard);
-        let stretch = StretchCache::new(keyboard, fingers);
+        // Pass distances and num_keys to SFCache and StretchCache
+        let sfb = SFCache::new(fingers, keyboard, dist.distances(), num_keys);
+        let stretch = StretchCache::new(keyboard, fingers, num_keys);
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -565,16 +611,19 @@ impl CachedLayout {
     pub fn replace_key(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
         debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
 
+        // Get flat frequency arrays
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+
         // Update SFB cache
         self.sfb.replace_key(
-            &self.dist,
             pos,
             old_key,
             new_key,
             &self.keys,
             None,
-            |k1, k2| self.magic.get_bg_freq(k1, k2),
-            |k1, k2| self.magic.get_sg_freq(k1, k2),
+            bg_freq,
+            sg_freq,
         );
 
         // Update stretch cache
@@ -584,7 +633,7 @@ impl CachedLayout {
             new_key,
             &self.keys,
             None,
-            |k1, k2| self.magic.get_bg_freq(k1, k2),
+            bg_freq,
         );
 
         // Update key positions
@@ -619,16 +668,19 @@ impl CachedLayout {
         debug_assert!(key_a != EMPTY_KEY, "Position {pos_a} is empty");
         debug_assert!(key_b != EMPTY_KEY, "Position {pos_b} is empty");
 
+        // Get flat frequency arrays
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+
         // Update SFB cache using optimized key_swap
         self.sfb.key_swap(
-            &self.dist,
             pos_a,
             pos_b,
             key_a,
             key_b,
             &self.keys,
-            |k1, k2| self.magic.get_bg_freq(k1, k2),
-            |k1, k2| self.magic.get_sg_freq(k1, k2),
+            bg_freq,
+            sg_freq,
         );
 
         // Update stretch cache using optimized key_swap
@@ -638,7 +690,7 @@ impl CachedLayout {
             key_a,
             key_b,
             &self.keys,
-            |k1, k2| self.magic.get_bg_freq(k1, k2),
+            bg_freq,
         );
 
         // Update key positions
@@ -724,11 +776,11 @@ impl CachedLayout {
         for gram in &self.affected_grams {
             match gram {
                 DeltaGram::Bigram(bg) => {
-                    self.sfb.update_bigram(&self.dist, bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
+                    self.sfb.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
                     self.stretch.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
                 }
                 DeltaGram::Skipgram(sg) => {
-                    self.sfb.update_skipgram(&self.dist, sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
+                    self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                 }
                 DeltaGram::Trigram(_) => {
                     // Trigrams don't affect SFB/stretch scores directly
@@ -811,8 +863,9 @@ mod magic_tests {
     #[test]
     fn magic_cache_new() {
         let cache = MagicCache::new(10);
-        assert_eq!(cache.bg_freq.len(), 10);
-        assert_eq!(cache.sg_freq.len(), 10);
+        // Flat arrays: 10*10 = 100 elements
+        assert_eq!(cache.bg_freq.len(), 100);
+        assert_eq!(cache.sg_freq.len(), 100);
         assert_eq!(cache.tg_freq.len(), 10);
     }
 
@@ -854,10 +907,11 @@ mod magic_tests {
     #[test]
     fn magic_cache_steal_bigram_basic() {
         let mut cache = MagicCache::new(4);
+        let nk = 4; // num_keys for flat indexing
         // Setup: a=0, b=1, m=2, c=3
         // Bigram a->b = 100
-        cache.bg_freq[0][1] = 100;
-        cache.bg_freq[0][2] = 0; // a->m initially 0
+        cache.bg_freq[0 * nk + 1] = 100;
+        cache.bg_freq[0 * nk + 2] = 0; // a->m initially 0
 
         let key_positions: Vec<Option<usize>> = vec![Some(0), Some(1), Some(2), Some(3)];
         let mut affected = Vec::new();
@@ -874,7 +928,8 @@ mod magic_tests {
     #[test]
     fn magic_cache_steal_records_affected_grams() {
         let mut cache = MagicCache::new(4);
-        cache.bg_freq[0][1] = 100;
+        let nk = 4;
+        cache.bg_freq[0 * nk + 1] = 100;
 
         let key_positions: Vec<Option<usize>> = vec![Some(0), Some(1), Some(2), Some(3)];
         let mut affected = Vec::new();
@@ -890,16 +945,17 @@ mod magic_tests {
     fn magic_cache_copy_from_selective() {
         let mut cache1 = MagicCache::new(4);
         let mut cache2 = MagicCache::new(4);
+        let nk = 4;
 
-        // Setup cache1 with some data
-        cache1.bg_freq[0][1] = 100;
-        cache1.bg_freq[1][2] = 200;
-        cache1.sg_freq[0][2] = 50;
+        // Setup cache1 with some data (flat indexing: a*nk + b)
+        cache1.bg_freq[0 * nk + 1] = 100;
+        cache1.bg_freq[1 * nk + 2] = 200;
+        cache1.sg_freq[0 * nk + 2] = 50;
 
         // Setup cache2 differently
-        cache2.bg_freq[0][1] = 999;
-        cache2.bg_freq[1][2] = 999;
-        cache2.sg_freq[0][2] = 999;
+        cache2.bg_freq[0 * nk + 1] = 999;
+        cache2.bg_freq[1 * nk + 2] = 999;
+        cache2.sg_freq[0 * nk + 2] = 999;
 
         // Create affected grams that only include [0][1] bigram
         let affected = vec![

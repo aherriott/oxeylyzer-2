@@ -11,18 +11,27 @@ use crate::weights::Weights;
 use libdof::dofinitions::Finger;
 use libdof::prelude::PhysicalKey;
 
+/// Pre-computed stretch pair with distance
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StretchPair {
+    pub other_pos: usize,
+    pub dist: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StretchCache {
-    /// Precomputed stretch distances for each position pair
-    stretch_dists: Vec<Vec<i64>>,
-    /// For each position, list of other positions that form a stretch pair
-    stretch_pairs_per_key: Vec<Vec<usize>>,
+    /// For each position, list of other positions that form a stretch pair with pre-computed distances
+    stretch_pairs_per_key: Vec<Vec<StretchPair>>,
+    /// Number of keys for frequency array indexing
+    num_keys: usize,
     total: i64,
 }
 
 impl StretchCache {
-    pub fn new(keyboard: &[PhysicalKey], fingers: &[Finger]) -> Self {
+    pub fn new(keyboard: &[PhysicalKey], fingers: &[Finger], num_keys: usize) -> Self {
         let len = keyboard.len();
+
+        // Compute stretch distances
         let stretch_dists: Vec<Vec<i64>> = (0..len)
             .map(|i| {
                 (0..len)
@@ -37,18 +46,25 @@ impl StretchCache {
             })
             .collect();
 
-        // Build stretch pair lookup - for each position, which other positions form a stretch
-        let stretch_pairs_per_key: Vec<Vec<usize>> = (0..len)
+        // Build stretch pair lookup with pre-computed distances
+        let stretch_pairs_per_key: Vec<Vec<StretchPair>> = (0..len)
             .map(|i| {
                 (0..len)
-                    .filter(|&j| i != j && stretch_dists[i][j] > 0)
+                    .filter_map(|j| {
+                        let dist = stretch_dists[i][j];
+                        if i != j && dist > 0 {
+                            Some(StretchPair { other_pos: j, dist })
+                        } else {
+                            None
+                        }
+                    })
                     .collect()
             })
             .collect();
 
         Self {
-            stretch_dists,
             stretch_pairs_per_key,
+            num_keys,
             total: 0,
         }
     }
@@ -77,7 +93,12 @@ impl StretchCache {
 
     #[inline]
     pub fn get_stretch(&self, p1: CachePos, p2: CachePos) -> i64 {
-        self.stretch_dists[p1][p2]
+        // Look up in stretch_pairs_per_key
+        self.stretch_pairs_per_key[p1]
+            .iter()
+            .find(|sp| sp.other_pos == p2)
+            .map(|sp| sp.dist)
+            .unwrap_or(0)
     }
 
     pub fn score(&self, weights: &Weights) -> i64 {
@@ -90,9 +111,9 @@ impl StretchCache {
     }
 
     pub fn update_bigram(&mut self, p_a: CachePos, p_b: CachePos, old_freq: i64, new_freq: i64) {
-        let stretch_dist = self.get_stretch(p_a, p_b);
-        if stretch_dist > 0 {
-            let delta = (new_freq - old_freq) * stretch_dist;
+        // Look up stretch distance from pre-computed pairs
+        if let Some(sp) = self.stretch_pairs_per_key[p_a].iter().find(|sp| sp.other_pos == p_b) {
+            let delta = (new_freq - old_freq) * sp.dist;
             self.total += delta;
         }
     }
@@ -110,64 +131,81 @@ impl StretchCache {
     /// Replace key at position: update scores for changing from old_key to new_key.
     /// Use EMPTY_KEY for old_key when adding, or new_key when removing.
     /// `skip_pos` allows skipping a position (used by key_swap to avoid double-counting).
+    /// `bg_freq` is a flat array indexed by `a * num_keys + b`.
     #[inline]
-    pub fn replace_key<F>(
+    pub fn replace_key(
         &mut self,
         pos: CachePos,
         old_key: usize,
         new_key: usize,
         keys: &[usize],
         skip_pos: Option<usize>,
-        get_bg_freq: F,
-    ) where
-        F: Fn(usize, usize) -> i64,
-    {
-        for &other_pos in &self.stretch_pairs_per_key[pos] {
+        bg_freq: &[i64],
+    ) {
+        let num_keys = self.num_keys;
+        let old_valid = old_key < num_keys;
+        let new_valid = new_key < num_keys;
+
+        for sp in &self.stretch_pairs_per_key[pos] {
+            let other_pos = sp.other_pos;
             if skip_pos == Some(other_pos) {
                 continue;
             }
-            let stretch_dist = self.stretch_dists[pos][other_pos];
+            let stretch_dist = sp.dist;
             let other_key = keys[other_pos];
 
+            // Skip if other_key is EMPTY_KEY
+            if other_key >= num_keys {
+                continue;
+            }
+
             // Bigram: pos -> other_pos
-            let bg_delta = get_bg_freq(new_key, other_key) - get_bg_freq(old_key, other_key);
+            let old_bg = if old_valid { bg_freq[old_key * num_keys + other_key] } else { 0 };
+            let new_bg = if new_valid { bg_freq[new_key * num_keys + other_key] } else { 0 };
+            let bg_delta = new_bg - old_bg;
             self.total += bg_delta * stretch_dist;
 
             // Bigram: other_pos -> pos
-            let bg_delta_rev = get_bg_freq(other_key, new_key) - get_bg_freq(other_key, old_key);
+            let old_bg_rev = if old_valid { bg_freq[other_key * num_keys + old_key] } else { 0 };
+            let new_bg_rev = if new_valid { bg_freq[other_key * num_keys + new_key] } else { 0 };
+            let bg_delta_rev = new_bg_rev - old_bg_rev;
             self.total += bg_delta_rev * stretch_dist;
         }
     }
 
     /// Optimized key swap: update scores for swapping keys at pos_a and pos_b.
     /// Handles the direct pair between pos_a and pos_b specially to avoid double-counting.
+    /// `bg_freq` is a flat array indexed by `a * num_keys + b`.
     #[inline]
-    pub fn key_swap<F>(
+    pub fn key_swap(
         &mut self,
         pos_a: CachePos,
         pos_b: CachePos,
         key_a: usize,
         key_b: usize,
         keys: &[usize],
-        get_bg_freq: F,
-    ) where
-        F: Fn(usize, usize) -> i64,
-    {
-        // Handle the direct pair between pos_a and pos_b
-        let stretch_ab = self.get_stretch(pos_a, pos_b);
-        if stretch_ab > 0 {
-            // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
-            let bg_delta_ab = get_bg_freq(key_b, key_a) - get_bg_freq(key_a, key_b);
-            self.total += bg_delta_ab * stretch_ab;
+        bg_freq: &[i64],
+    ) {
+        let num_keys = self.num_keys;
 
-            // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
-            let bg_delta_ba = get_bg_freq(key_a, key_b) - get_bg_freq(key_b, key_a);
-            self.total += bg_delta_ba * stretch_ab;
+        // Handle the direct pair between pos_a and pos_b (only if both keys are valid)
+        if key_a < num_keys && key_b < num_keys {
+            if let Some(sp) = self.stretch_pairs_per_key[pos_a].iter().find(|sp| sp.other_pos == pos_b) {
+                let stretch_ab = sp.dist;
+
+                // Bigram a->b: was (key_a, key_b), now (key_b, key_a)
+                let bg_delta_ab = bg_freq[key_b * num_keys + key_a] - bg_freq[key_a * num_keys + key_b];
+                self.total += bg_delta_ab * stretch_ab;
+
+                // Bigram b->a: was (key_b, key_a), now (key_a, key_b)
+                let bg_delta_ba = bg_freq[key_a * num_keys + key_b] - bg_freq[key_b * num_keys + key_a];
+                self.total += bg_delta_ba * stretch_ab;
+            }
         }
 
         // Replace key at pos_a (key_a -> key_b), skipping pos_b
-        self.replace_key(pos_a, key_a, key_b, keys, Some(pos_b), &get_bg_freq);
+        self.replace_key(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
         // Replace key at pos_b (key_b -> key_a), skipping pos_a
-        self.replace_key(pos_b, key_b, key_a, keys, Some(pos_a), &get_bg_freq);
+        self.replace_key(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
     }
 }
