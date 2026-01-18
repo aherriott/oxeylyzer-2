@@ -10,7 +10,6 @@ pub mod data;
 pub mod depth_optimization;
 pub mod dist;
 pub mod layout;
-pub mod magic;
 pub mod optimization;
 pub mod same_finger;
 pub mod simulated_annealing;
