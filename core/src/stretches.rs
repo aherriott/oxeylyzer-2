@@ -102,7 +102,6 @@ impl StretchCache {
 
     #[inline]
     pub fn get_stretch(&self, p1: CachePos, p2: CachePos) -> i64 {
-        // Look up in stretch_pairs_per_key
         self.stretch_pairs_per_key[p1]
             .iter()
             .find(|sp| sp.other_pos == p2)
@@ -121,27 +120,14 @@ impl StretchCache {
     }
 
     pub fn update_bigram(&mut self, p_a: CachePos, p_b: CachePos, old_freq: i64, new_freq: i64) {
-        // Look up stretch distance from pre-computed pairs
         if let Some(sp) = self.stretch_pairs_per_key[p_a].iter().find(|sp| sp.other_pos == p_b) {
             let delta = (new_freq - old_freq) * sp.dist;
             self.total += delta;
         }
     }
 
-    pub fn update_skipgram(&mut self, _p_a: CachePos, _p_b: CachePos, _old_freq: i64, _new_freq: i64) {
-        // Stretches don't track skipgrams
-    }
-
-    /// Copy scoring data from another StretchCache. No allocations.
-    #[inline]
-    pub fn copy_from(&mut self, other: &StretchCache) {
-        self.total = other.total;
-    }
-
-    /// Replace key at position: update scores for changing from old_key to new_key.
-    /// Use EMPTY_KEY for old_key when adding, or new_key when removing.
-    /// `skip_pos` allows skipping a position (used by key_swap to avoid double-counting).
-    /// `bg_freq` is a flat array indexed by `a * num_keys + b`.
+    /// Replace key at position. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
     #[inline]
     pub fn replace_key(
         &mut self,
@@ -151,14 +137,34 @@ impl StretchCache {
         keys: &[usize],
         skip_pos: Option<usize>,
         bg_freq: &[i64],
-    ) {
+        apply: bool,
+    ) -> i64 {
+        let delta = self.compute_replace_delta(pos, old_key, new_key, keys, skip_pos, bg_freq);
+        if apply {
+            self.total += delta;
+        }
+        (self.total + if apply { 0 } else { delta }) * self.stretch_weight
+    }
+
+    /// Compute the delta for replacing a key without mutating state.
+    #[inline]
+    fn compute_replace_delta(
+        &self,
+        pos: CachePos,
+        old_key: usize,
+        new_key: usize,
+        keys: &[usize],
+        skip_pos: Option<usize>,
+        bg_freq: &[i64],
+    ) -> i64 {
         let num_keys = self.num_keys;
         let old_valid = old_key < num_keys;
         let new_valid = new_key < num_keys;
 
-        // Pre-compute row offsets (only if valid)
         let old_row = if old_valid { old_key * num_keys } else { 0 };
         let new_row = if new_valid { new_key * num_keys } else { 0 };
+
+        let mut delta: i64 = 0;
 
         for sp in &self.stretch_pairs_per_key[pos] {
             let other_pos = sp.other_pos;
@@ -167,7 +173,6 @@ impl StretchCache {
             }
             let other_key = keys[other_pos];
 
-            // Skip if other_key is EMPTY_KEY
             if other_key >= num_keys {
                 continue;
             }
@@ -175,22 +180,20 @@ impl StretchCache {
             let stretch_dist = sp.dist;
             let other_row = other_key * num_keys;
 
-            // Compute both bigram deltas and combine
             let old_bg = if old_valid { bg_freq[old_row + other_key] } else { 0 };
             let new_bg = if new_valid { bg_freq[new_row + other_key] } else { 0 };
             let old_bg_rev = if old_valid { bg_freq[other_row + old_key] } else { 0 };
             let new_bg_rev = if new_valid { bg_freq[other_row + new_key] } else { 0 };
 
             let bg_delta = (new_bg - old_bg) + (new_bg_rev - old_bg_rev);
-            self.total += bg_delta * stretch_dist;
+            delta += bg_delta * stretch_dist;
         }
+
+        delta
     }
 
-    /// Optimized key swap: update scores for swapping keys at pos_a and pos_b.
-    /// `bg_freq` is a flat array indexed by `a * num_keys + b`.
-    ///
-    /// Note: The direct pair between pos_a and pos_b doesn't need special handling.
-    /// When swapping, the bigram deltas cancel out (delta_ab = -delta_ba).
+    /// Swap keys at two positions. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
     #[inline]
     pub fn key_swap(
         &mut self,
@@ -200,10 +203,17 @@ impl StretchCache {
         key_b: usize,
         keys: &[usize],
         bg_freq: &[i64],
-    ) {
-        // Replace key at pos_a (key_a -> key_b), skipping pos_b
-        self.replace_key(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
-        // Replace key at pos_b (key_b -> key_a), skipping pos_a
-        self.replace_key(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
+        apply: bool,
+    ) -> i64 {
+        // Compute delta for pos_a (key_a -> key_b), skipping pos_b
+        let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
+        // Compute delta for pos_b (key_b -> key_a), skipping pos_a
+        let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
+        let total_delta = delta_a + delta_b;
+
+        if apply {
+            self.total += total_delta;
+        }
+        (self.total + if apply { 0 } else { total_delta }) * self.stretch_weight
     }
 }

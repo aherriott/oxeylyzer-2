@@ -352,8 +352,8 @@ mod bench {
         bencher.bench(|| {
             for _ in 0..N {
                 // Alternate between setting output to 'c' and 'b'
-                cached.apply_magic_rule(magic_key, leader_a, output_c);
-                cached.apply_magic_rule(magic_key, leader_a, output_b);
+                cached.apply_magic_rule(magic_key, leader_a, output_c, true);
+                cached.apply_magic_rule(magic_key, leader_a, output_b, true);
             }
         })
     }

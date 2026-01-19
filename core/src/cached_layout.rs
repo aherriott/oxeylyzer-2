@@ -35,14 +35,13 @@ pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
 /// MagicCache stores frequency tables that get modified by magic key rules.
 /// When a magic rule "steals" a bigram, the frequencies are redistributed.
-/// Uses flat arrays for better cache locality.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
     /// Flat bigram frequencies: bg_freq[a * num_keys + b]
     bg_freq: Vec<i64>,
     /// Flat skipgram frequencies: sg_freq[a * num_keys + b]
     sg_freq: Vec<i64>,
-    /// Trigram frequencies (kept as 3D for now - less frequently accessed)
+    /// Trigram frequencies
     tg_freq: Vec<Vec<Vec<i64>>>,
     /// Number of keys for indexing
     num_keys: usize,
@@ -61,13 +60,11 @@ impl MagicCache {
     /// Initialize frequencies from corpus data (2D arrays)
     pub fn init_from_data(&mut self, bigrams: &[Vec<i64>], skipgrams: &[Vec<i64>], trigrams: &[Vec<Vec<i64>>]) {
         let num_keys = self.num_keys;
-        // Flatten bigrams
         for (a, row) in bigrams.iter().enumerate() {
             for (b, &freq) in row.iter().enumerate() {
                 self.bg_freq[a * num_keys + b] = freq;
             }
         }
-        // Flatten skipgrams
         for (a, row) in skipgrams.iter().enumerate() {
             for (b, &freq) in row.iter().enumerate() {
                 self.sg_freq[a * num_keys + b] = freq;
@@ -76,13 +73,11 @@ impl MagicCache {
         self.tg_freq = trigrams.to_vec();
     }
 
-    /// Get flat bigram frequency array for direct indexing
     #[inline]
     pub fn bg_freq_flat(&self) -> &[i64] {
         &self.bg_freq
     }
 
-    /// Get flat skipgram frequency array for direct indexing
     #[inline]
     pub fn sg_freq_flat(&self) -> &[i64] {
         &self.sg_freq
@@ -144,12 +139,10 @@ impl MagicCache {
     ) {
         let nk = self.num_keys;
 
-        // Helper to get position
         let get_pos = |k: CacheKey| -> Option<CachePos> {
             key_positions.get(k).copied().flatten()
         };
 
-        // Inline helper for setting bigram freq and recording delta
         macro_rules! set_bg {
             ($ka:expr, $kb:expr, $new:expr) => {{
                 let idx = $ka * nk + $kb;
@@ -252,9 +245,8 @@ impl MagicCache {
         }
     }
 
-    /// Copy only the frequency entries that were affected by a steal operation.
-    /// `affected_grams` should contain the deltas from the steal that was applied to `other`.
-    pub fn copy_from(&mut self, other: &MagicCache, affected_grams: &[DeltaGram], key_at_pos: impl Fn(CachePos) -> CacheKey) {
+    /// Revert frequency changes from affected_grams
+    pub fn revert_affected(&mut self, affected_grams: &[DeltaGram], key_at_pos: impl Fn(CachePos) -> CacheKey) {
         let nk = self.num_keys;
         for gram in affected_grams {
             match gram {
@@ -262,19 +254,19 @@ impl MagicCache {
                     let a = key_at_pos(bg.p_a);
                     let b = key_at_pos(bg.p_b);
                     let idx = a * nk + b;
-                    self.bg_freq[idx] = other.bg_freq[idx];
+                    self.bg_freq[idx] = bg.old_freq;
                 }
                 DeltaGram::Skipgram(sg) => {
                     let a = key_at_pos(sg.p_a);
                     let b = key_at_pos(sg.p_b);
                     let idx = a * nk + b;
-                    self.sg_freq[idx] = other.sg_freq[idx];
+                    self.sg_freq[idx] = sg.old_freq;
                 }
                 DeltaGram::Trigram(tg) => {
                     let a = key_at_pos(tg.p_a);
                     let b = key_at_pos(tg.p_b);
                     let c = key_at_pos(tg.p_c);
-                    self.tg_freq[a][b][c] = other.tg_freq[a][b][c];
+                    self.tg_freq[a][b][c] = tg.old_freq;
                 }
             }
         }
@@ -313,29 +305,16 @@ pub enum DeltaGram {
     Trigram(DeltaTrigram),
 }
 
-// CachedLayout contains the minimum mutable data used to define a layout and store scoring.
-// Designed to copy quickly and without allocation. Wrapped by Analyzer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedLayout {
-    // Layout identity
     name: String,
     keyboard: Box<[PhysicalKey]>,
     shape: Shape,
-
-    /// Corpus data including char_mapping, character frequencies, bigrams, skipgrams, trigrams
     data: AnalyzerData,
-
-    /// Key at each position (EMPTY_KEY if unassigned)
     keys: Vec<CacheKey>,
-    /// Position of each key (None if not placed)
     key_positions: Vec<Option<CachePos>>,
-    /// Number of positions (for KeySwap neighbor calculation)
     num_positions: usize,
-    /// Pre-computed magic rule neighbors (constant for the layout)
-    /// Each entry is a (magic_key, leader, output) that can be set
     magic_rule_neighbors: Vec<MagicRuleNeighbor>,
-    /// Current magic rules: maps (magic_key, leader) -> output
-    /// If not present, no rule is active for that pair
     current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey>,
     affected_grams: Vec<DeltaGram>,
     dist: DistCache,
@@ -367,8 +346,8 @@ impl Default for CachedLayout {
     }
 }
 
+
 impl CachedLayout {
-    /// Create a new CachedLayout from a Layout and Data
     pub fn new(layout: &Layout, data: Data, weights: &Weights) -> Self {
         let mut analyzer_data = AnalyzerData::new(data);
 
@@ -384,11 +363,9 @@ impl CachedLayout {
 
         let keys = vec![EMPTY_KEY; len];
         let key_positions = vec![None; num_keys];
-
         let affected_grams = Vec::with_capacity(len * len);
 
         let dist = DistCache::new(keyboard, fingers);
-        // Pass distances and num_keys to SFCache and StretchCache
         let mut sfb = SFCache::new(fingers, keyboard, dist.distances(), num_keys);
         sfb.set_weights(weights);
         let mut stretch = StretchCache::new(keyboard, fingers, num_keys);
@@ -396,8 +373,6 @@ impl CachedLayout {
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
-        // Build magic rule neighbors from layout.magic
-        // For each (magic_key, leader), we can set any output (including EMPTY_KEY to clear)
         let mut magic_rule_neighbors = Vec::new();
         let mut current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey> = HashMap::default();
 
@@ -410,10 +385,7 @@ impl CachedLayout {
             for (leading_str, output_str) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
                 let output = analyzer_data.char_mapping().get_u(output_str.chars().next().unwrap_or(' '));
-
-                // Track the initial rule
                 current_magic_rules.insert((magic_key, leader), output);
-
                 if !all_outputs.contains(&output) {
                     all_outputs.push(output);
                 }
@@ -425,7 +397,6 @@ impl CachedLayout {
             // For each leader that has a rule, create neighbors for all possible outputs
             for (leading_str, _) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
-
                 for &output in &all_outputs {
                     magic_rule_neighbors.push(MagicRuleNeighbor {
                         magic_key,
@@ -454,27 +425,22 @@ impl CachedLayout {
             fingers: fingers.to_vec(),
         };
 
-        // Initialize keys from layout
         for (pos, &key_char) in layout.keys.iter().enumerate() {
             let key = cache.data.char_mapping().get_u(key_char);
             cache.add_key(pos, key);
         }
 
-
         cache
     }
 
-    /// Access the analyzer data (char frequencies, bigrams, etc.)
     pub fn data(&self) -> &AnalyzerData {
         &self.data
     }
 
-    /// Access the char mapping
     pub fn char_mapping(&self) -> &CharMapping {
         self.data.char_mapping()
     }
 
-    /// Convert back to a Layout
     pub fn to_layout(&self) -> Layout {
         // Convert keys back to chars
         let keys: Box<[char]> = self.keys.iter()
@@ -486,7 +452,7 @@ impl CachedLayout {
 
         for (&(magic_key_id, leader), &output) in &self.current_magic_rules {
             if output == EMPTY_KEY {
-                continue; // Skip cleared rules
+                continue;
             }
 
             let magic_char = self.data.char_mapping().get_c(magic_key_id);
@@ -540,188 +506,92 @@ impl CachedLayout {
             }
         }
 
-        // SFB/SFS stats
         self.sfb.stats(stats, bigram_total, skipgram_total);
-
-        // Stretch stats
         self.stretch.stats(stats, bigram_total);
     }
 
-    /// Apply a neighbor transformation
-    pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
+    /// Apply a neighbor transformation. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
+    pub fn apply_neighbor(&mut self, neighbor: Neighbor, apply: bool) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
-                self.swap_keys(a, b);
+                self.swap_keys(a, b, apply)
             }
             Neighbor::MagicRule(rule) => {
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output);
+                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, apply)
             }
         }
     }
 
-    /// Copy only the delta resulting from a neighbor transformation from another cache.
-    /// Assumes `other` has had `neighbor` applied relative to `self`.
-    /// This is more efficient than cloning the entire cache.
-    pub fn copy_from(&mut self, other: &CachedLayout, neighbor: Neighbor) {
-        match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => {
-                // Copy the swapped keys
-                let key_a = other.keys[a];
-                let key_b = other.keys[b];
-                self.keys[a] = key_a;
-                self.keys[b] = key_b;
-
-                // Copy key_positions for the affected keys
-                if key_a < self.key_positions.len() {
-                    self.key_positions[key_a] = other.key_positions[key_a];
-                }
-                if key_b < self.key_positions.len() {
-                    self.key_positions[key_b] = other.key_positions[key_b];
-                }
-            }
-            Neighbor::MagicRule(rule) => {
-                // Copy only affected magic frequency entries
-                let keys = &other.keys;
-                self.magic.copy_from(&other.magic, other.affected_grams(), |pos| keys[pos]);
-
-                // Copy the affected magic rule state
-                let key = (rule.magic_key, rule.leader);
-                if let Some(&output) = other.current_magic_rules.get(&key) {
-                    if output == EMPTY_KEY {
-                        self.current_magic_rules.remove(&key);
-                    } else {
-                        self.current_magic_rules.insert(key, output);
-                    }
-                } else {
-                    self.current_magic_rules.remove(&key);
-                }
-            }
-        }
-
-        // Copy scoring caches - these use fixed-size arrays, no allocation
-        self.sfb.copy_from(&other.sfb);
-        self.stretch.copy_from(&other.stretch);
-
-        // Clear affected_grams to match the original state (it's a working buffer)
-        self.affected_grams.clear();
-    }
-
-    /// Replace key at position: change from old_key to new_key.
-    /// Use EMPTY_KEY for old_key when adding a key to an empty position.
-    /// Use EMPTY_KEY for new_key when removing a key.
+    /// Replace key at position. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
     #[inline]
-    pub fn replace_key(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
+    pub fn replace_key(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey, apply: bool) -> i64 {
         debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
 
-        // Get flat frequency arrays
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
 
-        // Update SFB cache
-        self.sfb.replace_key(
-            pos,
-            old_key,
-            new_key,
-            &self.keys,
-            None,
-            bg_freq,
-            sg_freq,
-        );
+        let sfb_score = self.sfb.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq, apply);
+        let stretch_score = self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, apply);
 
-        // Update stretch cache
-        self.stretch.replace_key(
-            pos,
-            old_key,
-            new_key,
-            &self.keys,
-            None,
-            bg_freq,
-        );
-
-        // Update key positions
-        self.keys[pos] = new_key;
-        if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
-            self.key_positions[old_key] = None;
+        if apply {
+            self.keys[pos] = new_key;
+            if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
+                self.key_positions[old_key] = None;
+            }
+            if new_key != EMPTY_KEY && new_key < self.key_positions.len() {
+                self.key_positions[new_key] = Some(pos);
+            }
         }
-        if new_key != EMPTY_KEY && new_key < self.key_positions.len() {
-            self.key_positions[new_key] = Some(pos);
-        }
+
+        sfb_score + stretch_score
     }
 
-    /// Add a key at pos. Position should currently be empty.
+    /// Swap keys at two positions. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
     #[inline]
-    pub fn add_key(&mut self, pos: CachePos, key: CacheKey) {
-        self.replace_key(pos, EMPTY_KEY, key);
-    }
-
-    /// Remove a key at pos. Position should currently contain a key.
-    #[inline]
-    pub fn remove_key(&mut self, pos: CachePos) {
-        let key = self.keys[pos];
-        self.replace_key(pos, key, EMPTY_KEY);
-    }
-
-    /// Swap keys at two positions using optimized cache methods.
-    #[inline]
-    pub fn swap_keys(&mut self, pos_a: CachePos, pos_b: CachePos) {
+    pub fn swap_keys(&mut self, pos_a: CachePos, pos_b: CachePos, apply: bool) -> i64 {
         let key_a = self.keys[pos_a];
         let key_b = self.keys[pos_b];
 
         debug_assert!(key_a != EMPTY_KEY, "Position {pos_a} is empty");
         debug_assert!(key_b != EMPTY_KEY, "Position {pos_b} is empty");
 
-        // Get flat frequency arrays
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
 
-        // Update SFB cache using optimized key_swap
-        self.sfb.key_swap(
-            pos_a,
-            pos_b,
-            key_a,
-            key_b,
-            &self.keys,
-            bg_freq,
-            sg_freq,
-        );
+        let sfb_score = self.sfb.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq, apply);
+        let stretch_score = self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, apply);
 
-        // Update stretch cache using optimized key_swap
-        self.stretch.key_swap(
-            pos_a,
-            pos_b,
-            key_a,
-            key_b,
-            &self.keys,
-            bg_freq,
-        );
+        if apply {
+            self.keys[pos_a] = key_b;
+            self.keys[pos_b] = key_a;
+            if key_a < self.key_positions.len() {
+                self.key_positions[key_a] = Some(pos_b);
+            }
+            if key_b < self.key_positions.len() {
+                self.key_positions[key_b] = Some(pos_a);
+            }
+        }
 
-        // Update key positions
-        self.keys[pos_a] = key_b;
-        self.keys[pos_b] = key_a;
-        if key_a < self.key_positions.len() {
-            self.key_positions[key_a] = Some(pos_b);
-        }
-        if key_b < self.key_positions.len() {
-            self.key_positions[key_b] = Some(pos_a);
-        }
+        sfb_score + stretch_score
     }
 
-    /// Apply a magic rule: set the output for (magic_key, leader).
-    /// If output is EMPTY_KEY, clears the rule.
-    /// If another magic key had this same (leader, output) pair, clears it from that key.
-    pub fn apply_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
+
+    /// Apply a magic rule. Returns the new score.
+    /// If `apply` is false, computes the score without mutating state.
+    pub fn apply_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey, apply: bool) -> i64 {
         self.affected_grams.clear();
 
         let key = (magic_key, leader);
         let old_output = self.current_magic_rules.get(&key).copied();
 
-        // If the rule is already set to this output, nothing to do
         if old_output == Some(new_output) || (old_output.is_none() && new_output == EMPTY_KEY) {
-            return;
+            return self.score();
         }
 
-        // If we're setting a non-empty output, check if another magic key has this (leader, output)
-        // and clear it from that key
+        // Check if another magic key has this (leader, output) and clear it
         if new_output != EMPTY_KEY {
             let mut key_to_clear = None;
             for (&(other_magic, other_leader), &other_output) in &self.current_magic_rules {
@@ -731,17 +601,18 @@ impl CachedLayout {
                 }
             }
             if let Some(clear_key) = key_to_clear {
-                // Unsteal from the other magic key
                 let other_magic = clear_key.0;
                 self.magic.steal_bigram(
                     leader,
-                    other_magic,  // "steal" from other magic key
-                    new_output,   // back to the output
+                    other_magic,
+                    new_output,
                     &self.key_positions,
                     self.keys.len(),
                     &mut self.affected_grams,
                 );
-                self.current_magic_rules.remove(&clear_key);
+                if apply {
+                    self.current_magic_rules.remove(&clear_key);
+                }
             }
         }
 
@@ -750,8 +621,8 @@ impl CachedLayout {
             if old_out != EMPTY_KEY {
                 self.magic.steal_bigram(
                     leader,
-                    magic_key,   // "steal" from magic_key
-                    old_out,     // back to old_output
+                    magic_key,
+                    old_out,
                     &self.key_positions,
                     self.keys.len(),
                     &mut self.affected_grams,
@@ -759,7 +630,7 @@ impl CachedLayout {
             }
         }
 
-        // Steal the new output if it's not EMPTY_KEY
+        // Steal the new output
         if new_output != EMPTY_KEY {
             self.magic.steal_bigram(
                 leader,
@@ -769,9 +640,6 @@ impl CachedLayout {
                 self.keys.len(),
                 &mut self.affected_grams,
             );
-            self.current_magic_rules.insert(key, new_output);
-        } else {
-            self.current_magic_rules.remove(&key);
         }
 
         // Update caches based on affected grams
@@ -784,42 +652,62 @@ impl CachedLayout {
                 DeltaGram::Skipgram(sg) => {
                     self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                 }
-                DeltaGram::Trigram(_) => {
-                    // Trigrams don't affect SFB/stretch scores directly
-                }
+                DeltaGram::Trigram(_) => {}
             }
         }
+
+        let score = self.score();
+
+        if !apply {
+            // Revert the changes
+            for gram in self.affected_grams.iter().rev() {
+                match gram {
+                    DeltaGram::Bigram(bg) => {
+                        self.sfb.update_bigram(bg.p_a, bg.p_b, bg.new_freq, bg.old_freq);
+                        self.stretch.update_bigram(bg.p_a, bg.p_b, bg.new_freq, bg.old_freq);
+                    }
+                    DeltaGram::Skipgram(sg) => {
+                        self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.new_freq, sg.old_freq);
+                    }
+                    DeltaGram::Trigram(_) => {}
+                }
+            }
+            // Revert magic cache
+            let keys = &self.keys;
+            self.magic.revert_affected(&self.affected_grams, |pos| keys[pos]);
+        } else {
+            // Apply the rule change
+            if new_output != EMPTY_KEY {
+                self.current_magic_rules.insert(key, new_output);
+            } else {
+                self.current_magic_rules.remove(&key);
+            }
+        }
+
+        score
     }
 
-    /// Total number of neighbors (KeySwaps + MagicRules)
-    /// Magic rule count is constant - all possible (magic_key, leader, output) combinations are pre-computed
     #[inline]
     pub fn neighbor_count(&self) -> usize {
         self.key_swap_count() + self.magic_rule_neighbors.len()
     }
 
-    /// Number of KeySwap neighbors: n*(n-1)/2 for n positions
     #[inline]
     fn key_swap_count(&self) -> usize {
         let n = self.num_positions;
         n * (n - 1) / 2
     }
 
-    /// Get neighbor by index. KeySwaps come first, then MagicRules.
     #[inline]
     pub fn get_neighbor(&self, idx: usize) -> Neighbor {
         let swap_count = self.key_swap_count();
         if idx < swap_count {
-            // Decode triangular index to (a, b) where a < b
-            // idx = a*n - a*(a+1)/2 + (b - a - 1)
-            // Solve for a: a = floor((2n-1 - sqrt((2n-1)^2 - 8*idx)) / 2)
             let n = self.num_positions;
             let a = ((2 * n - 1) as f64 - ((2 * n - 1).pow(2) as f64 - 8.0 * idx as f64).sqrt()) / 2.0;
             let a = a.floor() as usize;
             let b = idx - (a * n - a * (a + 1) / 2) + a + 1;
             Neighbor::KeySwap(PosPair(a, b))
         } else {
-            // Direct lookup into pre-computed magic rule neighbors
             let magic_idx = idx - swap_count;
             let rule_neighbor = &self.magic_rule_neighbors[magic_idx];
             Neighbor::MagicRule(MagicRule::new(
@@ -830,16 +718,10 @@ impl CachedLayout {
         }
     }
 
-    /// Get the neighbor that would revert the given neighbor.
-    /// Must be called BEFORE apply_neighbor since it needs the current state.
     pub fn get_revert_neighbor(&self, neighbor: Neighbor) -> Neighbor {
         match neighbor {
-            Neighbor::KeySwap(pair) => {
-                // KeySwap is its own inverse
-                Neighbor::KeySwap(pair)
-            }
+            Neighbor::KeySwap(pair) => Neighbor::KeySwap(pair),
             Neighbor::MagicRule(rule) => {
-                // To revert, we need to set the rule back to its current output
                 let key = (rule.magic_key, rule.leader);
                 let current_output = self.current_magic_rules.get(&key).copied().unwrap_or(EMPTY_KEY);
                 Neighbor::MagicRule(MagicRule::new(rule.magic_key, rule.leader, current_output))
@@ -865,7 +747,6 @@ mod magic_tests {
     #[test]
     fn magic_cache_new() {
         let cache = MagicCache::new(10);
-        // Flat arrays: 10*10 = 100 elements
         assert_eq!(cache.bg_freq.len(), 100);
         assert_eq!(cache.sg_freq.len(), 100);
         assert_eq!(cache.tg_freq.len(), 10);
@@ -909,21 +790,16 @@ mod magic_tests {
     #[test]
     fn magic_cache_steal_bigram_basic() {
         let mut cache = MagicCache::new(4);
-        let nk = 4; // num_keys for flat indexing
-        // Setup: a=0, b=1, m=2, c=3
-        // Bigram a->b = 100
+        let nk = 4;
         cache.bg_freq[0 * nk + 1] = 100;
-        cache.bg_freq[0 * nk + 2] = 0; // a->m initially 0
+        cache.bg_freq[0 * nk + 2] = 0;
 
         let key_positions: Vec<Option<usize>> = vec![Some(0), Some(1), Some(2), Some(3)];
         let mut affected = Vec::new();
 
-        // Steal bigram a->b with magic key m
         cache.steal_bigram(0, 1, 2, &key_positions, 4, &mut affected);
 
-        // a->b should now be 0
         assert_eq!(cache.get_bg_freq(0, 1), 0, "a->b should be stolen");
-        // a->m should now have the stolen frequency
         assert_eq!(cache.get_bg_freq(0, 2), 100, "a->m should have stolen frequency");
     }
 
@@ -938,45 +814,7 @@ mod magic_tests {
 
         cache.steal_bigram(0, 1, 2, &key_positions, 4, &mut affected);
 
-        // Should have recorded at least the two bigram changes (a->b and a->m)
         let bigram_count = affected.iter().filter(|g| matches!(g, DeltaGram::Bigram(_))).count();
         assert!(bigram_count >= 2, "Should record at least 2 bigram changes, got {bigram_count}");
-    }
-
-    #[test]
-    fn magic_cache_copy_from_selective() {
-        let mut cache1 = MagicCache::new(4);
-        let mut cache2 = MagicCache::new(4);
-        let nk = 4;
-
-        // Setup cache1 with some data (flat indexing: a*nk + b)
-        cache1.bg_freq[0 * nk + 1] = 100;
-        cache1.bg_freq[1 * nk + 2] = 200;
-        cache1.sg_freq[0 * nk + 2] = 50;
-
-        // Setup cache2 differently
-        cache2.bg_freq[0 * nk + 1] = 999;
-        cache2.bg_freq[1 * nk + 2] = 999;
-        cache2.sg_freq[0 * nk + 2] = 999;
-
-        // Create affected grams that only include [0][1] bigram
-        let affected = vec![
-            DeltaGram::Bigram(DeltaBigram {
-                p_a: 0,
-                p_b: 1,
-                old_freq: 999,
-                new_freq: 100,
-            }),
-        ];
-
-        // Copy only affected entries from cache1 to cache2
-        cache2.copy_from(&cache1, &affected, |pos| pos);
-
-        // [0][1] should be copied
-        assert_eq!(cache2.get_bg_freq(0, 1), 100, "Affected bigram should be copied");
-        // [1][2] should NOT be copied (not in affected)
-        assert_eq!(cache2.get_bg_freq(1, 2), 999, "Unaffected bigram should not be copied");
-        // skipgram should NOT be copied
-        assert_eq!(cache2.get_sg_freq(0, 2), 999, "Unaffected skipgram should not be copied");
     }
 }
