@@ -684,10 +684,10 @@ impl CachedLayout {
         score
     }
 
-    /// Returns the pre-computed list of all neighbors (key swaps + magic rules)
+    /// Returns a copy of the pre-computed list of all neighbors (key swaps + magic rules)
     #[inline]
-    pub fn neighbors(&self) -> &[Neighbor] {
-        &self.neighbors
+    pub fn neighbors(&self) -> Vec<Neighbor> {
+        self.neighbors.clone()
     }
 
     pub fn get_revert_neighbor(&self, neighbor: Neighbor) -> Neighbor {

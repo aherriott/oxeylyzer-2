@@ -75,7 +75,7 @@ impl Analyzer {
      */
 
     /// Get all possible neighbors for the current layout
-    pub fn neighbors(&self) -> &[Neighbor] {
+    pub fn neighbors(&self) -> Vec<Neighbor> {
         self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
@@ -91,21 +91,18 @@ impl Analyzer {
             .get_revert_neighbor(neighbor)
     }
 
-    pub fn random_neighbor(&self, rng: &mut WyRand) -> Neighbor {
-        let neighbors = self.neighbors();
+    pub fn random_neighbor(&self, rng: &mut WyRand, neighbors: &[Neighbor]) -> Neighbor {
         neighbors[rng.generate_range(0..neighbors.len())]
     }
 
-    pub fn best_neighbor(&mut self) -> Option<(Neighbor, i64)> {
+    pub fn best_neighbor(&mut self, neighbors: &[Neighbor]) -> Option<(Neighbor, i64)> {
         let mut best_score = self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
             .score();
         let mut best = None;
 
-        // Collect neighbors to avoid borrow issues
-        let neighbors: Vec<Neighbor> = self.neighbors().to_vec();
-        for neighbor in neighbors {
+        for &neighbor in neighbors {
             let score = self.test_neighbor(neighbor);
             if score > best_score {
                 best_score = score;

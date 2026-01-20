@@ -183,9 +183,10 @@ mod bench {
     fn best_neighbor(bencher: Bencher, layout_name: &str) {
         let (mut analyzer, layout) = util::analyzer_layout("english", layout_name);
         analyzer.use_layout(&layout, &[]);
+        let neighbors = analyzer.neighbors();
 
         bencher.bench(|| {
-            black_box(analyzer.best_neighbor());
+            black_box(analyzer.best_neighbor(&neighbors));
         })
     }
 

@@ -6,14 +6,13 @@ use crate::{
 impl Analyzer {
     pub fn always_better_swap(&mut self, layout: Layout, pins: &[usize]) -> (Layout, i64) {
         self.use_layout(&layout, pins);
+        let neighbors = self.neighbors();
         let mut best_score = self.score();
 
         loop {
             let mut best_loop_score = i64::MIN;
 
-            // Collect neighbors to avoid borrow issues
-            let neighbors: Vec<Neighbor> = self.neighbors().to_vec();
-            for neighbor in neighbors {
+            for &neighbor in &neighbors {
                 let score = self.test_neighbor(neighbor);
 
                 if score > best_score {
@@ -53,9 +52,10 @@ impl Analyzer {
 
     pub fn greedy_improve(&mut self, layout: &Layout, pins: &[usize]) -> (Layout, i64) {
         self.use_layout(&layout, pins);
+        let neighbors = self.neighbors();
         let mut best_score = self.score();
 
-        while let Some((neighbor, score)) = self.best_neighbor() {
+        while let Some((neighbor, score)) = self.best_neighbor(&neighbors) {
             if score <= best_score {
                 break;
             }
@@ -86,12 +86,13 @@ impl Analyzer {
         depth: usize,
     ) -> (Layout, i64) {
         self.use_layout(&layout, pins);
+        let neighbors = self.neighbors();
         let mut diffs = vec![Neighbor::default(); depth];
         let mut cur_best = self.score();
 
-        while self.best_neighbor_recursive(depth, &mut diffs, &mut cur_best) {
-            for neighbor in diffs.iter() {
-                self.apply_neighbor(*neighbor);
+        while self.best_neighbor_recursive(&neighbors, depth, &mut diffs, &mut cur_best) {
+            for &neighbor in &diffs {
+                self.apply_neighbor(neighbor);
             }
         }
 
@@ -100,15 +101,14 @@ impl Analyzer {
 
     fn best_neighbor_recursive(
         &mut self,
+        neighbors: &[Neighbor],
         depth: usize,
         diffs: &mut Vec<Neighbor>,
         cur_best: &mut i64,
     ) -> bool {
         if depth > 0 {
             let mut return_best = false;
-            // Collect neighbors to avoid borrow issues
-            let neighbors: Vec<Neighbor> = self.neighbors().to_vec();
-            for neighbor in neighbors {
+            for &neighbor in neighbors {
                 // Get the revert neighbor BEFORE applying (needs current state)
                 let revert = self.get_revert_neighbor(neighbor);
 
@@ -116,7 +116,7 @@ impl Analyzer {
                 self.apply_neighbor(neighbor);
 
                 // Recurse
-                let best = self.best_neighbor_recursive(depth - 1, diffs, cur_best);
+                let best = self.best_neighbor_recursive(neighbors, depth - 1, diffs, cur_best);
 
                 // Revert the neighbor
                 self.apply_neighbor(revert);
@@ -163,21 +163,22 @@ mod tests {
     fn cache_intact_after_recursive_search() {
         let (mut analyzer, layout) = analyzer_layout("rstn-oxey");
         analyzer.use_layout(&layout, &[]);
+        let neighbors = analyzer.neighbors();
         let reference_score = analyzer.score();
         let mut diffs = vec![Neighbor::default(); 4];
         let mut cur_best = i64::MIN;
 
         // After recursive search, cache should be intact (score unchanged)
-        analyzer.best_neighbor_recursive(1, &mut diffs, &mut cur_best);
+        analyzer.best_neighbor_recursive(&neighbors, 1, &mut diffs, &mut cur_best);
         assert_eq!(analyzer.score(), reference_score, "Cache should be intact after depth-1 search");
 
         cur_best = i64::MIN;
-        analyzer.best_neighbor_recursive(2, &mut diffs, &mut cur_best);
+        analyzer.best_neighbor_recursive(&neighbors, 2, &mut diffs, &mut cur_best);
         assert_eq!(analyzer.score(), reference_score, "Cache should be intact after depth-2 search");
 
         // TODO: This test is too slow
         // cur_best = i64::MIN;
-        // analyzer.best_neighbor_recursive(3, &mut diffs, &mut cur_best);
+        // analyzer.best_neighbor_recursive(&neighbors, 3, &mut diffs, &mut cur_best);
         // assert_eq!(analyzer.score(), reference_score);
     }
 
@@ -185,11 +186,12 @@ mod tests {
     fn stretch_cache_integrity() {
         let (mut analyzer, layout) = analyzer_layout("rstn-oxey");
         analyzer.use_layout(&layout, &[]);
+        let neighbors = analyzer.neighbors();
 
         let stats_before = analyzer.stats();
         println!("stretches before swap: {}", stats_before.stretches);
 
-        match analyzer.best_neighbor() {
+        match analyzer.best_neighbor(&neighbors) {
             Some((neighbor, score)) => {
                 println!("neighbor: {:?}, score: {}", neighbor, score);
                 analyzer.apply_neighbor(neighbor);

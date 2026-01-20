@@ -88,11 +88,10 @@ mod tests {
         analyzer.use_layout(&layout, &[]);
         let original_score = analyzer.score();
 
-        // Collect neighbors to avoid borrow issues
-        let neighbors: Vec<_> = analyzer.neighbors().iter().take(100).copied().collect();
+        let neighbors = analyzer.neighbors();
         let mut found_different = false;
 
-        for neighbor in neighbors {
+        for &neighbor in neighbors.iter().take(100) {
             let test_score = analyzer.test_neighbor(neighbor);
             if test_score != original_score {
                 found_different = true;
@@ -110,9 +109,8 @@ mod tests {
         let original_score = analyzer.score();
         let original_layout = analyzer.layout();
 
-        // Collect neighbors to avoid borrow issues
-        let neighbors: Vec<_> = analyzer.neighbors().iter().take(10).copied().collect();
-        for neighbor in neighbors {
+        let neighbors = analyzer.neighbors();
+        for &neighbor in neighbors.iter().take(10) {
             let _test_score = analyzer.test_neighbor(neighbor);
         }
 
@@ -126,11 +124,10 @@ mod tests {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
 
-        // Collect neighbors first to avoid borrow issues
-        let neighbors: Vec<_> = analyzer.neighbors().iter().take(10).copied().collect();
+        let neighbors = analyzer.neighbors();
 
         // Test that test_neighbor returns the same score as apply_neighbor
-        for neighbor in neighbors {
+        for &neighbor in neighbors.iter().take(10) {
             // Reset to original layout
             analyzer.use_layout(&layout, &[]);
 
@@ -264,12 +261,13 @@ mod tests {
     fn optimized_layout_scores_better() {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
+        let neighbors = analyzer.neighbors();
         let initial_score = analyzer.score();
         eprintln!("Initial score: {}", initial_score);
 
         // Do a few greedy improvements
         for i in 0..5 {
-            if let Some((neighbor, expected_score)) = analyzer.best_neighbor() {
+            if let Some((neighbor, expected_score)) = analyzer.best_neighbor(&neighbors) {
                 eprintln!("Iteration {}: applying neighbor {:?}, expected score: {}", i, neighbor, expected_score);
                 analyzer.apply_neighbor(neighbor);
                 let actual_score = analyzer.score();
@@ -305,8 +303,9 @@ mod tests {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
 
+        let neighbors = analyzer.neighbors();
         // Test that we can iterate all neighbors without panicking
-        for &_neighbor in analyzer.neighbors() {
+        for &_neighbor in &neighbors {
             // Just iterating is the test
         }
     }

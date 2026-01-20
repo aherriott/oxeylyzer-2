@@ -28,6 +28,7 @@ impl Analyzer {
         let mut rng = WyRand::new();
 
         self.use_layout(&layout, pins);
+        let neighbors = self.neighbors();
         let mut best_score = self.score();
         let mut current_score = best_score;
         let mut worst_score = current_score;
@@ -42,7 +43,7 @@ impl Analyzer {
         let mut best = self.layout();
         let mut best_neighbor: Option<crate::analyze::Neighbor> = None;
         for _ in 0..max_iterations {
-            let diff = self.random_neighbor(&mut rng);
+            let diff = self.random_neighbor(&mut rng, &neighbors);
             let new_score = self.test_neighbor(diff);
 
             if new_score < worst_score {
