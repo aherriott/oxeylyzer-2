@@ -42,8 +42,7 @@ mod bench {
                 apply_score_revert,
                 apply_score_revert_copy,
                 // CachedLayout low-level operations
-                remove_key,
-                add_key,
+                replace_key,
                 key_swap,
             ],
             swaps,
@@ -244,9 +243,9 @@ mod bench {
 
     // ==================== CachedLayout Low-Level Operations ====================
 
-    /// Benchmark remove_key operation
-    fn remove_key(bencher: Bencher, swap: Neighbor) {
-        use oxeylyzer_core::cached_layout::CachedLayout;
+    /// Benchmark replace_key operation
+    fn replace_key(bencher: Bencher, swap: Neighbor) {
+        use oxeylyzer_core::cached_layout::{CachedLayout, EMPTY_KEY};
         use oxeylyzer_core::weights::dummy_weights;
 
         let (_, layout) = util::analyzer_layout("english", "qwerty");
@@ -262,40 +261,15 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                // We need to re-add the key after removing to keep benchmarking
+                // Replace key with EMPTY and back
                 let key = cached.get_key(pos);
-                cached.remove_key(pos);
-                cached.add_key(pos, key);
+                cached.replace_key(pos, key, EMPTY_KEY, true);
+                cached.replace_key(pos, EMPTY_KEY, key, true);
             }
         })
     }
 
-    /// Benchmark add_key operation
-    fn add_key(bencher: Bencher, swap: Neighbor) {
-        use oxeylyzer_core::cached_layout::CachedLayout;
-        use oxeylyzer_core::weights::dummy_weights;
-
-        let (_, layout) = util::analyzer_layout("english", "qwerty");
-        let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
-        let weights = dummy_weights();
-        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
-
-        // Get position from the swap neighbor
-        let pos = match swap {
-            Neighbor::KeySwap(PosPair(a, _)) => a,
-            _ => 0,
-        };
-
-        bencher.bench(|| {
-            for _ in 0..N {
-                let key = cached.get_key(pos);
-                cached.remove_key(pos);
-                cached.add_key(pos, key);
-            }
-        })
-    }
-
-    /// Benchmark key_swap operation (remove_key x2 + add_key x2)
+    /// Benchmark key_swap operation via swap_keys
     fn key_swap(bencher: Bencher, swap: Neighbor) {
         use oxeylyzer_core::cached_layout::CachedLayout;
         use oxeylyzer_core::weights::dummy_weights;
@@ -312,19 +286,9 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                // Perform key swap manually
-                let key_a = cached.get_key(pos_a);
-                let key_b = cached.get_key(pos_b);
-                cached.remove_key(pos_a);
-                cached.remove_key(pos_b);
-                cached.add_key(pos_a, key_b);
-                cached.add_key(pos_b, key_a);
-
-                // Swap back to original state
-                cached.remove_key(pos_a);
-                cached.remove_key(pos_b);
-                cached.add_key(pos_a, key_a);
-                cached.add_key(pos_b, key_b);
+                // Swap and swap back
+                cached.swap_keys(pos_a, pos_b, true);
+                cached.swap_keys(pos_a, pos_b, true);
             }
         })
     }

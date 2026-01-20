@@ -202,6 +202,8 @@ impl BranchBound {
 
     /// Create an empty CachedLayout and initialize keys_by_freq
     fn create_empty_cache(&mut self) -> CachedLayout {
+        use crate::cached_layout::EMPTY_KEY;
+
         let mut cache = CachedLayout::new(&self.base_layout, self.data.clone(), &self.weights);
 
         // Initialize keys_by_freq from the cache's char mapping
@@ -213,7 +215,8 @@ impl BranchBound {
 
         // Remove all keys to get empty positions
         for pos in 0..self.num_positions {
-            cache.remove_key(pos);
+            let key = cache.get_key(pos);
+            cache.replace_key(pos, key, EMPTY_KEY, true);
         }
         cache
     }
@@ -268,6 +271,8 @@ impl BranchBound {
         top_layouts: &mut TopKHeap,
         stats: &mut BranchBoundStats,
     ) {
+        use crate::cached_layout::EMPTY_KEY;
+
         self.search_recursive_limited(
             cache,
             depth,
@@ -291,6 +296,8 @@ impl BranchBound {
         stats: &mut BranchBoundStats,
         max_depth: usize,
     ) {
+        use crate::cached_layout::EMPTY_KEY;
+
         stats.max_depth_reached = stats.max_depth_reached.max(depth);
         stats.nodes_visited += 1;
 
@@ -328,7 +335,7 @@ impl BranchBound {
         // Try placing this character at each available position
         for (i, &pos) in available_positions.iter().enumerate() {
             // Place the key
-            cache.add_key(pos, key);
+            cache.replace_key(pos, EMPTY_KEY, key, true);
             assignment.push((c, pos));
 
             // Create new available positions (excluding current)
@@ -359,7 +366,7 @@ impl BranchBound {
 
             // Backtrack
             assignment.pop();
-            cache.remove_key(pos);
+            cache.replace_key(pos, key, EMPTY_KEY, true);
         }
     }
 
@@ -472,6 +479,8 @@ impl BranchBound {
     where
         F: FnMut(&BranchBoundProgress),
     {
+        use crate::cached_layout::EMPTY_KEY;
+
         stats.max_depth_reached = stats.max_depth_reached.max(depth);
         stats.nodes_visited += 1;
 
@@ -527,7 +536,7 @@ impl BranchBound {
         // Try placing this character at each available position
         for (i, &pos) in available_positions.iter().enumerate() {
             // Place the key
-            cache.add_key(pos, key);
+            cache.replace_key(pos, EMPTY_KEY, key, true);
             assignment.push((c, pos));
 
             // Create new available positions (excluding current)
@@ -561,7 +570,7 @@ impl BranchBound {
 
             // Backtrack
             assignment.pop();
-            cache.remove_key(pos);
+            cache.replace_key(pos, key, EMPTY_KEY, true);
         }
     }
 

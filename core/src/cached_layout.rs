@@ -16,15 +16,6 @@ use crate::{
     weights::Weights,
 };
 
-/// Represents a possible magic rule neighbor: (magic_key, leader, output)
-/// These are pre-computed for all valid combinations.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MagicRuleNeighbor {
-    pub magic_key: CacheKey,
-    pub leader: CacheKey,
-    pub output: CacheKey,  // Can be EMPTY_KEY to clear the rule
-}
-
 pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 
 /*
@@ -314,7 +305,7 @@ pub struct CachedLayout {
     keys: Vec<CacheKey>,
     key_positions: Vec<Option<CachePos>>,
     num_positions: usize,
-    magic_rule_neighbors: Vec<MagicRuleNeighbor>,
+    neighbors: Vec<Neighbor>,
     current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey>,
     affected_grams: Vec<DeltaGram>,
     dist: DistCache,
@@ -334,7 +325,7 @@ impl Default for CachedLayout {
             keys: Vec::new(),
             key_positions: Vec::new(),
             num_positions: 0,
-            magic_rule_neighbors: Vec::new(),
+            neighbors: Vec::new(),
             current_magic_rules: HashMap::default(),
             affected_grams: Vec::new(),
             dist: DistCache::default(),
@@ -373,7 +364,17 @@ impl CachedLayout {
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
-        let mut magic_rule_neighbors = Vec::new();
+        // Pre-compute all neighbors
+        let mut neighbors = Vec::new();
+
+        // Key swap neighbors: all pairs (a, b) where a < b
+        for a in 0..len {
+            for b in (a + 1)..len {
+                neighbors.push(Neighbor::KeySwap(PosPair(a, b)));
+            }
+        }
+
+        // Magic rule neighbors
         let mut current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey> = HashMap::default();
 
         for (&magic_char, magic_key_def) in layout.magic.iter() {
@@ -398,11 +399,7 @@ impl CachedLayout {
             for (leading_str, _) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
                 for &output in &all_outputs {
-                    magic_rule_neighbors.push(MagicRuleNeighbor {
-                        magic_key,
-                        leader,
-                        output,
-                    });
+                    neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)));
                 }
             }
         }
@@ -415,7 +412,7 @@ impl CachedLayout {
             keys,
             key_positions,
             num_positions: len,
-            magic_rule_neighbors,
+            neighbors,
             current_magic_rules,
             affected_grams,
             dist,
@@ -427,7 +424,7 @@ impl CachedLayout {
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
             let key = cache.data.char_mapping().get_u(key_char);
-            cache.add_key(pos, key);
+            cache.replace_key(pos, EMPTY_KEY, key, true);
         }
 
         cache
@@ -687,35 +684,10 @@ impl CachedLayout {
         score
     }
 
+    /// Returns the pre-computed list of all neighbors (key swaps + magic rules)
     #[inline]
-    pub fn neighbor_count(&self) -> usize {
-        self.key_swap_count() + self.magic_rule_neighbors.len()
-    }
-
-    #[inline]
-    fn key_swap_count(&self) -> usize {
-        let n = self.num_positions;
-        n * (n - 1) / 2
-    }
-
-    #[inline]
-    pub fn get_neighbor(&self, idx: usize) -> Neighbor {
-        let swap_count = self.key_swap_count();
-        if idx < swap_count {
-            let n = self.num_positions;
-            let a = ((2 * n - 1) as f64 - ((2 * n - 1).pow(2) as f64 - 8.0 * idx as f64).sqrt()) / 2.0;
-            let a = a.floor() as usize;
-            let b = idx - (a * n - a * (a + 1) / 2) + a + 1;
-            Neighbor::KeySwap(PosPair(a, b))
-        } else {
-            let magic_idx = idx - swap_count;
-            let rule_neighbor = &self.magic_rule_neighbors[magic_idx];
-            Neighbor::MagicRule(MagicRule::new(
-                rule_neighbor.magic_key,
-                rule_neighbor.leader,
-                rule_neighbor.output,
-            ))
-        }
+    pub fn neighbors(&self) -> &[Neighbor] {
+        &self.neighbors
     }
 
     pub fn get_revert_neighbor(&self, neighbor: Neighbor) -> Neighbor {

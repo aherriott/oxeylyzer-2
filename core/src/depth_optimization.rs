@@ -11,9 +11,9 @@ impl Analyzer {
         loop {
             let mut best_loop_score = i64::MIN;
 
-            let count = self.neighbor_count();
-            for i in 0..count {
-                let neighbor = self.get_neighbor(i);
+            // Collect neighbors to avoid borrow issues
+            let neighbors: Vec<Neighbor> = self.neighbors().to_vec();
+            for neighbor in neighbors {
                 let score = self.test_neighbor(neighbor);
 
                 if score > best_score {
@@ -106,9 +106,9 @@ impl Analyzer {
     ) -> bool {
         if depth > 0 {
             let mut return_best = false;
-            let count = self.neighbor_count();
-            for i in 0..count {
-                let neighbor = self.get_neighbor(i);
+            // Collect neighbors to avoid borrow issues
+            let neighbors: Vec<Neighbor> = self.neighbors().to_vec();
+            for neighbor in neighbors {
                 // Get the revert neighbor BEFORE applying (needs current state)
                 let revert = self.get_revert_neighbor(neighbor);
 

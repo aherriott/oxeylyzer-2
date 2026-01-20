@@ -88,12 +88,11 @@ mod tests {
         analyzer.use_layout(&layout, &[]);
         let original_score = analyzer.score();
 
-        // Find a swap that changes the score
-        let count = analyzer.neighbor_count();
+        // Collect neighbors to avoid borrow issues
+        let neighbors: Vec<_> = analyzer.neighbors().iter().take(100).copied().collect();
         let mut found_different = false;
 
-        for i in 0..count.min(100) {
-            let neighbor = analyzer.get_neighbor(i);
+        for neighbor in neighbors {
             let test_score = analyzer.test_neighbor(neighbor);
             if test_score != original_score {
                 found_different = true;
@@ -111,9 +110,9 @@ mod tests {
         let original_score = analyzer.score();
         let original_layout = analyzer.layout();
 
-        // Test several neighbors
-        for i in 0..10 {
-            let neighbor = analyzer.get_neighbor(i);
+        // Collect neighbors to avoid borrow issues
+        let neighbors: Vec<_> = analyzer.neighbors().iter().take(10).copied().collect();
+        for neighbor in neighbors {
             let _test_score = analyzer.test_neighbor(neighbor);
         }
 
@@ -127,18 +126,20 @@ mod tests {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
 
+        // Collect neighbors first to avoid borrow issues
+        let neighbors: Vec<_> = analyzer.neighbors().iter().take(10).copied().collect();
+
         // Test that test_neighbor returns the same score as apply_neighbor
-        for i in 0..10 {
+        for neighbor in neighbors {
             // Reset to original layout
             analyzer.use_layout(&layout, &[]);
 
-            let neighbor = analyzer.get_neighbor(i);
             let test_score = analyzer.test_neighbor(neighbor);
 
             analyzer.apply_neighbor(neighbor);
             let apply_score = analyzer.score();
 
-            assert_eq!(test_score, apply_score, "test_neighbor and apply_neighbor should give same score for neighbor {i}");
+            assert_eq!(test_score, apply_score, "test_neighbor and apply_neighbor should give same score for neighbor {:?}", neighbor);
         }
     }
 
@@ -287,16 +288,16 @@ mod tests {
     // ==================== Neighbor Count Tests ====================
 
     #[test]
-    fn neighbor_count_is_correct() {
+    fn neighbors_is_correct() {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
 
-        let count = analyzer.neighbor_count();
+        let neighbors = analyzer.neighbors();
         let n = layout.keys.len();
         let expected_swaps = n * (n - 1) / 2;
 
         // Should have at least the key swap neighbors
-        assert!(count >= expected_swaps, "Should have at least {expected_swaps} swap neighbors, got {count}");
+        assert!(neighbors.len() >= expected_swaps, "Should have at least {expected_swaps} swap neighbors, got {}", neighbors.len());
     }
 
     #[test]
@@ -304,11 +305,9 @@ mod tests {
         let (mut analyzer, layout) = qwerty_fixture();
         analyzer.use_layout(&layout, &[]);
 
-        let count = analyzer.neighbor_count();
-
-        // Test that we can get all neighbors without panicking
-        for i in 0..count {
-            let _neighbor = analyzer.get_neighbor(i);
+        // Test that we can iterate all neighbors without panicking
+        for &_neighbor in analyzer.neighbors() {
+            // Just iterating is the test
         }
     }
 }
