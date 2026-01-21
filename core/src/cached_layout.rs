@@ -13,6 +13,7 @@ use crate::{
     scissors::ScissorsCache,
     stats::Stats,
     stretches::StretchCache,
+    trigrams::TrigramCache,
     types::{CacheKey, CachePos},
     weights::Weights,
 };
@@ -73,6 +74,11 @@ impl MagicCache {
     #[inline]
     pub fn sg_freq_flat(&self) -> &[i64] {
         &self.sg_freq
+    }
+
+    #[inline]
+    pub fn tg_freq(&self) -> &[Vec<Vec<i64>>] {
+        &self.tg_freq
     }
 
     #[inline]
@@ -313,6 +319,7 @@ pub struct CachedLayout {
     sfb: SFCache,
     stretch: StretchCache,
     scissors: ScissorsCache,
+    trigram: TrigramCache,
     magic: MagicCache,
     fingers: Vec<Finger>,
 }
@@ -334,6 +341,7 @@ impl Default for CachedLayout {
             sfb: SFCache::default(),
             stretch: StretchCache::default(),
             scissors: ScissorsCache::default(),
+            trigram: TrigramCache::default(),
             magic: MagicCache::default(),
             fingers: Vec::new(),
         }
@@ -366,6 +374,8 @@ impl CachedLayout {
         stretch.set_weights(weights);
         let mut scissors = ScissorsCache::new(keyboard, fingers, num_keys);
         scissors.set_weights(weights);
+        let mut trigram = TrigramCache::new(fingers, num_keys);
+        trigram.set_weights(weights);
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -424,6 +434,7 @@ impl CachedLayout {
             sfb,
             stretch,
             scissors,
+            trigram,
             magic,
             fingers: fingers.to_vec(),
         };
@@ -491,7 +502,7 @@ impl CachedLayout {
     }
 
     pub fn score(&self) -> i64 {
-        self.sfb.score() + self.stretch.score() + self.scissors.score()
+        self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
     }
 
     /// Populate stats from the caches. Uses internal data for normalization.
@@ -512,6 +523,7 @@ impl CachedLayout {
         self.sfb.stats(stats, bigram_total, skipgram_total);
         self.stretch.stats(stats, bigram_total);
         self.scissors.stats(stats, bigram_total, skipgram_total);
+        self.trigram.stats(stats, self.data.trigram_total);
     }
 
     /// Apply a neighbor transformation. Returns the new score.
@@ -535,10 +547,12 @@ impl CachedLayout {
 
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
 
         let sfb_score = self.sfb.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq, apply);
         let stretch_score = self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, apply);
         let scissors_score = self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq, apply);
+        let trigram_score = self.trigram.replace_key(pos, old_key, new_key, &self.keys, None, tg_freq, apply);
 
         if apply {
             self.keys[pos] = new_key;
@@ -550,7 +564,7 @@ impl CachedLayout {
             }
         }
 
-        sfb_score + stretch_score + scissors_score
+        sfb_score + stretch_score + scissors_score + trigram_score
     }
 
     /// Swap keys at two positions. Returns the new score.
@@ -565,10 +579,12 @@ impl CachedLayout {
 
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
 
         let sfb_score = self.sfb.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq, apply);
         let stretch_score = self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, apply);
         let scissors_score = self.scissors.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq, apply);
+        let trigram_score = self.trigram.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq, apply);
 
         if apply {
             self.keys[pos_a] = key_b;
@@ -581,7 +597,7 @@ impl CachedLayout {
             }
         }
 
-        sfb_score + stretch_score + scissors_score
+        sfb_score + stretch_score + scissors_score + trigram_score
     }
 
 
