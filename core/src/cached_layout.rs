@@ -10,6 +10,7 @@ use crate::{
     dist::DistCache,
     layout::{Layout, MagicRule, PosPair},
     same_finger::SFCache,
+    scissors::ScissorsCache,
     stats::Stats,
     stretches::StretchCache,
     types::{CacheKey, CachePos},
@@ -311,6 +312,7 @@ pub struct CachedLayout {
     dist: DistCache,
     sfb: SFCache,
     stretch: StretchCache,
+    scissors: ScissorsCache,
     magic: MagicCache,
     fingers: Vec<Finger>,
 }
@@ -331,6 +333,7 @@ impl Default for CachedLayout {
             dist: DistCache::default(),
             sfb: SFCache::default(),
             stretch: StretchCache::default(),
+            scissors: ScissorsCache::default(),
             magic: MagicCache::default(),
             fingers: Vec::new(),
         }
@@ -361,6 +364,8 @@ impl CachedLayout {
         sfb.set_weights(weights);
         let mut stretch = StretchCache::new(keyboard, fingers, num_keys);
         stretch.set_weights(weights);
+        let mut scissors = ScissorsCache::new(keyboard, fingers, num_keys);
+        scissors.set_weights(weights);
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -418,6 +423,7 @@ impl CachedLayout {
             dist,
             sfb,
             stretch,
+            scissors,
             magic,
             fingers: fingers.to_vec(),
         };
@@ -485,7 +491,7 @@ impl CachedLayout {
     }
 
     pub fn score(&self) -> i64 {
-        self.sfb.score() + self.stretch.score()
+        self.sfb.score() + self.stretch.score() + self.scissors.score()
     }
 
     /// Populate stats from the caches. Uses internal data for normalization.
@@ -505,6 +511,7 @@ impl CachedLayout {
 
         self.sfb.stats(stats, bigram_total, skipgram_total);
         self.stretch.stats(stats, bigram_total);
+        self.scissors.stats(stats, bigram_total, skipgram_total);
     }
 
     /// Apply a neighbor transformation. Returns the new score.
@@ -531,6 +538,7 @@ impl CachedLayout {
 
         let sfb_score = self.sfb.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq, apply);
         let stretch_score = self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, apply);
+        let scissors_score = self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq, apply);
 
         if apply {
             self.keys[pos] = new_key;
@@ -542,7 +550,7 @@ impl CachedLayout {
             }
         }
 
-        sfb_score + stretch_score
+        sfb_score + stretch_score + scissors_score
     }
 
     /// Swap keys at two positions. Returns the new score.
@@ -560,6 +568,7 @@ impl CachedLayout {
 
         let sfb_score = self.sfb.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq, apply);
         let stretch_score = self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, apply);
+        let scissors_score = self.scissors.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq, apply);
 
         if apply {
             self.keys[pos_a] = key_b;
@@ -572,7 +581,7 @@ impl CachedLayout {
             }
         }
 
-        sfb_score + stretch_score
+        sfb_score + stretch_score + scissors_score
     }
 
 
@@ -645,9 +654,11 @@ impl CachedLayout {
                 DeltaGram::Bigram(bg) => {
                     self.sfb.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
                     self.stretch.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
+                    self.scissors.update_bigram(bg.p_a, bg.p_b, bg.old_freq, bg.new_freq);
                 }
                 DeltaGram::Skipgram(sg) => {
                     self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
+                    self.scissors.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                 }
                 DeltaGram::Trigram(_) => {}
             }
@@ -662,9 +673,11 @@ impl CachedLayout {
                     DeltaGram::Bigram(bg) => {
                         self.sfb.update_bigram(bg.p_a, bg.p_b, bg.new_freq, bg.old_freq);
                         self.stretch.update_bigram(bg.p_a, bg.p_b, bg.new_freq, bg.old_freq);
+                        self.scissors.update_bigram(bg.p_a, bg.p_b, bg.new_freq, bg.old_freq);
                     }
                     DeltaGram::Skipgram(sg) => {
                         self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.new_freq, sg.old_freq);
+                        self.scissors.update_skipgram(sg.p_a, sg.p_b, sg.new_freq, sg.old_freq);
                     }
                     DeltaGram::Trigram(_) => {}
                 }

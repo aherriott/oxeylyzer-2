@@ -7,6 +7,10 @@ pub struct Stats {
     pub sfbs: f64,
     pub sfs: f64,
     pub stretches: f64,
+    pub full_scissors_bigrams: f64,
+    pub full_scissors_skipgrams: f64,
+    pub half_scissors_bigrams: f64,
+    pub half_scissors_skipgrams: f64,
     pub score: i64,
     pub trigrams: TrigramStats,
 }

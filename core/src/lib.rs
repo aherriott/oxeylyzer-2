@@ -12,6 +12,7 @@ pub mod dist;
 pub mod layout;
 pub mod optimization;
 pub mod same_finger;
+pub mod scissors;
 pub mod simulated_annealing;
 pub mod stats;
 pub mod stretches;

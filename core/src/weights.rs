@@ -14,6 +14,10 @@ pub struct Weights {
     pub onehandin: i64,
     pub onehandout: i64,
     pub thumb: i64,
+    pub full_scissors: i64,
+    pub half_scissors: i64,
+    pub full_scissors_skip: i64,
+    pub half_scissors_skip: i64,
     pub fingers: FingerWeights,
 }
 
@@ -35,6 +39,13 @@ impl Weights {
 
     pub const fn has_stretch_weights(&self) -> bool {
         self.stretches != 0
+    }
+
+    pub const fn has_scissors_weights(&self) -> bool {
+        self.full_scissors != 0
+            || self.half_scissors != 0
+            || self.full_scissors_skip != 0
+            || self.half_scissors_skip != 0
     }
 }
 
@@ -102,6 +113,10 @@ pub fn dummy_weights() -> Weights {
         onehandin: 1,
         onehandout: 0,
         thumb: 0,
+        full_scissors: 0,
+        half_scissors: 0,
+        full_scissors_skip: 0,
+        half_scissors_skip: 0,
         fingers: FingerWeights {
             lp: 77,
             lr: 32,
