@@ -444,6 +444,9 @@ impl CachedLayout {
             cache.replace_key(pos, EMPTY_KEY, key, true);
         }
 
+        // Initialize pre-computed weighted scores for O(1) speculative trigram scoring
+        cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
+
         cache
     }
 
