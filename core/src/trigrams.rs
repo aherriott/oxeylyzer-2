@@ -19,13 +19,35 @@ pub enum TrigramType {
     Invalid,
 }
 
-/// Pre-computed trigram combination with type
+/// Pre-computed trigram combination with type (for position as first element)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrigramCombo {
     /// Second position in the trigram
     pub pos_b: usize,
     /// Third position in the trigram
     pub pos_c: usize,
+    /// Pre-computed trigram type
+    pub trigram_type: TrigramType,
+}
+
+/// Pre-computed trigram combination where the key position is the second element
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrigramComboMid {
+    /// First position in the trigram
+    pub pos_a: usize,
+    /// Third position in the trigram
+    pub pos_c: usize,
+    /// Pre-computed trigram type
+    pub trigram_type: TrigramType,
+}
+
+/// Pre-computed trigram combination where the key position is the third element
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrigramComboEnd {
+    /// First position in the trigram
+    pub pos_a: usize,
+    /// Second position in the trigram
+    pub pos_b: usize,
     /// Pre-computed trigram type
     pub trigram_type: TrigramType,
 }
@@ -58,8 +80,14 @@ impl TrigramDelta {
 /// Cache for tracking trigram type frequencies and computing weighted scores
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrigramCache {
-    /// For each position, list of (pos_b, pos_c, type) combinations
+    /// For each position, list of (pos_b, pos_c, type) combinations where position is first
     trigram_combos_per_key: Vec<Vec<TrigramCombo>>,
+
+    /// For each position, list of (pos_a, pos_c, type) combinations where position is second
+    trigram_combos_mid: Vec<Vec<TrigramComboMid>>,
+
+    /// For each position, list of (pos_a, pos_b, type) combinations where position is third
+    trigram_combos_end: Vec<Vec<TrigramComboEnd>>,
 
     /// Number of keys for frequency array indexing
     num_keys: usize,
@@ -96,11 +124,19 @@ impl TrigramCache {
 
         let num_positions = fingers.len();
         let mut trigram_combos_per_key = Vec::with_capacity(num_positions);
+        let mut trigram_combos_mid = Vec::with_capacity(num_positions);
+        let mut trigram_combos_end = Vec::with_capacity(num_positions);
 
-        // Pre-compute all valid trigram combinations for each position
+        // Initialize empty vectors for each position
+        for _ in 0..num_positions {
+            trigram_combos_per_key.push(Vec::new());
+            trigram_combos_mid.push(Vec::new());
+            trigram_combos_end.push(Vec::new());
+        }
+
+        // Pre-compute all valid trigram combinations
         for pos_a in 0..num_positions {
             let f_a = finger_indices[pos_a];
-            let mut combos = Vec::new();
 
             for pos_b in 0..num_positions {
                 let f_b = finger_indices[pos_b];
@@ -119,9 +155,24 @@ impl TrigramCache {
                         | TrigramType::Redirect
                         | TrigramType::OnehandIn
                         | TrigramType::OnehandOut => {
-                            combos.push(TrigramCombo {
+                            // Store for pos_a as first position
+                            trigram_combos_per_key[pos_a].push(TrigramCombo {
                                 pos_b,
                                 pos_c,
+                                trigram_type,
+                            });
+
+                            // Store for pos_b as second position
+                            trigram_combos_mid[pos_b].push(TrigramComboMid {
+                                pos_a,
+                                pos_c,
+                                trigram_type,
+                            });
+
+                            // Store for pos_c as third position
+                            trigram_combos_end[pos_c].push(TrigramComboEnd {
+                                pos_a,
+                                pos_b,
                                 trigram_type,
                             });
                         }
@@ -130,12 +181,12 @@ impl TrigramCache {
                     }
                 }
             }
-
-            trigram_combos_per_key.push(combos);
         }
 
         Self {
             trigram_combos_per_key,
+            trigram_combos_mid,
+            trigram_combos_end,
             num_keys,
             // Initialize all frequency totals to zero
             inroll_freq: 0,
@@ -265,7 +316,24 @@ impl TrigramCache {
 
         let mut delta = TrigramDelta::default();
 
-        // Iterate over all pre-computed trigram combinations for this position
+        // Helper to add frequency delta to the appropriate field
+        macro_rules! add_delta {
+            ($trigram_type:expr, $freq_delta:expr) => {
+                match $trigram_type {
+                    TrigramType::Inroll => delta.inroll_freq += $freq_delta,
+                    TrigramType::Outroll => delta.outroll_freq += $freq_delta,
+                    TrigramType::Alternate => delta.alternate_freq += $freq_delta,
+                    TrigramType::Redirect => delta.redirect_freq += $freq_delta,
+                    TrigramType::OnehandIn => delta.onehandin_freq += $freq_delta,
+                    TrigramType::OnehandOut => delta.onehandout_freq += $freq_delta,
+                    _ => {}
+                }
+            };
+        }
+
+        // Case 1: pos is the first position in the trigram (pos, pos_b, pos_c)
+        // tg_freq[old_key][key_b][key_c] -> tg_freq[new_key][key_b][key_c]
+        // Note: If pos_b == pos or pos_c == pos, we need to use old_key/new_key for those positions
         for combo in &self.trigram_combos_per_key[pos] {
             let pos_b = combo.pos_b;
             let pos_c = combo.pos_c;
@@ -277,46 +345,127 @@ impl TrigramCache {
                 }
             }
 
-            let key_b = keys[pos_b];
-            let key_c = keys[pos_c];
+            // For old_freq: if pos_b or pos_c equals pos, use old_key
+            let old_key_b = if pos_b == pos { old_key } else { keys[pos_b] };
+            let old_key_c = if pos_c == pos { old_key } else { keys[pos_c] };
 
-            // Skip if key_b or key_c is invalid
-            if key_b >= num_keys || key_c >= num_keys {
+            // For new_freq: if pos_b or pos_c equals pos, use new_key
+            let new_key_b = if pos_b == pos { new_key } else { keys[pos_b] };
+            let new_key_c = if pos_c == pos { new_key } else { keys[pos_c] };
+
+            // Compute old_freq: 0 if old_key or any derived old key is invalid
+            let old_freq = if old_valid && old_key_b < num_keys && old_key_c < num_keys {
+                tg_freq[old_key][old_key_b][old_key_c]
+            } else {
+                0
+            };
+
+            // Compute new_freq: 0 if new_key or any derived new key is invalid
+            let new_freq = if new_valid && new_key_b < num_keys && new_key_c < num_keys {
+                tg_freq[new_key][new_key_b][new_key_c]
+            } else {
+                0
+            };
+
+            // Skip if both are 0 (no change)
+            if old_freq == 0 && new_freq == 0 {
                 continue;
             }
 
-            // Look up old frequency: tg_freq[old_key][key_b][key_c]
-            let old_freq = if old_valid {
-                tg_freq[old_key][key_b][key_c]
-            } else {
-                0
-            };
-
-            // Look up new frequency: tg_freq[new_key][key_b][key_c]
-            let new_freq = if new_valid {
-                tg_freq[new_key][key_b][key_c]
-            } else {
-                0
-            };
-
-            // Compute delta
             let freq_delta = new_freq - old_freq;
 
-            // Add delta to the appropriate field based on trigram_type
-            match combo.trigram_type {
-                TrigramType::Inroll => delta.inroll_freq += freq_delta,
-                TrigramType::Outroll => delta.outroll_freq += freq_delta,
-                TrigramType::Alternate => delta.alternate_freq += freq_delta,
-                TrigramType::Redirect => delta.redirect_freq += freq_delta,
-                TrigramType::OnehandIn => delta.onehandin_freq += freq_delta,
-                TrigramType::OnehandOut => delta.onehandout_freq += freq_delta,
-                // Untracked types should not be in trigram_combos_per_key,
-                // but handle them gracefully just in case
-                TrigramType::Sft
-                | TrigramType::Sfb
-                | TrigramType::Thumb
-                | TrigramType::Invalid => {}
+            add_delta!(combo.trigram_type, freq_delta);
+        }
+
+        // Case 2: pos is the second position in the trigram (pos_a, pos, pos_c)
+        // tg_freq[key_a][old_key][key_c] -> tg_freq[key_a][new_key][key_c]
+        // Only count if pos_a != pos (to avoid double-counting with case 1)
+        // Note: If pos_c == pos, we need to use old_key/new_key for that position
+        for combo in &self.trigram_combos_mid[pos] {
+            let pos_a = combo.pos_a;
+            let pos_c = combo.pos_c;
+
+            // Skip if pos_a == pos (already counted in case 1)
+            if pos_a == pos {
+                continue;
             }
+
+            // Skip if skip_pos matches pos_a or pos_c (to avoid double-counting in swaps)
+            if let Some(skip) = skip_pos {
+                if pos_a == skip || pos_c == skip {
+                    continue;
+                }
+            }
+
+            let key_a = keys[pos_a];
+
+            // For old_freq: if pos_c equals pos, use old_key
+            let old_key_c = if pos_c == pos { old_key } else { keys[pos_c] };
+
+            // For new_freq: if pos_c equals pos, use new_key
+            let new_key_c = if pos_c == pos { new_key } else { keys[pos_c] };
+
+            // Skip if key_a is invalid (it's not being replaced)
+            if key_a >= num_keys {
+                continue;
+            }
+
+            // Compute old_freq: 0 if old_key or old_key_c is invalid
+            let old_freq = if old_valid && old_key_c < num_keys {
+                tg_freq[key_a][old_key][old_key_c]
+            } else {
+                0
+            };
+
+            // Compute new_freq: 0 if new_key or new_key_c is invalid
+            let new_freq = if new_valid && new_key_c < num_keys {
+                tg_freq[key_a][new_key][new_key_c]
+            } else {
+                0
+            };
+
+            // Skip if both are 0 (no change)
+            if old_freq == 0 && new_freq == 0 {
+                continue;
+            }
+
+            let freq_delta = new_freq - old_freq;
+
+            add_delta!(combo.trigram_type, freq_delta);
+        }
+
+        // Case 3: pos is the third position in the trigram (pos_a, pos_b, pos)
+        // tg_freq[key_a][key_b][old_key] -> tg_freq[key_a][key_b][new_key]
+        // Only count if pos_a != pos and pos_b != pos (to avoid double-counting with cases 1 and 2)
+        for combo in &self.trigram_combos_end[pos] {
+            let pos_a = combo.pos_a;
+            let pos_b = combo.pos_b;
+
+            // Skip if pos_a == pos or pos_b == pos (already counted in cases 1 or 2)
+            if pos_a == pos || pos_b == pos {
+                continue;
+            }
+
+            // Skip if skip_pos matches pos_a or pos_b (to avoid double-counting in swaps)
+            if let Some(skip) = skip_pos {
+                if pos_a == skip || pos_b == skip {
+                    continue;
+                }
+            }
+
+            let key_a = keys[pos_a];
+            let key_b = keys[pos_b];
+
+            // Skip if key_a or key_b is invalid
+            if key_a >= num_keys || key_b >= num_keys {
+                continue;
+            }
+
+            let old_freq = if old_valid { tg_freq[key_a][key_b][old_key] } else { 0 };
+            let new_freq = if new_valid { tg_freq[key_a][key_b][new_key] } else { 0 };
+            let freq_delta = new_freq - old_freq;
+
+            add_delta!(combo.trigram_type, freq_delta);
         }
 
         delta
@@ -355,58 +504,149 @@ impl TrigramCache {
 
         let mut score_delta: i64 = 0;
 
-        // Iterate over all pre-computed trigram combinations for this position
+        // Helper to get weighted score delta for a trigram type
+        macro_rules! weighted_delta {
+            ($trigram_type:expr, $freq_delta:expr) => {
+                match $trigram_type {
+                    TrigramType::Inroll => $freq_delta * self.inroll_weight,
+                    TrigramType::Outroll => $freq_delta * self.outroll_weight,
+                    TrigramType::Alternate => $freq_delta * self.alternate_weight,
+                    TrigramType::Redirect => $freq_delta * self.redirect_weight,
+                    TrigramType::OnehandIn => $freq_delta * self.onehandin_weight,
+                    TrigramType::OnehandOut => $freq_delta * self.onehandout_weight,
+                    _ => 0,
+                }
+            };
+        }
+
+        // Case 1: pos is the first position in the trigram (pos, pos_b, pos_c)
+        // Note: If pos_b == pos or pos_c == pos, we need to use old_key/new_key for those positions
         for combo in &self.trigram_combos_per_key[pos] {
             let pos_b = combo.pos_b;
             let pos_c = combo.pos_c;
 
-            // Skip if skip_pos matches pos_b or pos_c (to avoid double-counting in swaps)
             if let Some(skip) = skip_pos {
                 if pos_b == skip || pos_c == skip {
                     continue;
                 }
             }
 
-            let key_b = keys[pos_b];
-            let key_c = keys[pos_c];
+            // For old_freq: if pos_b or pos_c equals pos, use old_key
+            let old_key_b = if pos_b == pos { old_key } else { keys[pos_b] };
+            let old_key_c = if pos_c == pos { old_key } else { keys[pos_c] };
 
-            // Skip if key_b or key_c is invalid
-            if key_b >= num_keys || key_c >= num_keys {
+            // For new_freq: if pos_b or pos_c equals pos, use new_key
+            let new_key_b = if pos_b == pos { new_key } else { keys[pos_b] };
+            let new_key_c = if pos_c == pos { new_key } else { keys[pos_c] };
+
+            // Compute old_freq: 0 if old_key or any derived old key is invalid
+            let old_freq = if old_valid && old_key_b < num_keys && old_key_c < num_keys {
+                tg_freq[old_key][old_key_b][old_key_c]
+            } else {
+                0
+            };
+
+            // Compute new_freq: 0 if new_key or any derived new key is invalid
+            let new_freq = if new_valid && new_key_b < num_keys && new_key_c < num_keys {
+                tg_freq[new_key][new_key_b][new_key_c]
+            } else {
+                0
+            };
+
+            // Skip if both are 0 (no change)
+            if old_freq == 0 && new_freq == 0 {
                 continue;
             }
 
-            // Look up old frequency: tg_freq[old_key][key_b][key_c]
-            let old_freq = if old_valid {
-                tg_freq[old_key][key_b][key_c]
-            } else {
-                0
-            };
-
-            // Look up new frequency: tg_freq[new_key][key_b][key_c]
-            let new_freq = if new_valid {
-                tg_freq[new_key][key_b][key_c]
-            } else {
-                0
-            };
-
-            // Compute frequency delta
             let freq_delta = new_freq - old_freq;
 
-            // Multiply by the appropriate weight based on trigram_type and accumulate
-            score_delta += match combo.trigram_type {
-                TrigramType::Inroll => freq_delta * self.inroll_weight,
-                TrigramType::Outroll => freq_delta * self.outroll_weight,
-                TrigramType::Alternate => freq_delta * self.alternate_weight,
-                TrigramType::Redirect => freq_delta * self.redirect_weight,
-                TrigramType::OnehandIn => freq_delta * self.onehandin_weight,
-                TrigramType::OnehandOut => freq_delta * self.onehandout_weight,
-                // Untracked types should not be in trigram_combos_per_key,
-                // but handle them gracefully just in case
-                TrigramType::Sft
-                | TrigramType::Sfb
-                | TrigramType::Thumb
-                | TrigramType::Invalid => 0,
+            score_delta += weighted_delta!(combo.trigram_type, freq_delta);
+        }
+
+        // Case 2: pos is the second position in the trigram (pos_a, pos, pos_c)
+        // Only count if pos_a != pos (to avoid double-counting with case 1)
+        // Note: If pos_c == pos, we need to use old_key/new_key for that position
+        for combo in &self.trigram_combos_mid[pos] {
+            let pos_a = combo.pos_a;
+            let pos_c = combo.pos_c;
+
+            // Skip if pos_a == pos (already counted in case 1)
+            if pos_a == pos {
+                continue;
+            }
+
+            if let Some(skip) = skip_pos {
+                if pos_a == skip || pos_c == skip {
+                    continue;
+                }
+            }
+
+            let key_a = keys[pos_a];
+
+            // For old_freq: if pos_c equals pos, use old_key
+            let old_key_c = if pos_c == pos { old_key } else { keys[pos_c] };
+
+            // For new_freq: if pos_c equals pos, use new_key
+            let new_key_c = if pos_c == pos { new_key } else { keys[pos_c] };
+
+            // Skip if key_a is invalid (it's not being replaced)
+            if key_a >= num_keys {
+                continue;
+            }
+
+            // Compute old_freq: 0 if old_key or old_key_c is invalid
+            let old_freq = if old_valid && old_key_c < num_keys {
+                tg_freq[key_a][old_key][old_key_c]
+            } else {
+                0
             };
+
+            // Compute new_freq: 0 if new_key or new_key_c is invalid
+            let new_freq = if new_valid && new_key_c < num_keys {
+                tg_freq[key_a][new_key][new_key_c]
+            } else {
+                0
+            };
+
+            // Skip if both are 0 (no change)
+            if old_freq == 0 && new_freq == 0 {
+                continue;
+            }
+
+            let freq_delta = new_freq - old_freq;
+
+            score_delta += weighted_delta!(combo.trigram_type, freq_delta);
+        }
+
+        // Case 3: pos is the third position in the trigram (pos_a, pos_b, pos)
+        // Only count if pos_a != pos and pos_b != pos (to avoid double-counting with cases 1 and 2)
+        for combo in &self.trigram_combos_end[pos] {
+            let pos_a = combo.pos_a;
+            let pos_b = combo.pos_b;
+
+            // Skip if pos_a == pos or pos_b == pos (already counted in cases 1 or 2)
+            if pos_a == pos || pos_b == pos {
+                continue;
+            }
+
+            if let Some(skip) = skip_pos {
+                if pos_a == skip || pos_b == skip {
+                    continue;
+                }
+            }
+
+            let key_a = keys[pos_a];
+            let key_b = keys[pos_b];
+
+            if key_a >= num_keys || key_b >= num_keys {
+                continue;
+            }
+
+            let old_freq = if old_valid { tg_freq[key_a][key_b][old_key] } else { 0 };
+            let new_freq = if new_valid { tg_freq[key_a][key_b][new_key] } else { 0 };
+            let freq_delta = new_freq - old_freq;
+
+            score_delta += weighted_delta!(combo.trigram_type, freq_delta);
         }
 
         score_delta
@@ -477,9 +717,6 @@ impl TrigramCache {
     /// If `apply` is false, computes only the score deltas and returns the
     /// speculative new score without mutating state.
     ///
-    /// Uses skip_pos to avoid double-counting trigrams that involve both
-    /// swapped positions.
-    ///
     /// # Arguments
     /// * `pos_a` - First position in the swap
     /// * `pos_b` - Second position in the swap
@@ -504,29 +741,347 @@ impl TrigramCache {
         tg_freq: &[Vec<Vec<i64>>],
         apply: bool,
     ) -> i64 {
-        if apply {
-            // Compute delta for pos_a: replacing key_a with key_b, skip pos_b to avoid double-counting
-            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
+        // If swapping a position with itself, no change
+        if pos_a == pos_b {
+            return self.score();
+        }
 
-            // Compute delta for pos_b: replacing key_b with key_a, skip pos_a to avoid double-counting
+        let num_keys = self.num_keys;
+        let _key_a_valid = key_a < num_keys;
+        let _key_b_valid = key_b < num_keys;
+
+        // For trigrams, we need to handle three cases:
+        // 1. Trigrams involving only pos_a (not pos_b) - handled by delta_a with skip_pos=pos_b
+        // 2. Trigrams involving only pos_b (not pos_a) - handled by delta_b with skip_pos=pos_a
+        // 3. Trigrams involving BOTH pos_a and pos_b - need special handling
+        //
+        // The skip_pos mechanism in compute_replace_delta skips trigrams where ANY of the
+        // other positions equals skip_pos. This means trigrams involving both pos_a and pos_b
+        // are skipped in BOTH delta computations, so we need to handle them separately.
+
+        if apply {
+            // Compute deltas for trigrams involving only one of the swap positions
+            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
             let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
 
-            // Combine the two deltas
-            let combined_delta = delta_a.combine(&delta_b);
+            // Compute delta for trigrams involving BOTH pos_a and pos_b
+            let delta_both = self.compute_swap_both_delta(pos_a, pos_b, key_a, key_b, keys, tg_freq);
 
-            // Apply the combined delta to internal state
-            self.apply_delta(&combined_delta);
-
-            // Return the new score
+            let combined = delta_a.combine(&delta_b).combine(&delta_both);
+            self.apply_delta(&combined);
             self.score()
         } else {
-            // Compute only the score deltas without mutating state
-            let score_delta_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
-            let score_delta_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
-
-            // Return the speculative new score
-            self.score() + score_delta_a + score_delta_b
+            // Compute only score deltas for speculative scoring
+            let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
+            let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
+            let score_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+            self.score() + score_a + score_b + score_both
         }
+    }
+
+    /// Compute delta for trigrams involving BOTH swap positions.
+    ///
+    /// This handles the case where a trigram has both pos_a and pos_b in different slots.
+    /// These trigrams are skipped by the regular compute_replace_delta calls (due to skip_pos),
+    /// so we need to handle them separately.
+    fn compute_swap_both_delta(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) -> TrigramDelta {
+        let num_keys = self.num_keys;
+        let key_a_valid = key_a < num_keys;
+        let key_b_valid = key_b < num_keys;
+
+        let mut delta = TrigramDelta::default();
+
+        macro_rules! add_delta {
+            ($trigram_type:expr, $freq_delta:expr) => {
+                match $trigram_type {
+                    TrigramType::Inroll => delta.inroll_freq += $freq_delta,
+                    TrigramType::Outroll => delta.outroll_freq += $freq_delta,
+                    TrigramType::Alternate => delta.alternate_freq += $freq_delta,
+                    TrigramType::Redirect => delta.redirect_freq += $freq_delta,
+                    TrigramType::OnehandIn => delta.onehandin_freq += $freq_delta,
+                    TrigramType::OnehandOut => delta.onehandout_freq += $freq_delta,
+                    _ => {}
+                }
+            };
+        }
+
+        // Case 1: pos_a is first, pos_b is second or third
+        // Trigrams: (pos_a, pos_b, x) or (pos_a, x, pos_b) where x can be pos_a or pos_b too
+        for combo in &self.trigram_combos_per_key[pos_a] {
+            let p_b = combo.pos_b;
+            let p_c = combo.pos_c;
+
+            // Only handle trigrams where pos_b appears in position 2 or 3
+            if p_b != pos_b && p_c != pos_b {
+                continue;
+            }
+
+            // Before swap: (key_a, keys[p_b], keys[p_c])
+            // After swap: (key_b, new_keys[p_b], new_keys[p_c])
+            // where new_keys[pos_a] = key_b, new_keys[pos_b] = key_a
+            let old_k1 = key_a;
+            let old_k2 = keys[p_b];
+            let old_k3 = keys[p_c];
+
+            // For new keys, check if each position is pos_a or pos_b
+            let new_k1 = key_b;  // pos_a now has key_b
+            let new_k2 = if p_b == pos_a { key_b } else if p_b == pos_b { key_a } else { keys[p_b] };
+            let new_k3 = if p_c == pos_a { key_b } else if p_c == pos_b { key_a } else { keys[p_c] };
+
+            if old_k2 >= num_keys || old_k3 >= num_keys || new_k2 >= num_keys || new_k3 >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_a_valid { tg_freq[old_k1][old_k2][old_k3] } else { 0 };
+            let new_freq = if key_b_valid && new_k2 < num_keys && new_k3 < num_keys {
+                tg_freq[new_k1][new_k2][new_k3]
+            } else { 0 };
+
+            add_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 2: pos_b is first, pos_a is second or third
+        // Trigrams: (pos_b, pos_a, x) or (pos_b, x, pos_a) where x can be pos_a or pos_b too
+        for combo in &self.trigram_combos_per_key[pos_b] {
+            let p_b = combo.pos_b;
+            let p_c = combo.pos_c;
+
+            // Only handle trigrams where pos_a appears in position 2 or 3
+            if p_b != pos_a && p_c != pos_a {
+                continue;
+            }
+
+            // Before swap: (key_b, keys[p_b], keys[p_c])
+            // After swap: (key_a, new_keys[p_b], new_keys[p_c])
+            let old_k1 = key_b;
+            let old_k2 = keys[p_b];
+            let old_k3 = keys[p_c];
+
+            // For new keys, check if each position is pos_a or pos_b
+            let new_k1 = key_a;  // pos_b now has key_a
+            let new_k2 = if p_b == pos_a { key_b } else if p_b == pos_b { key_a } else { keys[p_b] };
+            let new_k3 = if p_c == pos_a { key_b } else if p_c == pos_b { key_a } else { keys[p_c] };
+
+            if old_k2 >= num_keys || old_k3 >= num_keys || new_k2 >= num_keys || new_k3 >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_b_valid { tg_freq[old_k1][old_k2][old_k3] } else { 0 };
+            let new_freq = if key_a_valid && new_k2 < num_keys && new_k3 < num_keys {
+                tg_freq[new_k1][new_k2][new_k3]
+            } else { 0 };
+
+            add_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 3: pos_a is second, pos_b is third (and neither is first)
+        // Trigrams: (x, pos_a, pos_b) where x != pos_a and x != pos_b
+        for combo in &self.trigram_combos_mid[pos_a] {
+            let p_a = combo.pos_a;
+            let p_c = combo.pos_c;
+
+            // Skip if p_a is pos_a (already handled in case 1)
+            if p_a == pos_a {
+                continue;
+            }
+
+            // Only handle trigrams where pos_b is the third position
+            if p_c != pos_b {
+                continue;
+            }
+
+            // Skip if p_a is pos_b (already handled in case 2)
+            if p_a == pos_b {
+                continue;
+            }
+
+            let first_key = keys[p_a];
+            if first_key >= num_keys {
+                continue;
+            }
+
+            // Before swap: (keys[p_a], key_a, key_b)
+            // After swap: (keys[p_a], key_b, key_a)
+            let old_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_a][key_b] } else { 0 };
+            let new_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_b][key_a] } else { 0 };
+
+            add_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 4: pos_b is second, pos_a is third (and neither is first)
+        // Trigrams: (x, pos_b, pos_a) where x != pos_a and x != pos_b
+        for combo in &self.trigram_combos_mid[pos_b] {
+            let p_a = combo.pos_a;
+            let p_c = combo.pos_c;
+
+            // Skip if p_a is pos_b (already handled in case 2)
+            if p_a == pos_b {
+                continue;
+            }
+
+            // Only handle trigrams where pos_a is the third position
+            if p_c != pos_a {
+                continue;
+            }
+
+            // Skip if p_a is pos_a (already handled in case 1)
+            if p_a == pos_a {
+                continue;
+            }
+
+            let first_key = keys[p_a];
+            if first_key >= num_keys {
+                continue;
+            }
+
+            // Before swap: (keys[p_a], key_b, key_a)
+            // After swap: (keys[p_a], key_a, key_b)
+            let old_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_b][key_a] } else { 0 };
+            let new_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_a][key_b] } else { 0 };
+
+            add_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        delta
+    }
+
+    /// Compute only the score delta for trigrams involving BOTH swap positions.
+    fn compute_swap_both_delta_score_only(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) -> i64 {
+        let num_keys = self.num_keys;
+        let key_a_valid = key_a < num_keys;
+        let key_b_valid = key_b < num_keys;
+
+        let mut score_delta: i64 = 0;
+
+        macro_rules! weighted_delta {
+            ($trigram_type:expr, $freq_delta:expr) => {
+                match $trigram_type {
+                    TrigramType::Inroll => $freq_delta * self.inroll_weight,
+                    TrigramType::Outroll => $freq_delta * self.outroll_weight,
+                    TrigramType::Alternate => $freq_delta * self.alternate_weight,
+                    TrigramType::Redirect => $freq_delta * self.redirect_weight,
+                    TrigramType::OnehandIn => $freq_delta * self.onehandin_weight,
+                    TrigramType::OnehandOut => $freq_delta * self.onehandout_weight,
+                    _ => 0,
+                }
+            };
+        }
+
+        // Case 1: pos_a is first, pos_b is second or third
+        for combo in &self.trigram_combos_per_key[pos_a] {
+            let p_b = combo.pos_b;
+            let p_c = combo.pos_c;
+
+            if p_b != pos_b && p_c != pos_b {
+                continue;
+            }
+
+            let old_k1 = key_a;
+            let old_k2 = keys[p_b];
+            let old_k3 = keys[p_c];
+
+            let new_k1 = key_b;
+            let new_k2 = if p_b == pos_a { key_b } else if p_b == pos_b { key_a } else { keys[p_b] };
+            let new_k3 = if p_c == pos_a { key_b } else if p_c == pos_b { key_a } else { keys[p_c] };
+
+            if old_k2 >= num_keys || old_k3 >= num_keys || new_k2 >= num_keys || new_k3 >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_a_valid { tg_freq[old_k1][old_k2][old_k3] } else { 0 };
+            let new_freq = if key_b_valid && new_k2 < num_keys && new_k3 < num_keys {
+                tg_freq[new_k1][new_k2][new_k3]
+            } else { 0 };
+
+            score_delta += weighted_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 2: pos_b is first, pos_a is second or third
+        for combo in &self.trigram_combos_per_key[pos_b] {
+            let p_b = combo.pos_b;
+            let p_c = combo.pos_c;
+
+            if p_b != pos_a && p_c != pos_a {
+                continue;
+            }
+
+            let old_k1 = key_b;
+            let old_k2 = keys[p_b];
+            let old_k3 = keys[p_c];
+
+            let new_k1 = key_a;
+            let new_k2 = if p_b == pos_a { key_b } else if p_b == pos_b { key_a } else { keys[p_b] };
+            let new_k3 = if p_c == pos_a { key_b } else if p_c == pos_b { key_a } else { keys[p_c] };
+
+            if old_k2 >= num_keys || old_k3 >= num_keys || new_k2 >= num_keys || new_k3 >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_b_valid { tg_freq[old_k1][old_k2][old_k3] } else { 0 };
+            let new_freq = if key_a_valid && new_k2 < num_keys && new_k3 < num_keys {
+                tg_freq[new_k1][new_k2][new_k3]
+            } else { 0 };
+
+            score_delta += weighted_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 3: pos_a is second, pos_b is third (and neither is first)
+        for combo in &self.trigram_combos_mid[pos_a] {
+            let p_a = combo.pos_a;
+            let p_c = combo.pos_c;
+
+            if p_a == pos_a || p_c != pos_b || p_a == pos_b {
+                continue;
+            }
+
+            let first_key = keys[p_a];
+            if first_key >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_a][key_b] } else { 0 };
+            let new_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_b][key_a] } else { 0 };
+
+            score_delta += weighted_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        // Case 4: pos_b is second, pos_a is third (and neither is first)
+        for combo in &self.trigram_combos_mid[pos_b] {
+            let p_a = combo.pos_a;
+            let p_c = combo.pos_c;
+
+            if p_a == pos_b || p_c != pos_a || p_a == pos_a {
+                continue;
+            }
+
+            let first_key = keys[p_a];
+            if first_key >= num_keys {
+                continue;
+            }
+
+            let old_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_b][key_a] } else { 0 };
+            let new_freq = if key_a_valid && key_b_valid { tg_freq[first_key][key_a][key_b] } else { 0 };
+
+            score_delta += weighted_delta!(combo.trigram_type, new_freq - old_freq);
+        }
+
+        score_delta
     }
 
     /// Populate statistics with normalized trigram frequencies
@@ -1608,11 +2163,12 @@ mod tests {
         // Create trigram frequency data
         // For alternate trigram (pos 0 -> pos 1 -> pos 0), we need tg_freq[key_a][key_b][key_c]
         // where key_a is at pos 0, key_b is at pos 1, key_c is at pos 0
-        // Old: tg_freq[0][1][0] = 100 (key 0 at pos 0)
-        // New: tg_freq[2][1][0] = 150 (key 2 at pos 0)
+        // When replacing key at pos 0 from key 0 to key 2:
+        // Old: tg_freq[0][1][0] = 100 (old_key, key_b, old_key)
+        // New: tg_freq[2][1][2] = 150 (new_key, key_b, new_key) - since pos_c == pos
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),  // old_key=0, key_b=1, key_c=0
-            (2, 1, 0, 150),  // new_key=2, key_b=1, key_c=0
+            (0, 1, 0, 100),  // old_key=0, key_b=1, old_key=0
+            (2, 1, 2, 150),  // new_key=2, key_b=1, new_key=2
         ]);
 
         // Replace key at position 0: old_key=0, new_key=2
@@ -1637,13 +2193,15 @@ mod tests {
         let keys = vec![0, 1, 2];
 
         // Create trigram frequency data
-        // Trigram involving pos 0, 1, 0 (alternate)
-        // Trigram involving pos 0, 2, 0 (alternate)
+        // Trigram involving pos 0, 1, 0 (alternate) - pos_b=1 will be skipped
+        // Trigram involving pos 0, 2, 0 (alternate) - should be counted
+        // When replacing key at pos 0 from key 0 to key 3:
+        // For (0, 2, 0): old = tg_freq[0][2][0], new = tg_freq[3][2][3] (since pos_c == pos)
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),  // pos 0 -> pos 1 -> pos 0
-            (3, 1, 0, 200),  // new key at pos 0
+            (0, 1, 0, 100),  // pos 0 -> pos 1 -> pos 0 (will be skipped)
+            (3, 1, 3, 200),  // new key at pos 0 (will be skipped)
             (0, 2, 0, 50),   // pos 0 -> pos 2 -> pos 0
-            (3, 2, 0, 75),   // new key at pos 0
+            (3, 2, 3, 75),   // new key at pos 0 (new_key, key_c=2, new_key)
         ]);
 
         // Replace key at position 0, skipping position 1
@@ -1664,9 +2222,10 @@ mod tests {
         let keys = vec![0, 1];
 
         // Old key has higher frequency than new key
+        // For trigram (0, 1, 0): old = tg_freq[0][1][0], new = tg_freq[2][1][2]
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 200),  // old_key=0
-            (2, 1, 0, 50),   // new_key=2
+            (2, 1, 2, 50),   // new_key=2 (new_key, key_b, new_key since pos_c == pos)
         ]);
 
         let delta = cache.compute_replace_delta(0, 0, 2, &keys, None, &tg_freq);
@@ -1683,8 +2242,9 @@ mod tests {
 
         let keys = vec![0, 1];
 
+        // For trigram (0, 1, 0): new = tg_freq[2][1][2] (new_key, key_b, new_key)
         let tg_freq = create_tg_freq(4, &[
-            (2, 1, 0, 100),  // new_key=2
+            (2, 1, 2, 100),  // new_key=2
         ]);
 
         // old_key=99 is invalid (>= num_keys=4)
@@ -1702,11 +2262,14 @@ mod tests {
 
         let keys = vec![0, 1];
 
+        // For trigram (0, 1, 0): old = tg_freq[0][1][0]
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 100),  // old_key=0
         ]);
 
         // new_key=99 is invalid (>= num_keys=4)
+        // Since new_key is invalid, new_key_b and new_key_c will also be invalid (99)
+        // This should cause the trigram to be skipped due to invalid keys
         let delta = cache.compute_replace_delta(0, 0, 99, &keys, None, &tg_freq);
 
         // New frequency should be treated as 0, so delta = 0 - 100 = -100
@@ -1898,9 +2461,12 @@ mod tests {
 
         // Create trigram frequency data
         // For alternate trigram (pos 0 -> pos 1 -> pos 0)
+        // When replacing key at pos 0 from key 0 to key 2:
+        // Old: tg_freq[0][1][0] (old_key, key_b, old_key)
+        // New: tg_freq[2][1][2] (new_key, key_b, new_key since pos_c == pos)
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 100),  // old_key=0
-            (2, 1, 0, 150),  // new_key=2
+            (2, 1, 2, 150),  // new_key=2
         ]);
 
         // Replace key at position 0: old_key=0, new_key=2
@@ -1999,11 +2565,14 @@ mod tests {
 
         let keys = vec![0, 1, 2];
 
+        // For trigram (0, 1, 0) and (0, 2, 0):
+        // When replacing key at pos 0 from key 0 to key 3:
+        // Old: tg_freq[0][key_b][0], New: tg_freq[3][key_b][3] (since pos_c == pos)
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 100),
-            (3, 1, 0, 200),
+            (3, 1, 3, 200),
             (0, 2, 0, 50),
-            (3, 2, 0, 75),
+            (3, 2, 3, 75),
         ]);
 
         // Compute with skip_pos=1
@@ -2051,9 +2620,10 @@ mod tests {
         let keys = vec![0, 1];
 
         // Old key has higher frequency than new key
+        // For trigram (0, 1, 0): old = tg_freq[0][1][0], new = tg_freq[2][1][2]
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 200),  // old_key=0
-            (2, 1, 0, 50),   // new_key=2
+            (2, 1, 2, 50),   // new_key=2 (new_key, key_b, new_key since pos_c == pos)
         ]);
 
         let score_delta = cache.compute_replace_delta_score_only(0, 0, 2, &keys, None, &tg_freq);
@@ -2072,9 +2642,10 @@ mod tests {
 
         let keys = vec![0, 1];
 
+        // For trigram (0, 1, 0): old = tg_freq[0][1][0], new = tg_freq[2][1][2]
         let tg_freq = create_tg_freq(4, &[
             (0, 1, 0, 100),
-            (2, 1, 0, 200),
+            (2, 1, 2, 200),
         ]);
 
         let score_delta = cache.compute_replace_delta_score_only(0, 0, 2, &keys, None, &tg_freq);
@@ -2154,8 +2725,9 @@ mod tests {
 
         let keys = vec![0, 1];
 
+        // For trigram (0, 1, 0): new = tg_freq[2][1][2] (new_key, key_b, new_key)
         let tg_freq = create_tg_freq(4, &[
-            (2, 1, 0, 100),  // new_key=2
+            (2, 1, 2, 100),  // new_key=2
         ]);
 
         // old_key=99 is invalid (>= num_keys=4)
@@ -3107,6 +3679,71 @@ mod tests {
 
         assert!((sum - 1.0).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_key_swap_is_reversible() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that swapping twice returns to the original state
+        // Use a simpler case with just 2 positions
+        let fingers = vec![LP, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 0,
+            outroll: 0,
+            alternate: 100,  // Only count alternates
+            redirect: 0,
+            onehandin: 0,
+            onehandout: 0,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1];
+
+        // Create a simple trigram frequency
+        // Trigram (0, 1, 0) is alternate (LP -> RI -> LP)
+        let tg_freq = create_tg_freq(4, &[
+            (0, 1, 0, 100),  // key sequence 0 -> 1 -> 0
+            (1, 0, 1, 200),  // key sequence 1 -> 0 -> 1
+        ]);
+
+        // Initialize the cache
+        cache.replace_key(0, 99, 0, &keys, None, &tg_freq, true);
+        cache.replace_key(1, 99, 1, &keys, None, &tg_freq, true);
+
+        let original_score = cache.score();
+        let original_alternate = cache.alternate_freq;
+
+        // First swap: positions 0 and 1
+        // Before: pos 0 has key 0, pos 1 has key 1
+        // After: pos 0 has key 1, pos 1 has key 0
+        let score_after_first_swap = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+
+        // After first swap, keys are: [1, 0]
+        let keys_after_swap = vec![1, 0];
+
+        // Second swap: reverse the first swap
+        // Before: pos 0 has key 1, pos 1 has key 0
+        // After: pos 0 has key 0, pos 1 has key 1
+        let score_after_second_swap = cache.key_swap(0, 1, 1, 0, &keys_after_swap, &tg_freq, true);
+
+        // Suppress unused variable warnings
+        let _ = score_after_first_swap;
+        let _ = score_after_second_swap;
+
+        // Score should be restored
+        assert_eq!(cache.alternate_freq, original_alternate, "Alternate freq should be restored");
+        assert_eq!(cache.score(), original_score, "Score should be restored after double swap");
+    }
 }
-
-

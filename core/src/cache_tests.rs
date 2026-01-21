@@ -67,16 +67,29 @@ mod tests {
         let original_score = analyzer.score();
         let original_layout = analyzer.layout();
 
+        eprintln!("Original score: {}", original_score);
+        eprintln!("Keys at pos 0: {}, pos 1: {}", original_layout.keys[0], original_layout.keys[1]);
+
         // Apply a swap
         let swap = Neighbor::KeySwap(PosPair(0, 1));
         analyzer.apply_neighbor(swap);
-        let _swapped_score = analyzer.score();
+        let swapped_score = analyzer.score();
+        let swapped_layout = analyzer.layout();
+
+        eprintln!("After first swap - score: {}", swapped_score);
+        eprintln!("Keys at pos 0: {}, pos 1: {}", swapped_layout.keys[0], swapped_layout.keys[1]);
+        eprintln!("Score delta from first swap: {}", swapped_score - original_score);
 
         // Scores should differ (unless the two keys happen to be identical)
         // Apply the same swap again to revert
         analyzer.apply_neighbor(swap);
         let reverted_score = analyzer.score();
         let reverted_layout = analyzer.layout();
+
+        eprintln!("After second swap - score: {}", reverted_score);
+        eprintln!("Keys at pos 0: {}, pos 1: {}", reverted_layout.keys[0], reverted_layout.keys[1]);
+        eprintln!("Score delta from second swap: {}", reverted_score - swapped_score);
+        eprintln!("Total drift: {}", reverted_score - original_score);
 
         assert_eq!(original_score, reverted_score, "Score should be restored after double swap");
         assert_eq!(original_layout.keys, reverted_layout.keys, "Layout should be restored after double swap");

@@ -676,7 +676,9 @@ impl CachedLayout {
                     self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                     self.scissors.update_skipgram(sg.p_a, sg.p_b, sg.old_freq, sg.new_freq);
                 }
-                DeltaGram::Trigram(_) => {}
+                DeltaGram::Trigram(tg) => {
+                    self.trigram.update_trigram(tg.p_a, tg.p_b, tg.p_c, tg.old_freq, tg.new_freq);
+                }
             }
         }
 
@@ -695,7 +697,9 @@ impl CachedLayout {
                         self.sfb.update_skipgram(sg.p_a, sg.p_b, sg.new_freq, sg.old_freq);
                         self.scissors.update_skipgram(sg.p_a, sg.p_b, sg.new_freq, sg.old_freq);
                     }
-                    DeltaGram::Trigram(_) => {}
+                    DeltaGram::Trigram(tg) => {
+                        self.trigram.update_trigram(tg.p_a, tg.p_b, tg.p_c, tg.new_freq, tg.old_freq);
+                    }
                 }
             }
             // Revert magic cache
