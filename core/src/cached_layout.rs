@@ -326,6 +326,9 @@ impl CachedLayout {
         // Initialize pre-computed weighted scores for O(1) speculative trigram scoring
         cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
 
+        // Initialize swap_delta lookup tables for O(1) speculative key_swap scoring
+        cache.init_swap_deltas();
+
         // Apply initial magic rules to the analyzers
         // The current_magic_rules map was populated from the layout's magic key definitions,
         // but the analyzers need to be initialized with these rules as well.
@@ -397,6 +400,24 @@ impl CachedLayout {
 
     pub fn score(&self) -> i64 {
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
+    }
+
+    /// Initialize swap_delta lookup tables for all analyzers.
+    ///
+    /// Pre-computes the score delta for all valid (pos_a, pos_b, key_a, key_b) combinations
+    /// to enable O(1) speculative key_swap scoring. Must be called after the layout is
+    /// fully initialized (all keys placed).
+    ///
+    /// **Validates: Requirements 5.1, 5.2**
+    fn init_swap_deltas(&mut self) {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+
+        self.trigram.init_swap_deltas(&self.keys, tg_freq);
+        self.sfb.init_swap_deltas(&self.keys, bg_freq, sg_freq);
+        self.stretch.init_swap_deltas(&self.keys, bg_freq);
+        self.scissors.init_swap_deltas(&self.keys, bg_freq, sg_freq);
     }
 
     /// Populate stats from the caches. Uses internal data for normalization.

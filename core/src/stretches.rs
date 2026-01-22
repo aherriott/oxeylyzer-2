@@ -47,6 +47,13 @@ pub struct StretchCache {
     /// When `add_rule` is called with `apply=false`, this lookup table is used
     /// instead of computing the delta from scratch.
     rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
+
+    /// Pre-computed swap deltas for O(1) speculative key_swap scoring.
+    /// Maps (pos_a, pos_b, key_a, key_b) -> score delta where pos_a < pos_b.
+    /// Uses sparse storage (HashMap) to keep memory under control.
+    /// When `key_swap` is called with `apply=false`, this lookup table is used
+    /// instead of computing the delta from scratch.
+    swap_delta: HashMap<(CachePos, CachePos, CacheKey, CacheKey), i32>,
 }
 
 impl StretchCache {
@@ -95,6 +102,8 @@ impl StretchCache {
             magic_rule_score_delta: 0,
             // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
             rule_delta: HashMap::new(),
+            // Initialize swap delta lookup table to empty (populated by init_swap_deltas)
+            swap_delta: HashMap::new(),
         }
     }
 
@@ -213,6 +222,8 @@ impl StretchCache {
 
     /// Swap keys at two positions. Returns the new score.
     /// If `apply` is false, computes the score without mutating state.
+    ///
+    /// **Validates: Requirements 3.3, 3.5**
     #[inline]
     pub fn key_swap(
         &mut self,
@@ -224,17 +235,42 @@ impl StretchCache {
         bg_freq: &[i64],
         apply: bool,
     ) -> i64 {
-        // Compute delta for pos_a (key_a -> key_b), skipping pos_b
-        let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
-        // Compute delta for pos_b (key_b -> key_a), skipping pos_a
-        let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
-        let total_delta = delta_a + delta_b;
-
         if apply {
+            // Compute delta for pos_a (key_a -> key_b), skipping pos_b
+            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
+            // Compute delta for pos_b (key_b -> key_a), skipping pos_a
+            let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
+            let total_delta = delta_a + delta_b;
+
             self.total += total_delta;
+            (self.total * self.stretch_weight) + self.magic_rule_score_delta
+        } else {
+            // O(1) lookup for speculative scoring when swap_delta table is populated
+            if !self.swap_delta.is_empty() {
+                // Normalize position ordering (pos_a < pos_b) for canonical lookup
+                let (p_lo, p_hi, k_lo, k_hi) = if pos_a < pos_b {
+                    (pos_a, pos_b, key_a, key_b)
+                } else {
+                    (pos_b, pos_a, key_b, key_a)
+                };
+
+                // Look up the delta directly from the pre-computed table.
+                // If not found in the HashMap, the delta is 0 (sparse storage semantics).
+                let delta = self.swap_delta
+                    .get(&(p_lo, p_hi, k_lo, k_hi))
+                    .copied()
+                    .unwrap_or(0) as i64;
+
+                return ((self.total + delta) * self.stretch_weight) + self.magic_rule_score_delta;
+            }
+
+            // Fallback to computed delta if swap_delta table not initialized
+            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq);
+            let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq);
+            let total_delta = delta_a + delta_b;
+
+            ((self.total + total_delta) * self.stretch_weight) + self.magic_rule_score_delta
         }
-        let base_score = (self.total + if apply { 0 } else { total_delta }) * self.stretch_weight;
-        base_score + self.magic_rule_score_delta
     }
 
     /// Compute the weighted score for a stretch bigram pair.
@@ -411,6 +447,66 @@ impl StretchCache {
                             (leader as CacheKey, output as CacheKey, magic_key as CacheKey),
                             delta as i32,
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Initialize swap_delta lookup table for O(1) speculative key_swap scoring.
+    ///
+    /// Pre-computes the score delta for all valid (pos_a, pos_b, key_a, key_b) combinations
+    /// where pos_a < pos_b (canonical ordering). Uses sparse storage (HashMap) to
+    /// store only non-zero deltas, keeping memory usage under control.
+    ///
+    /// This must be called after the layout is fully initialized (all keys placed).
+    ///
+    /// # Arguments
+    /// * `keys` - The current key assignments for all positions
+    /// * `bg_freq` - Flat bigram frequencies: bg_freq[a * num_keys + b]
+    ///
+    /// **Validates: Requirements 3.2, 7.2**
+    pub fn init_swap_deltas(
+        &mut self,
+        keys: &[CacheKey],
+        bg_freq: &[i64],
+    ) {
+        // Clear existing swap deltas
+        self.swap_delta.clear();
+
+        let num_keys = self.num_keys;
+        let num_positions = self.stretch_pairs_per_key.len();
+
+        // Iterate over all position pairs (pos_a, pos_b) where pos_a < pos_b
+        for pos_a in 0..num_positions {
+            for pos_b in (pos_a + 1)..num_positions {
+                // Iterate over all key pairs (key_a, key_b)
+                for key_a in 0..num_keys {
+                    for key_b in 0..num_keys {
+                        // Skip if same key (no change when swapping same key)
+                        if key_a == key_b {
+                            continue;
+                        }
+
+                        // Compute the total swap delta using existing compute_replace_delta method:
+                        // 1. Delta for pos_a (key_a -> key_b), skipping pos_b
+                        // 2. Delta for pos_b (key_b -> key_a), skipping pos_a
+                        let delta_a = self.compute_replace_delta(
+                            pos_a, key_a, key_b, keys, Some(pos_b), bg_freq
+                        );
+                        let delta_b = self.compute_replace_delta(
+                            pos_b, key_b, key_a, keys, Some(pos_a), bg_freq
+                        );
+
+                        let delta = delta_a + delta_b;
+
+                        // Only store non-zero deltas (sparse storage for memory efficiency)
+                        if delta != 0 {
+                            self.swap_delta.insert(
+                                (pos_a, pos_b, key_a, key_b),
+                                delta as i32,
+                            );
+                        }
                     }
                 }
             }
