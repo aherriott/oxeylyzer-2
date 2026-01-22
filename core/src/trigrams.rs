@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use crate::stats::Stats;
-use crate::types::CacheKey;
+use crate::types::{CacheKey, CachePos};
 use crate::weights::Weights;
 use libdof::dofinitions::Finger as DofFinger;
 use libdof::prelude::Finger::*;
@@ -136,6 +138,23 @@ pub struct TrigramCache {
 
     /// Whether the weighted scores have been initialized
     weighted_scores_initialized: bool,
+
+    /// Tracks active magic rules: (magic_key, leader) -> (output, delta)
+    /// When a rule A→M steals output B, we store ((M, A), (B, delta))
+    /// This allows the analyzer to correctly compute deltas when rules change.
+    /// The delta is stored so we can properly reverse the rule by subtracting it.
+    active_rules: HashMap<(CacheKey, CacheKey), (CacheKey, i64)>,
+
+    /// Cumulative score delta from all active magic rules.
+    /// This is added to the base score (computed from frequencies) to get the total score.
+    magic_rule_score_delta: i64,
+
+    /// Pre-computed rule deltas for O(1) `add_rule` speculative scoring.
+    /// Maps (leader, output, magic_key) -> score delta.
+    /// Uses sparse storage (HashMap) to stay under 10MB memory target.
+    /// When `add_rule` is called with `apply=false`, this lookup table is used
+    /// instead of computing the delta from scratch.
+    rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
 }
 
 impl TrigramCache {
@@ -246,6 +265,12 @@ impl TrigramCache {
             swap_score_both: vec![0; num_pairs * num_keys * num_keys],
             num_pairs,
             weighted_scores_initialized: false,
+            // Initialize active rules to empty (no magic rules active initially)
+            active_rules: HashMap::new(),
+            // Initialize magic rule score delta to zero
+            magic_rule_score_delta: 0,
+            // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
+            rule_delta: HashMap::new(),
         }
     }
 
@@ -278,6 +303,242 @@ impl TrigramCache {
             TrigramType::OnehandOut => self.onehandout_weight,
             _ => 0,
         }
+    }
+
+    /// Compute the score delta for applying a magic rule.
+    ///
+    /// When rule A→M steals output B:
+    /// - Trigrams Z→A→B become Z→A→M (for all Z with positions)
+    /// - Trigrams A→B→C become A→M→C (for all C with positions)
+    ///
+    /// Returns the score delta (new_score - old_score).
+    ///
+    /// # Arguments
+    /// * `leader` - A: the key that triggers the magic rule
+    /// * `output` - B: the output being stolen
+    /// * `magic_key` - M: the magic key that steals the output
+    /// * `keys` - The current key assignments for all positions
+    /// * `key_positions` - Maps each key to its position (None if key has no position)
+    /// * `tg_freq` - 3D trigram frequency data: tg_freq[key_a][key_b][key_c]
+    fn compute_rule_delta(
+        &self,
+        leader: CacheKey,      // A - the key that triggers the magic rule
+        output: CacheKey,      // B - the output being stolen
+        magic_key: CacheKey,   // M - the magic key that steals the output
+        _keys: &[CacheKey],    // Not used but kept for API consistency
+        key_positions: &[Option<CachePos>],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) -> i64 {
+        let num_keys = self.num_keys;
+        let num_positions = self.num_positions;
+
+        // Validate keys are within bounds
+        if leader >= num_keys || output >= num_keys || magic_key >= num_keys {
+            return 0;
+        }
+
+        // Get positions for leader (A), output (B), and magic_key (M)
+        // Leader must have a position for the rule to have any effect
+        let leader_pos = match key_positions.get(leader).copied().flatten() {
+            Some(pos) => pos,
+            None => return 0, // Leader has no position, rule has no effect
+        };
+
+        // Output (B) and magic_key (M) positions are needed for type computation
+        let output_pos = key_positions.get(output).copied().flatten();
+        let magic_pos = key_positions.get(magic_key).copied().flatten();
+
+        let mut delta: i64 = 0;
+
+        // Part 1: Z→A→B becomes Z→A→M (for all Z with positions)
+        // The frequency is tg_freq[Z][A][B] for both old and new
+        // The type changes based on positions of Z, A, and M vs Z, A, and B
+        for z_key in 0..num_keys {
+            // Z must have a position
+            let z_pos = match key_positions.get(z_key).copied().flatten() {
+                Some(pos) => pos,
+                None => continue,
+            };
+
+            // Get the frequency for trigram Z→A→B
+            let freq = tg_freq[z_key][leader][output];
+            if freq == 0 {
+                continue;
+            }
+
+            // Compute old type: Z→A→B (positions: z_pos, leader_pos, output_pos)
+            // If output has no position, the old trigram type is Invalid (weight 0)
+            let old_weight = if let Some(b_pos) = output_pos {
+                if z_pos < num_positions && leader_pos < num_positions && b_pos < num_positions {
+                    let f_z = self.fingers[z_pos];
+                    let f_a = self.fingers[leader_pos];
+                    let f_b = self.fingers[b_pos];
+                    let old_type = TRIGRAMS[f_z * 100 + f_a * 10 + f_b];
+                    self.get_weight(old_type)
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            // Compute new type: Z→A→M (positions: z_pos, leader_pos, magic_pos)
+            // If magic_key has no position, the new trigram type is Invalid (weight 0)
+            let new_weight = if let Some(m_pos) = magic_pos {
+                if z_pos < num_positions && leader_pos < num_positions && m_pos < num_positions {
+                    let f_z = self.fingers[z_pos];
+                    let f_a = self.fingers[leader_pos];
+                    let f_m = self.fingers[m_pos];
+                    let new_type = TRIGRAMS[f_z * 100 + f_a * 10 + f_m];
+                    self.get_weight(new_type)
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            // Delta contribution: freq * (new_weight - old_weight)
+            delta += freq * (new_weight - old_weight);
+        }
+
+        // Part 2: A→B→C becomes A→M→C (for all C with positions)
+        // The frequency is tg_freq[A][B][C] for both old and new
+        // The type changes based on positions of A, B, C vs A, M, C
+        for c_key in 0..num_keys {
+            // C must have a position
+            let c_pos = match key_positions.get(c_key).copied().flatten() {
+                Some(pos) => pos,
+                None => continue,
+            };
+
+            // Get the frequency for trigram A→B→C
+            let freq = tg_freq[leader][output][c_key];
+            if freq == 0 {
+                continue;
+            }
+
+            // Compute old type: A→B→C (positions: leader_pos, output_pos, c_pos)
+            // If output has no position, the old trigram type is Invalid (weight 0)
+            let old_weight = if let Some(b_pos) = output_pos {
+                if leader_pos < num_positions && b_pos < num_positions && c_pos < num_positions {
+                    let f_a = self.fingers[leader_pos];
+                    let f_b = self.fingers[b_pos];
+                    let f_c = self.fingers[c_pos];
+                    let old_type = TRIGRAMS[f_a * 100 + f_b * 10 + f_c];
+                    self.get_weight(old_type)
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            // Compute new type: A→M→C (positions: leader_pos, magic_pos, c_pos)
+            // If magic_key has no position, the new trigram type is Invalid (weight 0)
+            let new_weight = if let Some(m_pos) = magic_pos {
+                if leader_pos < num_positions && m_pos < num_positions && c_pos < num_positions {
+                    let f_a = self.fingers[leader_pos];
+                    let f_m = self.fingers[m_pos];
+                    let f_c = self.fingers[c_pos];
+                    let new_type = TRIGRAMS[f_a * 100 + f_m * 10 + f_c];
+                    self.get_weight(new_type)
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            // Delta contribution: freq * (new_weight - old_weight)
+            delta += freq * (new_weight - old_weight);
+        }
+
+        delta
+    }
+
+    /// Apply a magic rule. Returns the score delta.
+    ///
+    /// If `apply` is false, computes the score delta without mutating state (speculative scoring).
+    /// If `apply` is true, updates internal state and returns the score delta.
+    ///
+    /// When rule A→M steals output B:
+    /// - Trigrams Z→A→B become Z→A→M (for all Z)
+    /// - Trigrams A→B→C become A→M→C (for all C)
+    ///
+    /// # Arguments
+    /// * `leader` - A: the key that triggers the magic rule
+    /// * `output` - B: the output being stolen
+    /// * `magic_key` - M: the magic key that steals the output
+    /// * `keys` - The current key assignments for all positions
+    /// * `key_positions` - Maps each key to its position (None if key has no position)
+    /// * `tg_freq` - 3D trigram frequency data: tg_freq[key_a][key_b][key_c]
+    /// * `apply` - If true, update internal state; if false, just compute the delta
+    ///
+    /// # Returns
+    /// The score delta (new_score - old_score) for this rule application.
+    ///
+    /// Requirements: 2.1, 2.5, 2.6, 6.1, 6.5
+    pub fn add_rule(
+        &mut self,
+        leader: CacheKey,      // A
+        output: CacheKey,      // B (being stolen)
+        magic_key: CacheKey,   // M
+        keys: &[CacheKey],
+        key_positions: &[Option<CachePos>],
+        tg_freq: &[Vec<Vec<i64>>],
+        apply: bool,
+    ) -> i64 {
+        let rule_key = (magic_key, leader);
+
+        // Check if there's an existing rule for this (magic_key, leader) pair
+        let old_delta = if let Some(&(old_output, old_delta)) = self.active_rules.get(&rule_key) {
+            // If the new output is the same as the old output, no change needed
+            if old_output == output {
+                return 0;
+            }
+            old_delta
+        } else {
+            0
+        };
+
+        // Compute the score delta for the new rule (0 if output is EMPTY_KEY)
+        let new_delta = if output != crate::cached_layout::EMPTY_KEY {
+            // When apply=false and lookup table is populated, use O(1) lookup
+            // instead of computing the delta from scratch.
+            if !apply && !self.rule_delta.is_empty() {
+                // Look up the delta directly from the pre-computed table.
+                // If not found in the HashMap, the delta is 0 (sparse storage).
+                self.rule_delta
+                    .get(&(leader, output, magic_key))
+                    .copied()
+                    .unwrap_or(0) as i64
+            } else {
+                // Either apply=true or lookup table not initialized - compute from scratch
+                self.compute_rule_delta(leader, output, magic_key, keys, key_positions, tg_freq)
+            }
+        } else {
+            0
+        };
+
+        // The net delta is: new_delta - old_delta
+        // (removing old rule subtracts old_delta, adding new rule adds new_delta)
+        let net_delta = new_delta - old_delta;
+
+        if apply {
+            // Always remove old rule if it exists (regardless of delta value)
+            self.active_rules.remove(&rule_key);
+
+            // Add new rule if output is not EMPTY_KEY
+            if output != crate::cached_layout::EMPTY_KEY {
+                self.active_rules.insert(rule_key, (output, new_delta));
+            }
+
+            // Update the cumulative magic rule score delta
+            self.magic_rule_score_delta += net_delta;
+        }
+
+        net_delta
     }
 
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
@@ -443,6 +704,63 @@ impl TrigramCache {
                             pos_a, pos_b, key_a, key_b, tg_freq
                         );
                         self.swap_score_both[pair_base + key_a * num_keys + key_b] = score;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Initialize pre-computed rule deltas for O(1) `add_rule` speculative scoring.
+    ///
+    /// Pre-computes the score delta for all valid (leader, output, magic_key) combinations
+    /// where the leader has a position on the layout. Uses sparse storage (HashMap) to
+    /// store only non-zero deltas, keeping memory usage under 10MB for typical configurations.
+    ///
+    /// This must be called after the layout is fully initialized (all keys placed).
+    ///
+    /// # Arguments
+    /// * `keys` - The current key assignments for all positions
+    /// * `key_positions` - Maps each key to its position (None if key has no position)
+    /// * `tg_freq` - 3D trigram frequency data: tg_freq[key_a][key_b][key_c]
+    ///
+    /// Requirements: 6.1, 6.5
+    pub fn init_rule_deltas(
+        &mut self,
+        keys: &[CacheKey],
+        key_positions: &[Option<CachePos>],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) {
+        // Clear existing rule deltas
+        self.rule_delta.clear();
+
+        let num_keys = self.num_keys;
+
+        // Iterate over all valid (leader, output, magic_key) combinations
+        for leader in 0..num_keys {
+            // Leader must have a position for the rule to have any effect
+            let leader_pos = key_positions.get(leader).copied().flatten();
+            if leader_pos.is_none() {
+                continue;
+            }
+
+            for output in 0..num_keys {
+                for magic_key in 0..num_keys {
+                    // Compute the score delta for this rule
+                    let delta = self.compute_rule_delta(
+                        leader as CacheKey,
+                        output as CacheKey,
+                        magic_key as CacheKey,
+                        keys,
+                        key_positions,
+                        tg_freq,
+                    );
+
+                    // Only store non-zero deltas for sparse storage (memory efficiency)
+                    if delta != 0 {
+                        self.rule_delta.insert(
+                            (leader as CacheKey, output as CacheKey, magic_key as CacheKey),
+                            delta as i32,
+                        );
                     }
                 }
             }
@@ -779,57 +1097,12 @@ impl TrigramCache {
         new_score - old_score
     }
 
-    /// Update for a trigram frequency change
-    ///
-    /// Looks up the trigram type from finger indices using the TRIGRAMS constant,
-    /// then updates the corresponding frequency total if the type is tracked.
-    ///
-    /// # Arguments
-    /// * `p_a` - First position in the trigram
-    /// * `p_b` - Second position in the trigram
-    /// * `p_c` - Third position in the trigram
-    /// * `old_freq` - Previous frequency value
-    /// * `new_freq` - New frequency value
-    ///
-    /// Requirements: 4.1, 4.2, 4.3
-    pub fn update_trigram(
-        &mut self,
-        p_a: usize,
-        p_b: usize,
-        p_c: usize,
-        old_freq: i64,
-        new_freq: i64,
-    ) {
-        // Look up the finger indices for positions p_a, p_b, p_c
-        let f_a = self.fingers[p_a];
-        let f_b = self.fingers[p_b];
-        let f_c = self.fingers[p_c];
-
-        // Compute the trigram type using TRIGRAMS[f_a * 100 + f_b * 10 + f_c]
-        let trigram_type = TRIGRAMS[f_a * 100 + f_b * 10 + f_c];
-
-        // Compute the delta
-        let delta = new_freq - old_freq;
-
-        // Update the corresponding frequency total if the type is tracked
-        // If the type is not tracked (Sft, Sfb, Thumb, Invalid), ignore the update
-        match trigram_type {
-            TrigramType::Inroll => self.inroll_freq += delta,
-            TrigramType::Outroll => self.outroll_freq += delta,
-            TrigramType::Alternate => self.alternate_freq += delta,
-            TrigramType::Redirect => self.redirect_freq += delta,
-            TrigramType::OnehandIn => self.onehandin_freq += delta,
-            TrigramType::OnehandOut => self.onehandout_freq += delta,
-            // Untracked types: Sft, Sfb, Thumb, Invalid - ignore the update
-            TrigramType::Sft | TrigramType::Sfb | TrigramType::Thumb | TrigramType::Invalid => {}
-        }
-    }
-
     /// Get the current weighted score
     ///
-    /// Returns the weighted sum of all frequency totals:
+    /// Returns the weighted sum of all frequency totals plus the magic rule score delta:
     /// `inroll_freq * inroll_weight + outroll_freq * outroll_weight + alternate_freq * alternate_weight
-    ///  + redirect_freq * redirect_weight + onehandin_freq * onehandin_weight + onehandout_freq * onehandout_weight`
+    ///  + redirect_freq * redirect_weight + onehandin_freq * onehandin_weight + onehandout_freq * onehandout_weight
+    ///  + magic_rule_score_delta`
     ///
     /// Requirements: 6.1, 6.2
     pub fn score(&self) -> i64 {
@@ -839,6 +1112,7 @@ impl TrigramCache {
             + self.redirect_freq * self.redirect_weight
             + self.onehandin_freq * self.onehandin_weight
             + self.onehandout_freq * self.onehandout_weight
+            + self.magic_rule_score_delta
     }
 
     /// Compute the delta for replacing a key at a position.
@@ -2605,273 +2879,6 @@ mod tests {
         assert_eq!(cache.score(), 420);
     }
 
-    // ==================== update_trigram tests ====================
-
-    #[test]
-    fn test_update_trigram_alternate_type() {
-        // LP -> RI -> LP is an alternate (hand alternates each key)
-        let fingers = vec![LP, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.alternate_freq, 0);
-
-        // Update trigram with positions 0, 1, 0 (LP -> RI -> LP)
-        cache.update_trigram(0, 1, 0, 0, 100);
-
-        // Should update alternate frequency
-        assert_eq!(cache.alternate_freq, 100);
-        // Other frequencies should remain zero
-        assert_eq!(cache.inroll_freq, 0);
-        assert_eq!(cache.outroll_freq, 0);
-        assert_eq!(cache.redirect_freq, 0);
-        assert_eq!(cache.onehandin_freq, 0);
-        assert_eq!(cache.onehandout_freq, 0);
-    }
-
-    #[test]
-    fn test_update_trigram_inroll_type() {
-        // LP -> LI -> RI should be an inroll (LP -> LI is inward on left hand, then switch to right)
-        let fingers = vec![LP, LI, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.inroll_freq, 0);
-
-        // Update trigram with positions 0, 1, 2 (LP -> LI -> RI)
-        cache.update_trigram(0, 1, 2, 0, 50);
-
-        // Should update inroll frequency
-        assert_eq!(cache.inroll_freq, 50);
-    }
-
-    #[test]
-    fn test_update_trigram_outroll_type() {
-        // LI -> LP -> RI should be an outroll (LI -> LP is outward on left hand, then switch to right)
-        let fingers = vec![LP, LI, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.outroll_freq, 0);
-
-        // Update trigram with positions 1, 0, 2 (LI -> LP -> RI)
-        cache.update_trigram(1, 0, 2, 0, 75);
-
-        // Should update outroll frequency
-        assert_eq!(cache.outroll_freq, 75);
-    }
-
-    #[test]
-    fn test_update_trigram_redirect_type() {
-        // LP -> LI -> LP should be a redirect (direction changes: inward then outward)
-        let fingers = vec![LP, LI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.redirect_freq, 0);
-
-        // Update trigram with positions 0, 1, 0 (LP -> LI -> LP)
-        cache.update_trigram(0, 1, 0, 0, 25);
-
-        // Should update redirect frequency
-        assert_eq!(cache.redirect_freq, 25);
-    }
-
-    #[test]
-    fn test_update_trigram_onehandin_type() {
-        // LP -> LR -> LM should be onehandin (all inward on left hand)
-        let fingers = vec![LP, LR, LM];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.onehandin_freq, 0);
-
-        // Update trigram with positions 0, 1, 2 (LP -> LR -> LM)
-        cache.update_trigram(0, 1, 2, 0, 30);
-
-        // Should update onehandin frequency
-        assert_eq!(cache.onehandin_freq, 30);
-    }
-
-    #[test]
-    fn test_update_trigram_onehandout_type() {
-        // LM -> LR -> LP should be onehandout (all outward on left hand)
-        let fingers = vec![LP, LR, LM];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Verify initial state
-        assert_eq!(cache.onehandout_freq, 0);
-
-        // Update trigram with positions 2, 1, 0 (LM -> LR -> LP)
-        cache.update_trigram(2, 1, 0, 0, 40);
-
-        // Should update onehandout frequency
-        assert_eq!(cache.onehandout_freq, 40);
-    }
-
-    #[test]
-    fn test_update_trigram_untracked_sft_ignored() {
-        // LP -> LP -> LP is Sft (same finger trigram) - should be ignored
-        let fingers = vec![LP, LP, LP];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Update trigram with all same finger positions
-        cache.update_trigram(0, 1, 2, 0, 100);
-
-        // All frequencies should remain zero (Sft is not tracked)
-        assert_eq!(cache.inroll_freq, 0);
-        assert_eq!(cache.outroll_freq, 0);
-        assert_eq!(cache.alternate_freq, 0);
-        assert_eq!(cache.redirect_freq, 0);
-        assert_eq!(cache.onehandin_freq, 0);
-        assert_eq!(cache.onehandout_freq, 0);
-    }
-
-    #[test]
-    fn test_update_trigram_untracked_sfb_ignored() {
-        // LP -> LP -> LI is Sfb (same finger bigram) - should be ignored
-        let fingers = vec![LP, LP, LI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Update trigram with same finger bigram
-        cache.update_trigram(0, 1, 2, 0, 100);
-
-        // All frequencies should remain zero (Sfb is not tracked)
-        assert_eq!(cache.inroll_freq, 0);
-        assert_eq!(cache.outroll_freq, 0);
-        assert_eq!(cache.alternate_freq, 0);
-        assert_eq!(cache.redirect_freq, 0);
-        assert_eq!(cache.onehandin_freq, 0);
-        assert_eq!(cache.onehandout_freq, 0);
-    }
-
-    #[test]
-    fn test_update_trigram_untracked_thumb_ignored() {
-        // Any trigram involving thumb should be ignored
-        let fingers = vec![LP, LT, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Update trigram involving thumb
-        cache.update_trigram(0, 1, 2, 0, 100);
-
-        // All frequencies should remain zero (Thumb is not tracked)
-        assert_eq!(cache.inroll_freq, 0);
-        assert_eq!(cache.outroll_freq, 0);
-        assert_eq!(cache.alternate_freq, 0);
-        assert_eq!(cache.redirect_freq, 0);
-        assert_eq!(cache.onehandin_freq, 0);
-        assert_eq!(cache.onehandout_freq, 0);
-    }
-
-    #[test]
-    fn test_update_trigram_delta_calculation() {
-        // Test that delta is correctly computed as new_freq - old_freq
-        let fingers = vec![LP, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // First update: 0 -> 100 (delta = 100)
-        cache.update_trigram(0, 1, 0, 0, 100);
-        assert_eq!(cache.alternate_freq, 100);
-
-        // Second update: 100 -> 150 (delta = 50)
-        cache.update_trigram(0, 1, 0, 100, 150);
-        assert_eq!(cache.alternate_freq, 150);
-
-        // Third update: 150 -> 120 (delta = -30)
-        cache.update_trigram(0, 1, 0, 150, 120);
-        assert_eq!(cache.alternate_freq, 120);
-    }
-
-    #[test]
-    fn test_update_trigram_negative_delta() {
-        let fingers = vec![LP, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Start with some frequency
-        cache.update_trigram(0, 1, 0, 0, 100);
-        assert_eq!(cache.alternate_freq, 100);
-
-        // Decrease frequency (negative delta)
-        cache.update_trigram(0, 1, 0, 100, 30);
-        assert_eq!(cache.alternate_freq, 30);
-    }
-
-    #[test]
-    fn test_update_trigram_zero_delta() {
-        let fingers = vec![LP, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Start with some frequency
-        cache.update_trigram(0, 1, 0, 0, 100);
-        assert_eq!(cache.alternate_freq, 100);
-
-        // Update with same old and new (delta = 0)
-        cache.update_trigram(0, 1, 0, 50, 50);
-        assert_eq!(cache.alternate_freq, 100); // Should remain unchanged
-    }
-
-    #[test]
-    fn test_update_trigram_multiple_types() {
-        // Test updating multiple different trigram types
-        let fingers = vec![LP, LI, RI, RP];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // LP -> RI -> LP is alternate
-        cache.update_trigram(0, 2, 0, 0, 10);
-        assert_eq!(cache.alternate_freq, 10);
-
-        // LP -> LI -> RI is inroll
-        cache.update_trigram(0, 1, 2, 0, 20);
-        assert_eq!(cache.inroll_freq, 20);
-
-        // LI -> LP -> RI is outroll
-        cache.update_trigram(1, 0, 2, 0, 30);
-        assert_eq!(cache.outroll_freq, 30);
-
-        // Verify all frequencies are independent
-        assert_eq!(cache.alternate_freq, 10);
-        assert_eq!(cache.inroll_freq, 20);
-        assert_eq!(cache.outroll_freq, 30);
-    }
-
-    #[test]
-    fn test_update_trigram_affects_score() {
-        use crate::weights::{FingerWeights, Weights};
-
-        let fingers = vec![LP, RI];
-        let mut cache = TrigramCache::new(&fingers, 30);
-
-        // Set weights
-        let weights = Weights {
-            sfbs: 0,
-            sfs: 0,
-            stretches: 0,
-            sft: 0,
-            inroll: 1,
-            outroll: 2,
-            alternate: 10,
-            redirect: 4,
-            onehandin: 5,
-            onehandout: 6,
-            thumb: 0,
-            full_scissors: 0,
-            half_scissors: 0,
-            full_scissors_skip: 0,
-            half_scissors_skip: 0,
-            fingers: FingerWeights::default(),
-        };
-        cache.set_weights(&weights);
-
-        // Initial score should be 0
-        assert_eq!(cache.score(), 0);
-
-        // Update alternate trigram
-        cache.update_trigram(0, 1, 0, 0, 5);
-
-        // Score should now be 5 * 10 = 50
-        assert_eq!(cache.score(), 50);
-    }
-
     // ==================== compute_replace_delta tests ====================
 
     /// Helper function to create a 3D trigram frequency array
@@ -4480,5 +4487,1057 @@ mod tests {
         // Score should be restored
         assert_eq!(cache.alternate_freq, original_alternate, "Alternate freq should be restored");
         assert_eq!(cache.score(), original_score, "Score should be restored after double swap");
+    }
+
+    // ==================== add_rule() tests ====================
+
+    /// Helper function to create key_positions array from keys
+    /// Maps each key to its position (index in keys array)
+    fn create_key_positions(keys: &[usize], num_keys: usize) -> Vec<Option<usize>> {
+        let mut key_positions = vec![None; num_keys];
+        for (pos, &key) in keys.iter().enumerate() {
+            if key < num_keys {
+                key_positions[key] = Some(pos);
+            }
+        }
+        key_positions
+    }
+
+    #[test]
+    fn test_add_rule_basic_apply_true_updates_state() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that add_rule with apply=true updates active_rules and magic_rule_score_delta
+        // Validates: Requirement 2.5
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        // Keys: pos 0 has key 0 (leader A), pos 1 has key 1 (output B), pos 2 has key 2 (magic M)
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        // Create trigram frequencies for the rule A→M stealing B
+        // Z→A→B becomes Z→A→M: tg_freq[Z][A][B] for all Z
+        // A→B→C becomes A→M→C: tg_freq[A][B][C] for all C
+        let tg_freq = create_tg_freq(4, &[
+            (2, 0, 1, 100),  // Z=2, A=0, B=1: trigram 2→0→1
+            (0, 1, 2, 50),   // A=0, B=1, C=2: trigram 0→1→2
+        ]);
+
+        // Verify initial state
+        assert!(cache.active_rules.is_empty());
+        assert_eq!(cache.magic_rule_score_delta, 0);
+        let initial_score = cache.score();
+
+        // Apply rule: leader=0 (A), output=1 (B), magic_key=2 (M)
+        let delta = cache.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Verify active_rules is updated
+        assert_eq!(cache.active_rules.len(), 1);
+        assert!(matches!(cache.active_rules.get(&(2, 0)), Some(&(1, _)))); // (magic_key, leader) -> (output, delta)
+
+        // Verify magic_rule_score_delta is updated
+        assert_eq!(cache.magic_rule_score_delta, delta);
+
+        // Verify score() reflects the delta
+        assert_eq!(cache.score(), initial_score + delta);
+    }
+
+    #[test]
+    fn test_add_rule_speculative_apply_false_preserves_state() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that add_rule with apply=false returns delta without modifying state
+        // Validates: Requirement 2.6
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        let tg_freq = create_tg_freq(4, &[
+            (2, 0, 1, 100),
+            (0, 1, 2, 50),
+        ]);
+
+        // Record initial state
+        let initial_active_rules_len = cache.active_rules.len();
+        let initial_magic_delta = cache.magic_rule_score_delta;
+        let initial_score = cache.score();
+
+        // Apply rule speculatively (apply=false)
+        let delta = cache.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, false);
+
+        // Verify state is unchanged
+        assert_eq!(cache.active_rules.len(), initial_active_rules_len);
+        assert_eq!(cache.magic_rule_score_delta, initial_magic_delta);
+        assert_eq!(cache.score(), initial_score);
+
+        // Delta should still be computed
+        // (exact value depends on trigram types, but should be non-zero with these frequencies)
+        // We just verify it returns a value
+        let _ = delta;
+    }
+
+    #[test]
+    fn test_add_rule_apply_true_and_false_return_same_delta() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that apply=true and apply=false return the same delta value
+        let fingers = vec![LP, LI, RI];
+        let mut cache1 = TrigramCache::new(&fingers, 4);
+        let mut cache2 = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache1.set_weights(&weights);
+        cache2.set_weights(&weights);
+
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        let tg_freq = create_tg_freq(4, &[
+            (2, 0, 1, 100),
+            (0, 1, 2, 50),
+        ]);
+
+        // Get delta with apply=false
+        let delta_false = cache1.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, false);
+
+        // Get delta with apply=true
+        let delta_true = cache2.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Both should return the same delta
+        assert_eq!(delta_false, delta_true);
+    }
+
+    #[test]
+    fn test_add_rule_multiple_rules_sequential() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test applying multiple rules sequentially
+        let fingers = vec![LP, LI, RI, RP];
+        let mut cache = TrigramCache::new(&fingers, 5);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        // Keys: pos 0=key 0, pos 1=key 1, pos 2=key 2, pos 3=key 3
+        let keys = vec![0, 1, 2, 3];
+        let key_positions = create_key_positions(&keys, 5);
+
+        let tg_freq = create_tg_freq(5, &[
+            (1, 0, 2, 100),  // For rule 1
+            (0, 2, 1, 50),   // For rule 1
+            (3, 1, 0, 75),   // For rule 2
+            (1, 0, 3, 25),   // For rule 2
+        ]);
+
+        let initial_score = cache.score();
+
+        // Apply first rule: leader=0, output=2, magic_key=1
+        let delta1 = cache.add_rule(0, 2, 1, &keys, &key_positions, &tg_freq, true);
+        assert_eq!(cache.active_rules.len(), 1);
+        assert_eq!(cache.magic_rule_score_delta, delta1);
+
+        // Apply second rule: leader=1, output=0, magic_key=3
+        let delta2 = cache.add_rule(1, 0, 3, &keys, &key_positions, &tg_freq, true);
+        assert_eq!(cache.active_rules.len(), 2);
+        assert_eq!(cache.magic_rule_score_delta, delta1 + delta2);
+
+        // Verify final score
+        assert_eq!(cache.score(), initial_score + delta1 + delta2);
+    }
+
+    #[test]
+    fn test_add_rule_replacement_same_magic_key_leader() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that applying a new rule for the same (magic_key, leader) replaces the old one
+        let fingers = vec![LP, LI, RI, RP];
+        let mut cache = TrigramCache::new(&fingers, 5);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1, 2, 3];
+        let key_positions = create_key_positions(&keys, 5);
+
+        let tg_freq = create_tg_freq(5, &[
+            (2, 0, 1, 100),  // For first rule
+            (0, 1, 2, 50),   // For first rule
+            (2, 0, 3, 200),  // For second rule (different output)
+            (0, 3, 2, 75),   // For second rule
+        ]);
+
+        // Apply first rule: leader=0, output=1, magic_key=2
+        let delta1 = cache.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, true);
+        assert!(matches!(cache.active_rules.get(&(2, 0)), Some(&(1, _))));
+
+        // Apply second rule with same (magic_key=2, leader=0) but different output=3
+        let delta2 = cache.add_rule(0, 3, 2, &keys, &key_positions, &tg_freq, true);
+
+        // The active_rules entry should be replaced (still only 1 entry)
+        assert_eq!(cache.active_rules.len(), 1);
+        assert!(matches!(cache.active_rules.get(&(2, 0)), Some(&(3, _)))); // Now points to output=3
+
+        // The magic_rule_score_delta should accumulate both deltas
+        // (In a real implementation, you might want to subtract the old delta first,
+        // but the current implementation just accumulates)
+        assert_eq!(cache.magic_rule_score_delta, delta1 + delta2);
+    }
+
+    #[test]
+    fn test_add_rule_leader_no_position() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that add_rule returns 0 delta when leader has no position
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 5);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        // Keys: pos 0=key 0, pos 1=key 1, pos 2=key 2
+        // Key 4 has no position
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 5);
+
+        let tg_freq = create_tg_freq(5, &[
+            (2, 4, 1, 100),  // Would be relevant if key 4 had a position
+        ]);
+
+        // Apply rule with leader=4 (no position)
+        let delta = cache.add_rule(4, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Delta should be 0 since leader has no position
+        assert_eq!(delta, 0);
+
+        // State should still be updated (rule is tracked even if delta is 0)
+        assert!(matches!(cache.active_rules.get(&(2, 4)), Some(&(1, _))));
+    }
+
+    #[test]
+    fn test_add_rule_output_no_position() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test add_rule when output (B) has no position
+        // The old trigram type becomes Invalid (weight 0)
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 5);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        // Keys: pos 0=key 0 (leader), pos 1=key 1, pos 2=key 2 (magic)
+        // Key 4 (output) has no position
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 5);
+
+        let tg_freq = create_tg_freq(5, &[
+            (1, 0, 4, 100),  // Z=1, A=0, B=4 (B has no position)
+            (0, 4, 1, 50),   // A=0, B=4, C=1 (B has no position)
+        ]);
+
+        // Apply rule: leader=0, output=4 (no position), magic_key=2
+        let delta = cache.add_rule(0, 4, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Delta should be computed (old weight is 0 since B has no position)
+        // The exact value depends on the new trigram types
+        let _ = delta;
+
+        // Rule should be tracked
+        assert!(matches!(cache.active_rules.get(&(2, 0)), Some(&(4, _))));
+    }
+
+    #[test]
+    fn test_add_rule_magic_key_no_position() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test add_rule when magic_key (M) has no position
+        // The new trigram type becomes Invalid (weight 0)
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 5);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        // Keys: pos 0=key 0 (leader), pos 1=key 1 (output), pos 2=key 2
+        // Key 4 (magic) has no position
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 5);
+
+        let tg_freq = create_tg_freq(5, &[
+            (2, 0, 1, 100),  // Z=2, A=0, B=1
+            (0, 1, 2, 50),   // A=0, B=1, C=2
+        ]);
+
+        // Apply rule: leader=0, output=1, magic_key=4 (no position)
+        let delta = cache.add_rule(0, 1, 4, &keys, &key_positions, &tg_freq, true);
+
+        // Delta should be computed (new weight is 0 since M has no position)
+        // This typically results in a negative delta (losing the old trigram score)
+        let _ = delta;
+
+        // Rule should be tracked
+        assert!(matches!(cache.active_rules.get(&(4, 0)), Some(&(1, _))));
+    }
+
+    #[test]
+    fn test_add_rule_empty_frequencies() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test add_rule with empty/zero trigram frequencies
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        // Empty trigram frequencies
+        let tg_freq = create_tg_freq(4, &[]);
+
+        let initial_score = cache.score();
+
+        // Apply rule with empty frequencies
+        let delta = cache.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Delta should be 0 since all frequencies are 0
+        assert_eq!(delta, 0);
+
+        // Score should remain unchanged
+        assert_eq!(cache.score(), initial_score);
+
+        // Rule should still be tracked
+        assert!(matches!(cache.active_rules.get(&(2, 0)), Some(&(1, _))));
+    }
+
+    #[test]
+    fn test_add_rule_invalid_key_indices() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test add_rule with key indices >= num_keys
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        let tg_freq = create_tg_freq(4, &[
+            (2, 0, 1, 100),
+        ]);
+
+        // Apply rule with invalid leader (>= num_keys)
+        let delta = cache.add_rule(99, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        // Delta should be 0 for invalid keys
+        assert_eq!(delta, 0);
+    }
+
+    #[test]
+    fn test_add_rule_score_reflects_delta() {
+        use crate::weights::{FingerWeights, Weights};
+
+        // Test that score() correctly reflects the magic_rule_score_delta
+        let fingers = vec![LP, LI, RI];
+        let mut cache = TrigramCache::new(&fingers, 4);
+
+        let weights = Weights {
+            sfbs: 0,
+            sfs: 0,
+            stretches: 0,
+            sft: 0,
+            inroll: 10,
+            outroll: 5,
+            alternate: 20,
+            redirect: -5,
+            onehandin: 3,
+            onehandout: -2,
+            thumb: 0,
+            full_scissors: 0,
+            half_scissors: 0,
+            full_scissors_skip: 0,
+            half_scissors_skip: 0,
+            fingers: FingerWeights::default(),
+        };
+        cache.set_weights(&weights);
+
+        let keys = vec![0, 1, 2];
+        let key_positions = create_key_positions(&keys, 4);
+
+        let tg_freq = create_tg_freq(4, &[
+            (2, 0, 1, 100),
+            (0, 1, 2, 50),
+        ]);
+
+        let score_before = cache.score();
+
+        // Apply rule
+        let delta = cache.add_rule(0, 1, 2, &keys, &key_positions, &tg_freq, true);
+
+        let score_after = cache.score();
+
+        // Score difference should equal the delta
+        assert_eq!(score_after - score_before, delta);
+    }
+
+    // ==================== Property-Based Tests ====================
+
+    /// **Validates: Requirements 2.5**
+    ///
+    /// Property test: add_rule with apply=true mutates state correctly.
+    ///
+    /// For any add_rule call with apply=true, the analyzer's internal state should
+    /// reflect the rule application, and subsequent calls to score() should return
+    /// the same value as was returned by the operation.
+    mod pbt_add_rule_apply_true {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Helper to create key_positions from keys
+        fn make_key_positions(keys: &[usize], num_keys: usize) -> Vec<Option<usize>> {
+            let mut key_positions = vec![None; num_keys];
+            for (pos, &key) in keys.iter().enumerate() {
+                if key < num_keys {
+                    key_positions[key] = Some(pos);
+                }
+            }
+            key_positions
+        }
+
+        /// Convert entries to 3D frequency array
+        fn entries_to_tg_freq(num_keys: usize, entries: &[(usize, usize, usize, i64)]) -> Vec<Vec<Vec<i64>>> {
+            let mut tg_freq = vec![vec![vec![0i64; num_keys]; num_keys]; num_keys];
+            for &(k1, k2, k3, freq) in entries {
+                if k1 < num_keys && k2 < num_keys && k3 < num_keys {
+                    tg_freq[k1][k2][k3] = freq;
+                }
+            }
+            tg_freq
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            /// **Validates: Requirements 2.5**
+            ///
+            /// Property: When add_rule is called with apply=true:
+            /// 1. active_rules contains the new rule: (magic_key, leader) -> output
+            /// 2. magic_rule_score_delta equals the returned delta
+            /// 3. score() equals initial_score + delta
+            #[test]
+            fn prop_add_rule_apply_true_mutates_state_correctly(
+                // Use a fixed small number of positions for reasonable test speed
+                num_positions in 3usize..=5,
+                // Use a fixed small number of keys for reasonable test speed
+                num_keys in 4usize..=6,
+                // Seed for generating keys
+                keys_seed in proptest::collection::vec(0usize..100, 3..=5),
+                // Seed for generating tg_freq entries
+                tg_freq_entries in proptest::collection::vec(
+                    (0usize..6, 0usize..6, 0usize..6, 0i64..1000i64),
+                    0..20
+                ),
+                // Key indices for the rule
+                leader_idx in 0usize..6,
+                output_idx in 0usize..6,
+                magic_key_idx in 0usize..6,
+            ) {
+                // Constrain indices to actual num_keys
+                let leader = leader_idx % num_keys;
+                let output = output_idx % num_keys;
+                let magic_key = magic_key_idx % num_keys;
+
+                // Generate keys for each position (constrained to num_keys)
+                let keys: Vec<usize> = keys_seed.iter()
+                    .take(num_positions)
+                    .map(|&k| k % num_keys)
+                    .collect();
+
+                // Ensure we have exactly num_positions keys
+                let keys: Vec<usize> = if keys.len() < num_positions {
+                    let mut k = keys;
+                    while k.len() < num_positions {
+                        k.push(k.len() % num_keys);
+                    }
+                    k
+                } else {
+                    keys
+                };
+
+                // Generate tg_freq from entries (constrained to num_keys)
+                let constrained_entries: Vec<(usize, usize, usize, i64)> = tg_freq_entries
+                    .iter()
+                    .map(|&(k1, k2, k3, freq)| (k1 % num_keys, k2 % num_keys, k3 % num_keys, freq))
+                    .collect();
+                let tg_freq = entries_to_tg_freq(num_keys, &constrained_entries);
+
+                // Create a simple finger layout (alternating left/right for variety)
+                let fingers: Vec<DofFinger> = (0..num_positions)
+                    .map(|i| if i % 2 == 0 { LP } else { RI })
+                    .collect();
+
+                let mut cache = TrigramCache::new(&fingers, num_keys);
+
+                // Set some weights so score changes are visible
+                use crate::weights::{FingerWeights, Weights};
+                let weights = Weights {
+                    sfbs: 0,
+                    sfs: 0,
+                    stretches: 0,
+                    sft: 0,
+                    inroll: 10,
+                    outroll: 5,
+                    alternate: 20,
+                    redirect: -5,
+                    onehandin: 3,
+                    onehandout: -2,
+                    thumb: 0,
+                    full_scissors: 0,
+                    half_scissors: 0,
+                    full_scissors_skip: 0,
+                    half_scissors_skip: 0,
+                    fingers: FingerWeights::default(),
+                };
+                cache.set_weights(&weights);
+
+                let key_positions = make_key_positions(&keys, num_keys);
+
+                // Record initial state
+                let initial_score = cache.score();
+                let initial_magic_delta = cache.magic_rule_score_delta;
+
+                // Apply the rule with apply=true
+                let delta = cache.add_rule(
+                    leader,
+                    output,
+                    magic_key,
+                    &keys,
+                    &key_positions,
+                    &tg_freq,
+                    true,
+                );
+
+                // Property 1: active_rules contains the new rule
+                prop_assert!(
+                    cache.active_rules.contains_key(&(magic_key, leader)),
+                    "active_rules should contain the rule ({}, {}) -> {}",
+                    magic_key, leader, output
+                );
+                prop_assert!(
+                    cache.active_rules.get(&(magic_key, leader)).map(|(o, _)| *o) == Some(output),
+                    "active_rules[({}, {})] should have output {}",
+                    magic_key, leader, output
+                );
+
+                // Property 2: magic_rule_score_delta equals initial + returned delta
+                prop_assert_eq!(
+                    cache.magic_rule_score_delta,
+                    initial_magic_delta + delta,
+                    "magic_rule_score_delta should be {} + {} = {}",
+                    initial_magic_delta, delta, initial_magic_delta + delta
+                );
+
+                // Property 3: score() equals initial_score + delta
+                let final_score = cache.score();
+                prop_assert_eq!(
+                    final_score,
+                    initial_score + delta,
+                    "score() should be {} + {} = {}, but got {}",
+                    initial_score, delta, initial_score + delta, final_score
+                );
+            }
+        }
+    }
+
+    /// **Validates: Requirements 2.6**
+    ///
+    /// Property test: add_rule with apply=false preserves state.
+    ///
+    /// For any add_rule call with apply=false, the analyzer's internal state should
+    /// remain unchanged, and score() called before and after should return the same value.
+    mod pbt_add_rule_apply_false {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Helper to create key_positions from keys
+        fn make_key_positions(keys: &[usize], num_keys: usize) -> Vec<Option<usize>> {
+            let mut key_positions = vec![None; num_keys];
+            for (pos, &key) in keys.iter().enumerate() {
+                if key < num_keys {
+                    key_positions[key] = Some(pos);
+                }
+            }
+            key_positions
+        }
+
+        /// Convert entries to 3D frequency array
+        fn entries_to_tg_freq(num_keys: usize, entries: &[(usize, usize, usize, i64)]) -> Vec<Vec<Vec<i64>>> {
+            let mut tg_freq = vec![vec![vec![0i64; num_keys]; num_keys]; num_keys];
+            for &(k1, k2, k3, freq) in entries {
+                if k1 < num_keys && k2 < num_keys && k3 < num_keys {
+                    tg_freq[k1][k2][k3] = freq;
+                }
+            }
+            tg_freq
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            /// **Validates: Requirements 2.6**
+            ///
+            /// Property: When add_rule is called with apply=false:
+            /// 1. active_rules is unchanged
+            /// 2. magic_rule_score_delta is unchanged
+            /// 3. score() is unchanged
+            #[test]
+            fn prop_add_rule_apply_false_preserves_state(
+                // Use a fixed small number of positions for reasonable test speed
+                num_positions in 3usize..=5,
+                // Use a fixed small number of keys for reasonable test speed
+                num_keys in 4usize..=6,
+                // Seed for generating keys
+                keys_seed in proptest::collection::vec(0usize..100, 3..=5),
+                // Seed for generating tg_freq entries
+                tg_freq_entries in proptest::collection::vec(
+                    (0usize..6, 0usize..6, 0usize..6, 0i64..1000i64),
+                    0..20
+                ),
+                // Key indices for the rule
+                leader_idx in 0usize..6,
+                output_idx in 0usize..6,
+                magic_key_idx in 0usize..6,
+            ) {
+                // Constrain indices to actual num_keys
+                let leader = leader_idx % num_keys;
+                let output = output_idx % num_keys;
+                let magic_key = magic_key_idx % num_keys;
+
+                // Generate keys for each position (constrained to num_keys)
+                let keys: Vec<usize> = keys_seed.iter()
+                    .take(num_positions)
+                    .map(|&k| k % num_keys)
+                    .collect();
+
+                // Ensure we have exactly num_positions keys
+                let keys: Vec<usize> = if keys.len() < num_positions {
+                    let mut k = keys;
+                    while k.len() < num_positions {
+                        k.push(k.len() % num_keys);
+                    }
+                    k
+                } else {
+                    keys
+                };
+
+                // Generate tg_freq from entries (constrained to num_keys)
+                let constrained_entries: Vec<(usize, usize, usize, i64)> = tg_freq_entries
+                    .iter()
+                    .map(|&(k1, k2, k3, freq)| (k1 % num_keys, k2 % num_keys, k3 % num_keys, freq))
+                    .collect();
+                let tg_freq = entries_to_tg_freq(num_keys, &constrained_entries);
+
+                // Create a simple finger layout (alternating left/right for variety)
+                let fingers: Vec<DofFinger> = (0..num_positions)
+                    .map(|i| if i % 2 == 0 { LP } else { RI })
+                    .collect();
+
+                let mut cache = TrigramCache::new(&fingers, num_keys);
+
+                // Set some weights so score changes are visible
+                use crate::weights::{FingerWeights, Weights};
+                let weights = Weights {
+                    sfbs: 0,
+                    sfs: 0,
+                    stretches: 0,
+                    sft: 0,
+                    inroll: 10,
+                    outroll: 5,
+                    alternate: 20,
+                    redirect: -5,
+                    onehandin: 3,
+                    onehandout: -2,
+                    thumb: 0,
+                    full_scissors: 0,
+                    half_scissors: 0,
+                    full_scissors_skip: 0,
+                    half_scissors_skip: 0,
+                    fingers: FingerWeights::default(),
+                };
+                cache.set_weights(&weights);
+
+                let key_positions = make_key_positions(&keys, num_keys);
+
+                // Record initial state
+                let initial_score = cache.score();
+                let initial_magic_delta = cache.magic_rule_score_delta;
+                let initial_active_rules = cache.active_rules.clone();
+
+                // Call add_rule with apply=false (speculative scoring)
+                let _delta = cache.add_rule(
+                    leader,
+                    output,
+                    magic_key,
+                    &keys,
+                    &key_positions,
+                    &tg_freq,
+                    false,  // apply=false - should NOT mutate state
+                );
+
+                // Property 1: active_rules is unchanged
+                prop_assert_eq!(
+                    &cache.active_rules,
+                    &initial_active_rules,
+                    "active_rules should be unchanged after apply=false"
+                );
+
+                // Property 2: magic_rule_score_delta is unchanged
+                prop_assert_eq!(
+                    cache.magic_rule_score_delta,
+                    initial_magic_delta,
+                    "magic_rule_score_delta should be unchanged after apply=false, was {}, now {}",
+                    initial_magic_delta, cache.magic_rule_score_delta
+                );
+
+                // Property 3: score() is unchanged
+                let final_score = cache.score();
+                prop_assert_eq!(
+                    final_score,
+                    initial_score,
+                    "score() should be unchanged after apply=false, was {}, now {}",
+                    initial_score, final_score
+                );
+            }
+        }
+    }
+
+    /// **Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5**
+    ///
+    /// Property test: lookup table values match computed values.
+    ///
+    /// For any (leader, output, magic_key) triple, the pre-computed `rule_delta` lookup
+    /// should equal the value computed by `compute_rule_delta` from scratch.
+    mod pbt_lookup_table_matches_computed_trigram {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Helper to create key_positions from keys
+        fn make_key_positions(keys: &[usize], num_keys: usize) -> Vec<Option<usize>> {
+            let mut key_positions = vec![None; num_keys];
+            for (pos, &key) in keys.iter().enumerate() {
+                if key < num_keys {
+                    key_positions[key] = Some(pos);
+                }
+            }
+            key_positions
+        }
+
+        /// Convert entries to 3D frequency array
+        fn entries_to_tg_freq(num_keys: usize, entries: &[(usize, usize, usize, i64)]) -> Vec<Vec<Vec<i64>>> {
+            let mut tg_freq = vec![vec![vec![0i64; num_keys]; num_keys]; num_keys];
+            for &(k1, k2, k3, freq) in entries {
+                if k1 < num_keys && k2 < num_keys && k3 < num_keys {
+                    tg_freq[k1][k2][k3] = freq;
+                }
+            }
+            tg_freq
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            /// **Validates: Requirements 6.1, 6.5**
+            ///
+            /// Property: After calling init_rule_deltas, for any valid (leader, output, magic_key)
+            /// triple where leader has a position, the value in rule_delta.get(&(leader, output, magic_key))
+            /// should equal compute_rule_delta(leader, output, magic_key, ...).
+            #[test]
+            fn prop_lookup_table_matches_computed_trigram(
+                // Use a fixed small number of positions for reasonable test speed
+                num_positions in 3usize..=5,
+                // Use a fixed small number of keys for reasonable test speed
+                num_keys in 4usize..=6,
+                // Seed for generating keys
+                keys_seed in proptest::collection::vec(0usize..100, 3..=5),
+                // Seed for generating tg_freq entries
+                tg_freq_entries in proptest::collection::vec(
+                    (0usize..6, 0usize..6, 0usize..6, 0i64..1000i64),
+                    0..20
+                ),
+                // Key indices for the rule to test
+                leader_idx in 0usize..6,
+                output_idx in 0usize..6,
+                magic_key_idx in 0usize..6,
+            ) {
+                // Constrain indices to actual num_keys
+                let leader = leader_idx % num_keys;
+                let output = output_idx % num_keys;
+                let magic_key = magic_key_idx % num_keys;
+
+                // Generate keys for each position (constrained to num_keys)
+                let keys: Vec<usize> = keys_seed.iter()
+                    .take(num_positions)
+                    .map(|&k| k % num_keys)
+                    .collect();
+
+                // Ensure we have exactly num_positions keys
+                let keys: Vec<usize> = if keys.len() < num_positions {
+                    let mut k = keys;
+                    while k.len() < num_positions {
+                        k.push(k.len() % num_keys);
+                    }
+                    k
+                } else {
+                    keys
+                };
+
+                // Generate tg_freq from entries (constrained to num_keys)
+                let constrained_entries: Vec<(usize, usize, usize, i64)> = tg_freq_entries
+                    .iter()
+                    .map(|&(k1, k2, k3, freq)| (k1 % num_keys, k2 % num_keys, k3 % num_keys, freq))
+                    .collect();
+                let tg_freq = entries_to_tg_freq(num_keys, &constrained_entries);
+
+                // Create a simple finger layout (alternating left/right for variety)
+                let fingers: Vec<DofFinger> = (0..num_positions)
+                    .map(|i| if i % 2 == 0 { LP } else { RI })
+                    .collect();
+
+                let mut cache = TrigramCache::new(&fingers, num_keys);
+
+                // Set some weights so score changes are visible
+                use crate::weights::{FingerWeights, Weights};
+                let weights = Weights {
+                    sfbs: 0,
+                    sfs: 0,
+                    stretches: 0,
+                    sft: 0,
+                    inroll: 10,
+                    outroll: 5,
+                    alternate: 20,
+                    redirect: -5,
+                    onehandin: 3,
+                    onehandout: -2,
+                    thumb: 0,
+                    full_scissors: 0,
+                    half_scissors: 0,
+                    full_scissors_skip: 0,
+                    half_scissors_skip: 0,
+                    fingers: FingerWeights::default(),
+                };
+                cache.set_weights(&weights);
+
+                let key_positions = make_key_positions(&keys, num_keys);
+
+                // Initialize the rule delta lookup table
+                cache.init_rule_deltas(&keys, &key_positions, &tg_freq);
+
+                // Compute the delta from scratch using compute_rule_delta
+                let computed_delta = cache.compute_rule_delta(
+                    leader,
+                    output,
+                    magic_key,
+                    &keys,
+                    &key_positions,
+                    &tg_freq,
+                );
+
+                // Get the lookup table value (0 if not present due to sparse storage)
+                let lookup_delta = cache.rule_delta
+                    .get(&(leader, output, magic_key))
+                    .copied()
+                    .unwrap_or(0) as i64;
+
+                // Property: lookup table value should equal computed value
+                prop_assert_eq!(
+                    lookup_delta,
+                    computed_delta,
+                    "Lookup table value {} should equal computed value {} for (leader={}, output={}, magic_key={})",
+                    lookup_delta, computed_delta, leader, output, magic_key
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 95bc464435ea94761cdfc9d7894453c014ca30132b39c66f01a5cd85179bd951 # shrinks to leader_idx = 0, output_idx = 1, magic_key_idx = 1, text_pattern = "abcabcabcabc"
+cc c7b1c89599349fb85e48fdcc9270bc43dbde438183d16a1eed90f21ee820ecdd # shrinks to operations = [KeySwap(0, 1)], text_pattern = "abcabcabcabc"
+cc 1b9ab0eef842cf90a3903a56e1dfcd5ba353f23cb3766dc24af566ba45936ef8 # shrinks to operations = [KeySwap(3, 0), MagicRule(2, 0, 0)], text_pattern = "abcabcabcabc"

@@ -6,7 +6,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
 
 ## Tasks
 
-- [ ] 1. Implement TrigramCache core structure
+- [x] 1. Implement TrigramCache core structure
   - [x] 1.1 Add TrigramCombo and TrigramDelta structs to `core/src/trigrams.rs`
     - Define `TrigramCombo` with pos_b, pos_c, and trigram_type fields
     - Define `TrigramDelta` with frequency fields for each tracked type
@@ -23,7 +23,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
     - **Property 2: Untracked Types Ignored**
     - **Validates: Requirements 1.3, 4.3**
 
-- [ ] 2. Implement weight and score methods
+- [x] 2. Implement weight and score methods
   - [x] 2.1 Implement `set_weights()` method
     - Copy weight values from Weights struct for each trigram type
     - _Requirements: 3.1, 3.2_
@@ -36,7 +36,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
     - **Property 7: Score Equals Weighted Sum**
     - **Validates: Requirements 6.1, 6.2**
 
-- [ ] 3. Implement update methods
+- [x] 3. Implement update methods
   - [x] 3.1 Implement `update_trigram()` method
     - Look up trigram type from finger indices using TRIGRAMS constant
     - Update corresponding frequency total if type is tracked
@@ -49,7 +49,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
 - [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement key operation methods
+- [x] 5. Implement key operation methods
   - [x] 5.1 Implement `compute_replace_delta()` helper method
     - Iterate over all trigram combinations involving the position
     - Compute frequency deltas for old_key vs new_key
@@ -77,7 +77,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
     - **Property 6: Apply False Preserves State**
     - **Validates: Requirements 5.1, 5.2, 5.3, 5.4**
 
-- [ ] 6. Implement stats method
+- [x] 6. Implement stats method
   - [x] 6.1 Implement `stats()` method
     - Populate TrigramStats fields with normalized frequencies
     - Handle division by zero by returning 0
@@ -90,7 +90,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
 - [x] 7. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 8. Integrate with CachedLayout
+- [x] 8. Integrate with CachedLayout
   - [x] 8.1 Add TrigramCache field to CachedLayout struct
     - Add `trigram: TrigramCache` field
     - _Requirements: 8.1_
@@ -112,11 +112,11 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
     - Add call to `self.trigram.replace_key()` with tg_freq from magic cache
     - _Requirements: 8.5_
 
-  - [-] 8.6 Update CachedLayout::swap_keys() to call trigram cache
+  - [x] 8.6 Update CachedLayout::swap_keys() to call trigram cache
     - Add call to `self.trigram.key_swap()` with tg_freq from magic cache
     - _Requirements: 8.6_
 
-  - [~] 8.7 Update CachedLayout::apply_magic_rule() to update trigram cache
+  - [x] 8.7 Update CachedLayout::apply_magic_rule() to update trigram cache
     - Add DeltaGram::Trigram handling to update trigram frequencies
     - Call `self.trigram.update_trigram()` for each trigram delta
     - _Requirements: 8.7_
@@ -125,7 +125,7 @@ This plan implements the `TrigramCache` for tracking trigram type frequencies in
     - **Property 9: CachedLayout Integration**
     - **Validates: Requirements 8.3, 8.4, 8.5, 8.6, 8.7**
 
-- [~] 9. Final checkpoint - Ensure all tests pass
+- [x] 9. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

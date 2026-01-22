@@ -49,7 +49,17 @@ mod bench {
         );
 
         // === Magic Key Operations ===
-        bench.register(steal_bigram, ["magic"]);
+        bench.register(apply_magic_rule, ["magic"]);
+
+        // === Speculative Scoring Operations ===
+        // These measure O(1) speculative scoring performance (apply=false)
+        // Targets: key_swap < 2µs, add_rule < 2µs, total < 5µs
+        bench.register_many(
+            list![speculative_key_swap],
+            swaps,
+        );
+        bench.register(speculative_add_rule, ["magic"]);
+        bench.register(total_speculative_scoring, ["magic"]);
 
         // === High-level Operations ===
         bench.register(best_neighbor, ["qwerty"]);
@@ -295,7 +305,7 @@ mod bench {
     }
 
     /// Benchmark apply_magic_rule operation (magic key functionality)
-    fn steal_bigram(bencher: Bencher, _layout_name: &str) {
+    fn apply_magic_rule(bencher: Bencher, _layout_name: &str) {
         use oxeylyzer_core::cached_layout::CachedLayout;
         use oxeylyzer_core::weights::dummy_weights;
 
@@ -319,6 +329,100 @@ mod bench {
                 // Alternate between setting output to 'c' and 'b'
                 cached.apply_magic_rule(magic_key, leader_a, output_c, true);
                 cached.apply_magic_rule(magic_key, leader_a, output_b, true);
+            }
+        })
+    }
+
+    // ==================== Speculative Scoring Benchmarks ====================
+    // These benchmarks measure O(1) speculative scoring performance (apply=false).
+    // Target: < 2µs per analyzer for key_swap, < 2µs per analyzer for add_rule,
+    // < 5µs total for all speculative scoring operations.
+    // See .kiro/specs/const-freq-analyzers/requirements.md Requirement 7.
+
+    /// Benchmark speculative key_swap operation (apply=false).
+    /// This measures the O(1) lookup table performance for speculative scoring.
+    /// Target: < 2µs per analyzer (< 5µs total across all analyzers)
+    fn speculative_key_swap(bencher: Bencher, swap: Neighbor) {
+        use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
+
+        let (_, layout) = util::analyzer_layout("english", "qwerty");
+        let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+
+        let (pos_a, pos_b) = match swap {
+            Neighbor::KeySwap(PosPair(a, b)) => (a, b),
+            _ => (0, 1),
+        };
+
+        bencher.bench(|| {
+            for _ in 0..N {
+                // Speculative scoring: apply=false, no state mutation
+                black_box(cached.swap_keys(pos_a, pos_b, false));
+            }
+        })
+    }
+
+    /// Benchmark speculative add_rule operation (apply=false).
+    /// This measures the O(1) lookup table performance for magic rule speculative scoring.
+    /// Target: < 2µs per analyzer (< 5µs total across all analyzers)
+    fn speculative_add_rule(bencher: Bencher, _layout_name: &str) {
+        use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
+
+        // Use the magic test layout which has magic keys defined
+        let layout = oxeylyzer_core::layout::Layout::load("./layouts/test/magic.dof")
+            .expect("magic layout should exist");
+        let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+
+        // Get magic key info from the layout's char_mapping
+        // The magic layout has: mag2 with rules "a" -> "b" and "b" -> "c"
+        let char_mapping = cached.char_mapping();
+        let leader_a = char_mapping.get_u('a');
+        let output_c = char_mapping.get_u('c');
+        let magic_key = char_mapping.get_u('µ'); // mag2 uses µ
+
+        bencher.bench(|| {
+            for _ in 0..N {
+                // Speculative scoring: apply=false, no state mutation
+                // Test changing the rule output speculatively
+                black_box(cached.apply_magic_rule(magic_key, leader_a, output_c, false));
+            }
+        })
+    }
+
+    /// Benchmark total speculative scoring path.
+    /// This measures the combined performance of speculative key_swap and add_rule.
+    /// Target: < 5µs total for all speculative scoring operations.
+    fn total_speculative_scoring(bencher: Bencher, _layout_name: &str) {
+        use oxeylyzer_core::cached_layout::CachedLayout;
+        use oxeylyzer_core::weights::dummy_weights;
+
+        // Use the magic test layout which has magic keys defined
+        let layout = oxeylyzer_core::layout::Layout::load("./layouts/test/magic.dof")
+            .expect("magic layout should exist");
+        let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
+        let weights = dummy_weights();
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+
+        // Get magic key info from the layout's char_mapping
+        let char_mapping = cached.char_mapping();
+        let leader_a = char_mapping.get_u('a');
+        let output_c = char_mapping.get_u('c');
+        let magic_key = char_mapping.get_u('µ'); // mag2 uses µ
+
+        // Use positions 1 and 4 for key swap (typical swap positions)
+        let pos_a = 1;
+        let pos_b = 4;
+
+        bencher.bench(|| {
+            for _ in 0..N {
+                // Full speculative scoring path: key_swap + add_rule
+                black_box(cached.swap_keys(pos_a, pos_b, false));
+                black_box(cached.apply_magic_rule(magic_key, leader_a, output_c, false));
             }
         })
     }
