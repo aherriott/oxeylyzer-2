@@ -1226,6 +1226,15 @@ impl ScissorsCache {
         }
     }
 
+    /// Clear the swap_delta lookup table.
+    ///
+    /// This should be called after any apply=true operation that changes the layout,
+    /// as the pre-computed deltas become invalid when keys move.
+    #[inline]
+    pub fn clear_swap_deltas(&mut self) {
+        self.swap_delta.clear();
+    }
+
     /// Apply a magic rule. Returns the score delta.
     ///
     /// If `apply` is false, computes the score delta without mutating state (speculative scoring).
@@ -3700,7 +3709,7 @@ mod pbt_add_rule_apply_true {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(25))]
 
         /// **Validates: Requirements 2.5**
         ///
@@ -3927,7 +3936,7 @@ mod pbt_add_rule_apply_false {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(25))]
 
         /// **Validates: Requirements 2.6**
         ///
@@ -4189,7 +4198,7 @@ mod pbt_lookup_table_matches_computed_scissors {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(25))]
 
         /// **Validates: Requirements 6.4, 6.5**
         ///

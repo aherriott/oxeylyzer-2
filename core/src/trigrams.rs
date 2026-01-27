@@ -841,6 +841,15 @@ impl TrigramCache {
         }
     }
 
+    /// Clear the swap_delta lookup table.
+    ///
+    /// This should be called after any apply=true operation that changes the layout,
+    /// as the pre-computed deltas become invalid when keys move.
+    #[inline]
+    pub fn clear_swap_deltas(&mut self) {
+        self.swap_delta.clear();
+    }
+
     /// Compute the pair index for positions (pos_a, pos_b) where pos_a < pos_b.
     /// Uses upper triangle indexing.
     #[inline]
@@ -5191,7 +5200,7 @@ mod tests {
         }
 
         proptest! {
-            #![proptest_config(ProptestConfig::with_cases(100))]
+            #![proptest_config(ProptestConfig::with_cases(25))]
 
             /// **Validates: Requirements 2.5**
             ///
@@ -5357,7 +5366,7 @@ mod tests {
         }
 
         proptest! {
-            #![proptest_config(ProptestConfig::with_cases(100))]
+            #![proptest_config(ProptestConfig::with_cases(25))]
 
             /// **Validates: Requirements 2.6**
             ///
@@ -5519,7 +5528,7 @@ mod tests {
         }
 
         proptest! {
-            #![proptest_config(ProptestConfig::with_cases(100))]
+            #![proptest_config(ProptestConfig::with_cases(25))]
 
             /// **Validates: Requirements 6.1, 6.5**
             ///

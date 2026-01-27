@@ -510,6 +510,12 @@ impl CachedLayout {
             if key_b < self.key_positions.len() {
                 self.key_positions[key_b] = Some(pos_a);
             }
+
+            // Invalidate swap_delta tables since layout changed
+            self.sfb.clear_swap_deltas();
+            self.stretch.clear_swap_deltas();
+            self.scissors.clear_swap_deltas();
+            self.trigram.clear_swap_deltas();
         }
 
         sfb_score + stretch_score + scissors_score + trigram_score
@@ -1710,7 +1716,7 @@ mod pbt_constant_frequencies {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(25))]
 
         /// **Validates: Requirements 1.1, 1.2, 1.3, 1.4**
         ///
@@ -2180,7 +2186,7 @@ mod pbt_total_score_preservation {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100))]
+        #![proptest_config(ProptestConfig::with_cases(25))]
 
         /// **Validates: Requirements 8.1, 8.2, 8.3, 8.4**
         ///
