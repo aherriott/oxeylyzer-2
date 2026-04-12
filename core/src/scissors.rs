@@ -4,7 +4,7 @@
  **************************************
  */
 
-use std::collections::HashMap;
+use fxhash::FxHashMap as HashMap;
 
 use crate::types::{CacheKey, CachePos};
 use libdof::dofinitions::Finger;
@@ -325,17 +325,7 @@ pub struct ScissorsCache {
 
     /// Pre-computed rule deltas for O(1) `add_rule` speculative scoring.
     /// Maps (leader, output, magic_key) -> score delta.
-    /// Uses sparse storage (HashMap) to stay under 10MB memory target.
-    /// When `add_rule` is called with `apply=false`, this lookup table is used
-    /// instead of computing the delta from scratch.
     rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
-
-    /// Pre-computed swap deltas for O(1) speculative key_swap scoring.
-    /// Maps (pos_a, pos_b, key_a, key_b) -> score delta where pos_a < pos_b.
-    /// Uses sparse storage (HashMap) to keep memory under control.
-    /// When `key_swap` is called with `apply=false`, this lookup table is used
-    /// instead of computing the delta from scratch.
-    swap_delta: HashMap<(CachePos, CachePos, CacheKey, CacheKey), i32>,
 }
 
 impl ScissorsCache {
@@ -426,14 +416,9 @@ impl ScissorsCache {
             full_scissors_skip_weight: 0,
             half_scissors_weight: 0,
             half_scissors_skip_weight: 0,
-            // Initialize active rules to empty (no magic rules active initially)
-            active_rules: HashMap::new(),
-            // Initialize magic rule score delta to zero
+            active_rules: HashMap::default(),
             magic_rule_score_delta: 0,
-            // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
-            rule_delta: HashMap::new(),
-            // Initialize swap delta lookup table to empty (populated by init_swap_deltas)
-            swap_delta: HashMap::new(),
+            rule_delta: HashMap::default(),
         }
     }
 
@@ -775,37 +760,7 @@ impl ScissorsCache {
         };
     }
 
-    /// Replace key at position. Returns the new score.
-    ///
-    /// Computes the score delta for replacing a key at a position and optionally
-    /// applies the change to the internal state.
-    ///
-    /// # Arguments
-    /// * `pos` - The position where the key is being replaced
-    /// * `old_key` - The key currently at the position
-    /// * `new_key` - The key that will replace it
-    /// * `keys` - The current key assignment array
-    /// * `skip_pos` - Optional position to skip (used during swaps to avoid double-counting)
-    /// * `bg_freq` - Bigram frequency array (1D, indexed by key_a * num_keys + key_b)
-    /// * `sg_freq` - Skipgram frequency array (1D, indexed by key_a * num_keys + key_b)
-    /// * `apply` - If true, updates internal state; if false, only computes the score
-    ///
-    /// # Returns
-    /// The new total score after the replacement.
-    ///
-    /// # Behavior
-    /// - If `apply` is true:
-    ///   1. Computes the full delta using `compute_replace_delta()`
-    ///   2. Applies the delta to update internal state via `apply_delta()`
-    ///   3. Returns `score()` (the new total score)
-    /// - If `apply` is false:
-    ///   1. Computes only the score delta using `compute_replace_delta_score_only()`
-    ///   2. Returns `score() + score_delta` without mutating state
-    ///
-    /// # Requirements
-    /// - Requirement 4.3: Compute score delta for key replacement without full recalculation
-    /// - Requirement 4.5: When apply=false, compute new score without mutating internal state
-    /// - Requirement 4.6: When apply=true, update internal state and return the new score
+    /// Replace key at position. Mutates running totals. Returns the new score.
     #[inline]
     pub fn replace_key(
         &mut self,
@@ -816,55 +771,28 @@ impl ScissorsCache {
         skip_pos: Option<usize>,
         bg_freq: &[i64],
         sg_freq: &[i64],
-        apply: bool,
     ) -> i64 {
-        if apply {
-            // Compute full delta and apply it
-            let delta = self.compute_replace_delta(pos, old_key, new_key, keys, skip_pos, bg_freq, sg_freq);
-            self.apply_delta(&delta);
-            self.score()
-        } else {
-            // Compute only the score delta without mutating state
-            let score_delta = self.compute_replace_delta_score_only(pos, old_key, new_key, keys, skip_pos, bg_freq, sg_freq);
-            self.score() + score_delta
-        }
+        let delta = self.compute_replace_delta(pos, old_key, new_key, keys, skip_pos, bg_freq, sg_freq);
+        self.apply_delta(&delta);
+        self.score()
     }
 
-    /// Swap keys at two positions. Returns the new score.
-    ///
-    /// Computes the combined score delta for swapping two keys and optionally
-    /// applies the change to the internal state. This is used during layout
-    /// optimization when evaluating key swaps.
-    ///
-    /// # Arguments
-    /// * `pos_a` - First position in the swap
-    /// * `pos_b` - Second position in the swap
-    /// * `key_a` - The key currently at pos_a (will move to pos_b)
-    /// * `key_b` - The key currently at pos_b (will move to pos_a)
-    /// * `keys` - The current key assignment array
-    /// * `bg_freq` - Bigram frequency array (1D, indexed by key_a * num_keys + key_b)
-    /// * `sg_freq` - Skipgram frequency array (1D, indexed by key_a * num_keys + key_b)
-    /// * `apply` - If true, updates internal state; if false, only computes the score
-    ///
-    /// # Returns
-    /// The new total score after the swap.
-    ///
-    /// # Algorithm
-    /// 1. Compute delta for replacing key_a at pos_a with key_b, skipping pos_b
-    /// 2. Compute delta for replacing key_b at pos_b with key_a, skipping pos_a
-    /// 3. Combine the two deltas using `ScissorsDelta::combine()`
-    /// 4. If `apply` is true: apply the combined delta and return `score()`
-    /// 5. If `apply` is false: return `score() + combined_delta.weighted_score()`
-    ///
-    /// The skip_pos parameter is used to avoid double-counting the contribution
-    /// from the pair (pos_a, pos_b) which would be counted in both replace operations.
-    ///
-    /// # Requirements
-    /// - Requirement 4.4: Compute score delta for key swap without full recalculation
-    /// - Requirement 4.5: When apply=false, compute new score without mutating internal state
-    /// - Requirement 4.6: When apply=true, update internal state and return the new score
-    ///
-    /// **Validates: Requirements 4.3, 4.5**
+    /// Speculative score for replacing a key. No mutation.
+    #[inline]
+    pub fn score_replace(
+        &self,
+        pos: usize,
+        old_key: usize,
+        new_key: usize,
+        keys: &[usize],
+        bg_freq: &[i64],
+        sg_freq: &[i64],
+    ) -> i64 {
+        let score_delta = self.compute_replace_delta_score_only(pos, old_key, new_key, keys, None, bg_freq, sg_freq);
+        self.score() + score_delta
+    }
+
+    /// Swap keys at two positions. Mutates running totals.
     #[inline]
     pub fn key_swap(
         &mut self,
@@ -875,43 +803,29 @@ impl ScissorsCache {
         keys: &[usize],
         bg_freq: &[i64],
         sg_freq: &[i64],
-        apply: bool,
     ) -> i64 {
-        if apply {
-            // Compute full deltas for both positions
-            // pos_a: key_a -> key_b, skip pos_b to avoid double-counting
-            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq);
-            // pos_b: key_b -> key_a, skip pos_a to avoid double-counting
-            let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq, sg_freq);
-            // Combine the deltas and apply
-            let combined = ScissorsDelta::combine(&delta_a, &delta_b);
-            self.apply_delta(&combined);
-            self.score()
-        } else {
-            // O(1) lookup for speculative scoring when swap_delta table is populated
-            if !self.swap_delta.is_empty() {
-                // Normalize position ordering (pos_a < pos_b) for canonical lookup
-                let (p_lo, p_hi, k_lo, k_hi) = if pos_a < pos_b {
-                    (pos_a, pos_b, key_a, key_b)
-                } else {
-                    (pos_b, pos_a, key_b, key_a)
-                };
+        let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq);
+        let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq, sg_freq);
+        let combined = ScissorsDelta::combine(&delta_a, &delta_b);
+        self.apply_delta(&combined);
+        self.score()
+    }
 
-                // Look up the delta directly from the pre-computed table.
-                // If not found in the HashMap, the delta is 0 (sparse storage semantics).
-                let delta = self.swap_delta
-                    .get(&(p_lo, p_hi, k_lo, k_hi))
-                    .copied()
-                    .unwrap_or(0) as i64;
-
-                return self.score() + delta;
-            }
-
-            // Fallback to computed delta if swap_delta table not initialized
-            let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq);
-            let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq, sg_freq);
-            self.score() + score_a + score_b
-        }
+    /// Speculative score for a key swap. No mutation.
+    #[inline]
+    pub fn score_swap(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        bg_freq: &[i64],
+        sg_freq: &[i64],
+    ) -> i64 {
+        let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq);
+        let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), bg_freq, sg_freq);
+        self.score() + score_a + score_b
     }
 
     /// Compute the weighted score for a scissor bigram pair.
@@ -1162,77 +1076,6 @@ impl ScissorsCache {
                 }
             }
         }
-    }
-
-    /// Initialize swap_delta lookup table for O(1) speculative key_swap scoring.
-    ///
-    /// Pre-computes the score delta for all valid (pos_a, pos_b, key_a, key_b) combinations
-    /// where pos_a < pos_b (canonical ordering). Uses sparse storage (HashMap) to
-    /// store only non-zero deltas, keeping memory usage under control.
-    ///
-    /// This must be called after the layout is fully initialized (all keys placed).
-    ///
-    /// # Arguments
-    /// * `keys` - The current key assignments for all positions
-    /// * `bg_freq` - Flat bigram frequencies: bg_freq[a * num_keys + b]
-    /// * `sg_freq` - Flat skipgram frequencies: sg_freq[a * num_keys + b]
-    ///
-    /// **Validates: Requirements 4.2, 7.2**
-    pub fn init_swap_deltas(
-        &mut self,
-        keys: &[CacheKey],
-        bg_freq: &[i64],
-        sg_freq: &[i64],
-    ) {
-        // Clear existing swap deltas
-        self.swap_delta.clear();
-
-        let num_keys = self.num_keys;
-        let num_positions = self.scissor_pairs_per_key.len();
-
-        // Iterate over all position pairs (pos_a, pos_b) where pos_a < pos_b
-        for pos_a in 0..num_positions {
-            for pos_b in (pos_a + 1)..num_positions {
-                // Iterate over all key pairs (key_a, key_b)
-                for key_a in 0..num_keys {
-                    for key_b in 0..num_keys {
-                        // Skip if same key (no change when swapping same key)
-                        if key_a == key_b {
-                            continue;
-                        }
-
-                        // Compute the total swap delta using existing compute_replace_delta_score_only method:
-                        // 1. Delta for pos_a (key_a -> key_b), skipping pos_b
-                        // 2. Delta for pos_b (key_b -> key_a), skipping pos_a
-                        let delta_a = self.compute_replace_delta_score_only(
-                            pos_a, key_a, key_b, keys, Some(pos_b), bg_freq, sg_freq
-                        );
-                        let delta_b = self.compute_replace_delta_score_only(
-                            pos_b, key_b, key_a, keys, Some(pos_a), bg_freq, sg_freq
-                        );
-
-                        let delta = delta_a + delta_b;
-
-                        // Only store non-zero deltas (sparse storage for memory efficiency)
-                        if delta != 0 {
-                            self.swap_delta.insert(
-                                (pos_a, pos_b, key_a, key_b),
-                                delta as i32,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Clear the swap_delta lookup table.
-    ///
-    /// This should be called after any apply=true operation that changes the layout,
-    /// as the pre-computed deltas become invalid when keys move.
-    #[inline]
-    pub fn clear_swap_deltas(&mut self) {
-        self.swap_delta.clear();
     }
 
     /// Apply a magic rule. Returns the score delta.
@@ -2790,7 +2633,6 @@ mod tests {
             None,
             &bg_freq,
             &sg_freq,
-            true,   // apply
         );
 
         // Verify the returned score matches score()
@@ -2828,15 +2670,13 @@ mod tests {
         let initial_bigram_total = cache.full_scissors_bigram_total;
 
         // Replace key 0 with key 2 at position 0 with apply=false
-        let speculative_score = cache.replace_key(
+        let speculative_score = cache.score_replace(
             0,      // pos
             0,      // old_key
             2,      // new_key
             &keys,
-            None,
             &bg_freq,
             &sg_freq,
-            false,  // apply
         );
 
         // Verify state was NOT updated
@@ -2873,12 +2713,12 @@ mod tests {
 
         // Get score with apply=true
         let score_apply = cache_apply.replace_key(
-            0, 0, 2, &keys, None, &bg_freq, &sg_freq, true,
+            0, 0, 2, &keys, None, &bg_freq, &sg_freq,
         );
 
         // Get score with apply=false
-        let score_no_apply = cache_no_apply.replace_key(
-            0, 0, 2, &keys, None, &bg_freq, &sg_freq, false,
+        let score_no_apply = cache_no_apply.score_replace(
+            0, 0, 2, &keys, &bg_freq, &sg_freq,
         );
 
         // Both should return the same score
@@ -2910,13 +2750,13 @@ mod tests {
         let sg_freq = freq_array(num_keys, &[]);
 
         // Replace key 0 with key 3 at position 0, skipping position 1
-        let score_with_skip = cache.replace_key(
-            0, 0, 3, &keys, Some(1), &bg_freq, &sg_freq, false,
+        let score_with_skip = cache.score() + cache.compute_replace_delta_score_only(
+            0, 0, 3, &keys, Some(1), &bg_freq, &sg_freq,
         );
 
         // Replace key 0 with key 3 at position 0, without skipping
-        let score_without_skip = cache.replace_key(
-            0, 0, 3, &keys, None, &bg_freq, &sg_freq, false,
+        let score_without_skip = cache.score_replace(
+            0, 0, 3, &keys, &bg_freq, &sg_freq,
         );
 
         // Scores should be different because skip_pos excludes position 1's contribution
@@ -2943,7 +2783,7 @@ mod tests {
 
         // Replace invalid key with key 2 at position 0
         let new_score = cache.replace_key(
-            0, 999, 2, &keys, None, &bg_freq, &sg_freq, true,
+            0, 999, 2, &keys, None, &bg_freq, &sg_freq,
         );
 
         // Should add the new key's contribution without subtracting old
@@ -2973,7 +2813,7 @@ mod tests {
 
         // Replace key 0 with invalid key at position 0
         let new_score = cache.replace_key(
-            0, 0, 999, &keys, None, &bg_freq, &sg_freq, true,
+            0, 0, 999, &keys, None, &bg_freq, &sg_freq,
         );
 
         // Should subtract old key's contribution without adding new
@@ -3024,7 +2864,6 @@ mod tests {
             &keys,
             &bg_freq,
             &sg_freq,
-            true,   // apply
         );
 
         // Verify the returned score matches score()
@@ -3061,8 +2900,8 @@ mod tests {
         let initial_skipgram_total = cache.full_scissors_skipgram_total;
 
         // Swap with apply=false
-        let speculative_score = cache.key_swap(
-            0, 1, 0, 1, &keys, &bg_freq, &sg_freq, false,
+        let speculative_score = cache.score_swap(
+            0, 1, 0, 1, &keys, &bg_freq, &sg_freq,
         );
 
         // Verify state was NOT updated
@@ -3109,12 +2948,12 @@ mod tests {
 
         // Get score with apply=true
         let score_apply = cache_apply.key_swap(
-            0, 1, 0, 1, &keys, &bg_freq, &sg_freq, true,
+            0, 1, 0, 1, &keys, &bg_freq, &sg_freq,
         );
 
         // Get score with apply=false
-        let score_no_apply = cache_no_apply.key_swap(
-            0, 1, 0, 1, &keys, &bg_freq, &sg_freq, false,
+        let score_no_apply = cache_no_apply.score_swap(
+            0, 1, 0, 1, &keys, &bg_freq, &sg_freq,
         );
 
         // Both should return the same score
@@ -3150,13 +2989,13 @@ mod tests {
         let initial_bigram_total = cache.full_scissors_bigram_total;
 
         // First swap: key 0 at pos 0 <-> key 1 at pos 1
-        cache.key_swap(0, 1, 0, 1, &keys, &bg_freq, &sg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &bg_freq, &sg_freq);
 
         // After first swap, keys are now: [1, 0]
         let keys_after_swap = vec![1, 0];
 
         // Second swap: key 1 at pos 0 <-> key 0 at pos 1 (reverse)
-        cache.key_swap(0, 1, 1, 0, &keys_after_swap, &bg_freq, &sg_freq, true);
+        cache.key_swap(0, 1, 1, 0, &keys_after_swap, &bg_freq, &sg_freq);
 
         // Should be back to original state
         assert_eq!(cache.score(), initial_score,
@@ -3193,7 +3032,7 @@ mod tests {
         // Swap key 0 at pos 0 with key 1 at pos 1
         // This should affect scissors with pos 2 as well
         let new_score = cache.key_swap(
-            0, 1, 0, 1, &keys, &bg_freq, &sg_freq, true,
+            0, 1, 0, 1, &keys, &bg_freq, &sg_freq,
         );
 
         // Verify score was computed
@@ -3227,7 +3066,7 @@ mod tests {
         // These positions don't form a scissor with each other (same row)
         // but both form scissors with pos 2
         let new_score = cache.key_swap(
-            0, 1, 0, 1, &keys, &bg_freq, &sg_freq, true,
+            0, 1, 0, 1, &keys, &bg_freq, &sg_freq,
         );
 
         assert_eq!(new_score, cache.score(),

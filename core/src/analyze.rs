@@ -103,7 +103,7 @@ impl Analyzer {
         let mut best = None;
 
         for &neighbor in neighbors {
-            let score = self.test_neighbor(neighbor);
+            let score = self.score_neighbor(neighbor);
             if score > best_score {
                 best_score = score;
                 best = Some((neighbor, score));
@@ -112,20 +112,42 @@ impl Analyzer {
         best
     }
 
-    /// Test a neighbor without applying it. Returns the score.
-    pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
+    /// Speculative score for a neighbor. No mutation for KeySwap.
+    pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .apply_neighbor(neighbor, false)
+            .score_neighbor_mut(neighbor)
     }
 
-    /// Apply a neighbor and return the new score.
-    pub fn apply_neighbor(&mut self, neighbor: Neighbor) -> i64 {
+    /// Test a neighbor without applying it. Returns the score.
+    /// Alias for score_neighbor for backwards compatibility.
+    pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
+        self.score_neighbor(neighbor)
+    }
+
+    /// Apply a neighbor (fast path, no weighted_score update).
+    pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .apply_neighbor(neighbor, true)
+            .apply_neighbor(neighbor)
+    }
+
+    /// Apply a neighbor and update weighted_score arrays.
+    pub fn apply_neighbor_and_update(&mut self, neighbor: Neighbor) {
+        self.cache
+            .as_mut()
+            .expect("Analyzer has no Layout set")
+            .apply_neighbor_and_update(neighbor)
+    }
+
+    /// Rebuild weighted_score arrays from current state.
+    pub fn update_scores(&mut self) {
+        self.cache
+            .as_mut()
+            .expect("Analyzer has no Layout set")
+            .update_scores()
     }
 
     /*

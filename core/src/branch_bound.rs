@@ -216,7 +216,7 @@ impl BranchBound {
         // Remove all keys to get empty positions
         for pos in 0..self.num_positions {
             let key = cache.get_key(pos);
-            cache.replace_key(pos, key, EMPTY_KEY, true);
+            cache.replace_key(pos, key, EMPTY_KEY);
         }
         cache
     }
@@ -335,7 +335,7 @@ impl BranchBound {
         // Try placing this character at each available position
         for (i, &pos) in available_positions.iter().enumerate() {
             // Place the key
-            cache.replace_key(pos, EMPTY_KEY, key, true);
+            cache.replace_key(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
 
             // Create new available positions (excluding current)
@@ -366,7 +366,7 @@ impl BranchBound {
 
             // Backtrack
             assignment.pop();
-            cache.replace_key(pos, key, EMPTY_KEY, true);
+            cache.replace_key(pos, key, EMPTY_KEY);
         }
     }
 
@@ -536,7 +536,7 @@ impl BranchBound {
         // Try placing this character at each available position
         for (i, &pos) in available_positions.iter().enumerate() {
             // Place the key
-            cache.replace_key(pos, EMPTY_KEY, key, true);
+            cache.replace_key(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
 
             // Create new available positions (excluding current)
@@ -570,7 +570,7 @@ impl BranchBound {
 
             // Backtrack
             assignment.pop();
-            cache.replace_key(pos, key, EMPTY_KEY, true);
+            cache.replace_key(pos, key, EMPTY_KEY);
         }
     }
 

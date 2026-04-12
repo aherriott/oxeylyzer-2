@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use fxhash::FxHashMap as HashMap;
 
 use crate::stats::Stats;
 use crate::types::{CacheKey, CachePos};
@@ -151,17 +151,7 @@ pub struct TrigramCache {
 
     /// Pre-computed rule deltas for O(1) `add_rule` speculative scoring.
     /// Maps (leader, output, magic_key) -> score delta.
-    /// Uses sparse storage (HashMap) to stay under 10MB memory target.
-    /// When `add_rule` is called with `apply=false`, this lookup table is used
-    /// instead of computing the delta from scratch.
     rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
-
-    /// Pre-computed swap deltas for O(1) speculative key_swap scoring.
-    /// Maps (pos_a, pos_b, key_a, key_b) -> score delta where pos_a < pos_b.
-    /// Uses sparse storage (HashMap) to keep memory under control - only stores non-zero deltas.
-    /// When `key_swap` is called with `apply=false`, this lookup table is used
-    /// instead of computing the delta from scratch.
-    swap_delta: HashMap<(CachePos, CachePos, CacheKey, CacheKey), i32>,
 }
 
 impl TrigramCache {
@@ -273,13 +263,11 @@ impl TrigramCache {
             num_pairs,
             weighted_scores_initialized: false,
             // Initialize active rules to empty (no magic rules active initially)
-            active_rules: HashMap::new(),
+            active_rules: HashMap::default(),
             // Initialize magic rule score delta to zero
             magic_rule_score_delta: 0,
             // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
-            rule_delta: HashMap::new(),
-            // Initialize swap delta lookup table to empty (populated by init_swap_deltas)
-            swap_delta: HashMap::new(),
+            rule_delta: HashMap::default(),
         }
     }
 
@@ -774,80 +762,6 @@ impl TrigramCache {
                 }
             }
         }
-    }
-
-    /// Initialize swap_delta lookup table for O(1) speculative key_swap scoring.
-    ///
-    /// Pre-computes the score delta for all valid (pos_a, pos_b, key_a, key_b) combinations
-    /// where pos_a < pos_b (canonical ordering). Uses sparse storage (HashMap) to store
-    /// only non-zero deltas, keeping memory usage under control.
-    ///
-    /// This must be called after the layout is fully initialized (all keys placed)
-    /// and after init_weighted_scores has been called.
-    ///
-    /// # Arguments
-    /// * `keys` - The current key assignments for all positions
-    /// * `tg_freq` - 3D trigram frequency data: tg_freq[key_a][key_b][key_c]
-    ///
-    /// **Validates: Requirements 1.2, 7.2**
-    pub fn init_swap_deltas(
-        &mut self,
-        keys: &[CacheKey],
-        tg_freq: &[Vec<Vec<i64>>],
-    ) {
-        // Clear existing swap deltas
-        self.swap_delta.clear();
-
-        let num_keys = self.num_keys;
-        let num_positions = self.num_positions;
-
-        // Iterate over all position pairs (pos_a, pos_b) where pos_a < pos_b
-        for pos_a in 0..num_positions {
-            for pos_b in (pos_a + 1)..num_positions {
-                // Iterate over all key pairs (key_a, key_b)
-                for key_a in 0..num_keys {
-                    for key_b in 0..num_keys {
-                        // Skip if same key (no change when swapping same key)
-                        if key_a == key_b {
-                            continue;
-                        }
-
-                        // Compute the total swap delta using existing methods:
-                        // 1. Delta for pos_a (key_a -> key_b), skipping pos_b
-                        // 2. Delta for pos_b (key_b -> key_a), skipping pos_a
-                        // 3. Delta for trigrams involving BOTH positions
-                        let score_a = self.compute_replace_delta_score_only(
-                            pos_a, key_a, key_b, keys, Some(pos_b), tg_freq
-                        );
-                        let score_b = self.compute_replace_delta_score_only(
-                            pos_b, key_b, key_a, keys, Some(pos_a), tg_freq
-                        );
-                        let score_both = self.compute_swap_both_delta_score_only(
-                            pos_a, pos_b, key_a, key_b, keys, tg_freq
-                        );
-
-                        let delta = score_a + score_b + score_both;
-
-                        // Only store non-zero deltas (sparse storage for memory efficiency)
-                        if delta != 0 {
-                            self.swap_delta.insert(
-                                (pos_a, pos_b, key_a, key_b),
-                                delta as i32,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Clear the swap_delta lookup table.
-    ///
-    /// This should be called after any apply=true operation that changes the layout,
-    /// as the pre-computed deltas become invalid when keys move.
-    #[inline]
-    pub fn clear_swap_deltas(&mut self) {
-        self.swap_delta.clear();
     }
 
     /// Compute the pair index for positions (pos_a, pos_b) where pos_a < pos_b.
@@ -1403,7 +1317,7 @@ impl TrigramCache {
     /// The weighted score delta as a single i64 value.
     ///
     /// Requirements: 5.3
-    fn compute_replace_delta_score_only(
+    pub(crate) fn compute_replace_delta_score_only(
         &self,
         pos: usize,
         old_key: usize,
@@ -1604,6 +1518,7 @@ impl TrigramCache {
     ///
     /// Requirements: 5.1, 5.2, 5.3
     #[inline]
+    /// Replace key at position. Mutates running totals + updates weighted scores.
     pub fn replace_key(
         &mut self,
         pos: usize,
@@ -1612,25 +1527,28 @@ impl TrigramCache {
         keys: &[usize],
         skip_pos: Option<usize>,
         tg_freq: &[Vec<Vec<i64>>],
-        apply: bool,
+    ) {
+        let delta = self.compute_replace_delta(pos, old_key, new_key, keys, skip_pos, tg_freq);
+        self.apply_delta(&delta);
+        self.update_weighted_scores_for_key_change(pos, old_key, new_key, keys, tg_freq);
+    }
+
+    /// Speculative score for replacing a key. No mutation.
+    #[inline]
+    pub fn score_replace(
+        &self,
+        pos: usize,
+        old_key: usize,
+        new_key: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
     ) -> i64 {
-        if apply {
-            // Compute full delta and apply it
-            let delta = self.compute_replace_delta(pos, old_key, new_key, keys, skip_pos, tg_freq);
-            self.apply_delta(&delta);
-            // Update pre-computed weighted scores for other positions
-            self.update_weighted_scores_for_key_change(pos, old_key, new_key, keys, tg_freq);
-            self.score()
+        if self.weighted_scores_initialized {
+            let score_delta = self.compute_replace_delta_fast(pos, old_key, new_key);
+            self.score() + score_delta
         } else {
-            // Use fast path if weighted scores are initialized and no skip_pos
-            if self.weighted_scores_initialized && skip_pos.is_none() {
-                let score_delta = self.compute_replace_delta_fast(pos, old_key, new_key);
-                self.score() + score_delta
-            } else {
-                // Fall back to slow path
-                let score_delta = self.compute_replace_delta_score_only(pos, old_key, new_key, keys, skip_pos, tg_freq);
-                self.score() + score_delta
-            }
+            let score_delta = self.compute_replace_delta_score_only(pos, old_key, new_key, keys, None, tg_freq);
+            self.score() + score_delta
         }
     }
 
@@ -1655,6 +1573,8 @@ impl TrigramCache {
     ///
     /// Requirements: 5.4, 5.5
     #[inline]
+    /// Swap keys at two positions. Mutates running totals.
+    /// Does NOT update weighted_score arrays — caller must call update_scores if needed.
     pub fn key_swap(
         &mut self,
         pos_a: usize,
@@ -1663,62 +1583,72 @@ impl TrigramCache {
         key_b: usize,
         keys: &[usize],
         tg_freq: &[Vec<Vec<i64>>],
-        apply: bool,
+    ) {
+        if pos_a == pos_b {
+            return;
+        }
+
+        let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
+        let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
+        let delta_both = self.compute_swap_both_delta(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+
+        let combined = delta_a.combine(&delta_b).combine(&delta_both);
+        self.apply_delta(&combined);
+    }
+
+    /// Swap keys and update weighted_score arrays.
+    pub fn key_swap_and_update(
+        &mut self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) {
+        self.key_swap(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+        // After swap, pos_a has key_b and pos_b has key_a
+        // Update weighted scores for both changed positions
+        self.update_weighted_scores_for_key_change(pos_a, key_a, key_b, keys, tg_freq);
+        self.update_weighted_scores_for_key_change(pos_b, key_b, key_a, keys, tg_freq);
+    }
+
+    /// Speculative score for a key swap. No mutation.
+    /// Uses weighted_score flat arrays + swap_score_both correction.
+    #[inline]
+    pub fn score_swap(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
     ) -> i64 {
-        // If swapping a position with itself, no change
         if pos_a == pos_b {
             return self.score();
         }
 
-        // For trigrams, we need to handle three cases:
-        // 1. Trigrams involving only pos_a (not pos_b) - handled by delta_a with skip_pos=pos_b
-        // 2. Trigrams involving only pos_b (not pos_a) - handled by delta_b with skip_pos=pos_a
-        // 3. Trigrams involving BOTH pos_a and pos_b - need special handling
-        //
-        // The skip_pos mechanism in compute_replace_delta skips trigrams where ANY of the
-        // other positions equals skip_pos. This means trigrams involving both pos_a and pos_b
-        // are skipped in BOTH delta computations, so we need to handle them separately.
+        let nk = self.num_keys;
 
-        if apply {
-            // Compute deltas for trigrams involving only one of the swap positions
-            let delta_a = self.compute_replace_delta(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
-            let delta_b = self.compute_replace_delta(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
+        // Delta from weighted_score arrays (single-position changes)
+        let delta_a = self.compute_replace_delta_fast(pos_a, key_a, key_b);
+        let delta_b = self.compute_replace_delta_fast(pos_b, key_b, key_a);
 
-            // Compute delta for trigrams involving BOTH pos_a and pos_b
-            let delta_both = self.compute_swap_both_delta(pos_a, pos_b, key_a, key_b, keys, tg_freq);
-
-            let combined = delta_a.combine(&delta_b).combine(&delta_both);
-            self.apply_delta(&combined);
-            self.score()
+        // Correction for trigrams involving BOTH positions
+        let (p_lo, p_hi, k_lo, k_hi) = if pos_a < pos_b {
+            (pos_a, pos_b, key_a, key_b)
         } else {
-            // O(1) lookup for speculative scoring when swap_delta table is populated
-            // **Validates: Requirements 1.3, 1.5**
-            if !self.swap_delta.is_empty() {
-                // Normalize position ordering (pos_a < pos_b) for canonical lookup
-                let (p_lo, p_hi, k_lo, k_hi) = if pos_a < pos_b {
-                    (pos_a, pos_b, key_a, key_b)
-                } else {
-                    (pos_b, pos_a, key_b, key_a)
-                };
+            (pos_b, pos_a, key_b, key_a)
+        };
+        let pair_idx = self.pair_index(p_lo, p_hi);
+        let pair_base = pair_idx * nk * nk;
 
-                // Look up the delta directly from the pre-computed table.
-                // If not found in the HashMap, the delta is 0 (sparse storage semantics).
-                let delta = self.swap_delta
-                    .get(&(p_lo, p_hi, k_lo, k_hi))
-                    .copied()
-                    .unwrap_or(0) as i64;
+        // swap_score_both stores the weighted score for trigrams involving both positions
+        // with specific keys. We need: score_after - score_before for the "both" trigrams.
+        let old_both = self.swap_score_both[pair_base + k_lo * nk + k_hi];
+        let new_both = self.swap_score_both[pair_base + k_hi * nk + k_lo];
+        let both_delta = new_both - old_both;
 
-                return self.score() + delta;
-            }
-
-            // Fallback to computed delta if swap_delta table not initialized
-            // The slow path iterates over pre-computed trigram combinations which is still
-            // much faster than recomputing from scratch.
-            let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
-            let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
-            let score_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
-            self.score() + score_a + score_b + score_both
-        }
+        self.score() + delta_a + delta_b + both_delta
     }
 
     /// Compute the correction for trigrams involving BOTH swap positions when using fast path.
@@ -3678,7 +3608,8 @@ mod tests {
         assert_eq!(cache.score(), 0);
 
         // Replace key 0 with key 2 (apply=true)
-        let new_score = cache.replace_key(0, 0, 2, &keys, None, &tg_freq, true);
+        cache.replace_key(0, 0, 2, &keys, None, &tg_freq);
+        let new_score = cache.score();
 
         // Score should be updated
         assert_ne!(new_score, 0);
@@ -3728,7 +3659,7 @@ mod tests {
         assert_eq!(initial_score, 0);
 
         // Replace key 0 with key 2 (apply=false)
-        let speculative_score = cache.replace_key(0, 0, 2, &keys, None, &tg_freq, false);
+        let speculative_score = cache.score_replace(0, 0, 2, &keys, &tg_freq);
 
         // Speculative score should be non-zero
         assert_ne!(speculative_score, 0);
@@ -3774,7 +3705,8 @@ mod tests {
         ]);
 
         // Replace key 0 with key 2 (apply=true)
-        let returned_score = cache.replace_key(0, 0, 2, &keys, None, &tg_freq, true);
+        cache.replace_key(0, 0, 2, &keys, None, &tg_freq);
+        let returned_score = cache.score();
 
         // The returned score should equal score()
         assert_eq!(returned_score, cache.score());
@@ -3823,7 +3755,7 @@ mod tests {
         let score_delta = cache.compute_replace_delta_score_only(0, 0, 2, &keys, None, &tg_freq);
 
         // Replace key 0 with key 2 (apply=false)
-        let speculative_score = cache.replace_key(0, 0, 2, &keys, None, &tg_freq, false);
+        let speculative_score = cache.score_replace(0, 0, 2, &keys, &tg_freq);
 
         // The speculative score should equal initial_score + score_delta
         assert_eq!(speculative_score, initial_score + score_delta);
@@ -3868,10 +3800,11 @@ mod tests {
         ]);
 
         // Replace with apply=false on cache1
-        let score_false = cache1.replace_key(0, 0, 2, &keys, None, &tg_freq, false);
+        let score_false = cache1.score_replace(0, 0, 2, &keys, &tg_freq);
 
         // Replace with apply=true on cache2
-        let score_true = cache2.replace_key(0, 0, 2, &keys, None, &tg_freq, true);
+        cache2.replace_key(0, 0, 2, &keys, None, &tg_freq);
+        let score_true = cache2.score();
 
         // Both should return the same score
         assert_eq!(score_false, score_true);
@@ -3915,10 +3848,10 @@ mod tests {
         ]);
 
         // Replace without skip_pos
-        let score_no_skip = cache.replace_key(0, 0, 3, &keys, None, &tg_freq, false);
+        let score_no_skip = cache.score_replace(0, 0, 3, &keys, &tg_freq);
 
         // Replace with skip_pos=1 (should skip trigrams involving pos 1)
-        let score_with_skip = cache.replace_key(0, 0, 3, &keys, Some(1), &tg_freq, false);
+        let score_with_skip = cache.score() + cache.compute_replace_delta_score_only(0, 0, 3, &keys, Some(1), &tg_freq);
 
         // The scores should be different because skip_pos excludes some trigrams
         assert_ne!(score_no_skip, score_with_skip);
@@ -3961,7 +3894,8 @@ mod tests {
         let initial_score = cache.score();
 
         // Replace key 0 with key 0 (no change)
-        let new_score = cache.replace_key(0, 0, 0, &keys, None, &tg_freq, true);
+        cache.replace_key(0, 0, 0, &keys, None, &tg_freq);
+        let new_score = cache.score();
 
         // Score should remain the same
         assert_eq!(new_score, initial_score);
@@ -4010,9 +3944,9 @@ mod tests {
         ]);
 
         // First, establish some initial state by doing replace_key
-        cache.replace_key(0, 99, 0, &keys, None, &tg_freq, true);
-        cache.replace_key(1, 99, 1, &keys, None, &tg_freq, true);
-        cache.replace_key(2, 99, 2, &keys, None, &tg_freq, true);
+        cache.replace_key(0, 99, 0, &keys, None, &tg_freq);
+        cache.replace_key(1, 99, 1, &keys, None, &tg_freq);
+        cache.replace_key(2, 99, 2, &keys, None, &tg_freq);
 
         let initial_score = cache.score();
 
@@ -4021,7 +3955,8 @@ mod tests {
         // This changes which trigrams are counted because:
         // - Before: pos0 has key0, so tg_freq[0][2][0] = 100 is counted
         // - After: pos0 has key1, so tg_freq[1][2][1] = 500 is counted
-        let new_score = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let new_score = cache.score();
 
         // Score should have changed because frequencies are asymmetric
         assert_ne!(new_score, initial_score,
@@ -4077,7 +4012,7 @@ mod tests {
         let initial_onehandout = cache.onehandout_freq;
 
         // Swap keys with apply=false
-        let _speculative_score = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, false);
+        let _speculative_score = cache.score_swap(0, 1, 0, 1);
 
         // State should be unchanged
         assert_eq!(cache.score(), initial_score);
@@ -4129,10 +4064,11 @@ mod tests {
         ]);
 
         // Get speculative score with apply=false
-        let speculative_score = cache1.key_swap(0, 1, 0, 1, &keys, &tg_freq, false);
+        let speculative_score = cache1.score_swap(0, 1, 0, 1);
 
         // Get actual score with apply=true
-        let actual_score = cache2.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache2.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let actual_score = cache2.score();
 
         // Both should return the same score
         assert_eq!(speculative_score, actual_score);
@@ -4178,7 +4114,8 @@ mod tests {
         ]);
 
         // Swap keys at positions 0 and 1
-        let score = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let score = cache.score();
 
         // The score should be computed correctly without double-counting
         // We can't easily verify the exact value, but we can verify it doesn't panic
@@ -4223,7 +4160,8 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap position 0 with itself (key 0 <-> key 0)
-        let new_score = cache.key_swap(0, 0, 0, 0, &keys, &tg_freq, true);
+        cache.key_swap(0, 0, 0, 0, &keys, &tg_freq);
+        let new_score = cache.score();
 
         // Score should remain the same
         assert_eq!(new_score, initial_score);
@@ -4269,7 +4207,8 @@ mod tests {
 
         // Swap keys: pos 0 has key 0, pos 1 has key 1
         // After swap: pos 0 will have key 1, pos 1 will have key 0
-        let score = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let score = cache.score();
 
         // Verify the score is computed (exact value depends on trigram types)
         assert_eq!(cache.score(), score);
@@ -4312,7 +4251,8 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap with an invalid key
-        let new_score = cache.key_swap(0, 1, 0, 5, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 5, &keys, &tg_freq);
+        let new_score = cache.score();
 
         // Should handle gracefully (invalid keys contribute 0 frequency)
         assert!(new_score >= 0 || new_score < 0);
@@ -4354,7 +4294,8 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap should result in no change since all frequencies are 0
-        let new_score = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let new_score = cache.score();
 
         assert_eq!(new_score, initial_score);
         assert_eq!(cache.score(), initial_score);
@@ -4563,8 +4504,8 @@ mod tests {
         ]);
 
         // Initialize the cache
-        cache.replace_key(0, 99, 0, &keys, None, &tg_freq, true);
-        cache.replace_key(1, 99, 1, &keys, None, &tg_freq, true);
+        cache.replace_key(0, 99, 0, &keys, None, &tg_freq);
+        cache.replace_key(1, 99, 1, &keys, None, &tg_freq);
 
         let original_score = cache.score();
         let original_alternate = cache.alternate_freq;
@@ -4572,7 +4513,8 @@ mod tests {
         // First swap: positions 0 and 1
         // Before: pos 0 has key 0, pos 1 has key 1
         // After: pos 0 has key 1, pos 1 has key 0
-        let score_after_first_swap = cache.key_swap(0, 1, 0, 1, &keys, &tg_freq, true);
+        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let score_after_first_swap = cache.score();
 
         // After first swap, keys are: [1, 0]
         let keys_after_swap = vec![1, 0];
@@ -4580,7 +4522,8 @@ mod tests {
         // Second swap: reverse the first swap
         // Before: pos 0 has key 1, pos 1 has key 0
         // After: pos 0 has key 0, pos 1 has key 1
-        let score_after_second_swap = cache.key_swap(0, 1, 1, 0, &keys_after_swap, &tg_freq, true);
+        cache.key_swap(0, 1, 1, 0, &keys_after_swap, &tg_freq);
+        let score_after_second_swap = cache.score();
 
         // Suppress unused variable warnings
         let _ = score_after_first_swap;
