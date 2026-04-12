@@ -522,6 +522,7 @@ impl CachedLayout {
     }
 
     /// Swap keys at two positions. Mutates running totals only.
+    /// Swap keys. Fast path using flat trigram array.
     /// score() remains valid. score_neighbor() becomes invalid for trigrams.
     #[inline]
     pub fn swap_keys(&mut self, pos_a: CachePos, pos_b: CachePos) {
@@ -533,12 +534,12 @@ impl CachedLayout {
 
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
+        let tg_flat = self.magic.tg_freq_flat();
 
         self.sfb.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
         self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
         self.scissors.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        self.trigram.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
+        self.trigram.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_flat);
 
         self.keys[pos_a] = key_b;
         self.keys[pos_b] = key_a;

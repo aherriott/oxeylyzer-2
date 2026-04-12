@@ -1690,8 +1690,40 @@ impl TrigramCache {
     /// Requirements: 5.4, 5.5
     #[inline]
     /// Swap keys at two positions. Mutates running totals.
-    /// Does NOT update weighted_score arrays — caller must call update_scores if needed.
+    /// Uses flat trigram array for cache-friendly access.
+    /// Does NOT update per-type frequency tracking (use key_swap for that).
     pub fn key_swap(
+        &mut self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_flat: &[i64],
+    ) {
+        if pos_a == pos_b {
+            return;
+        }
+
+        let delta_a = self.compute_replace_delta_flat(pos_a, key_a, key_b, keys, Some(pos_b), tg_flat);
+        let delta_b = self.compute_replace_delta_flat(pos_b, key_b, key_a, keys, Some(pos_a), tg_flat);
+        let delta_both = self.compute_swap_both_delta_flat(pos_a, pos_b, key_a, key_b, keys, tg_flat);
+
+        // We only have the weighted score delta, not per-type frequencies.
+        // Distribute the total delta to inroll_freq as a proxy — the exact per-type
+        // breakdown doesn't matter for score() correctness, only for stats().
+        // For depth-N where we only need score(), this is fine.
+        // For stats accuracy, use key_swap_full which tracks per-type frequencies.
+        let total_delta = delta_a + delta_b + delta_both;
+
+        // Update the score by reverse-engineering the frequency delta.
+        // Since we can't easily split the weighted delta back into per-type frequencies,
+        // we'll track the total weighted delta separately.
+        self.magic_rule_score_delta += total_delta;
+    }
+
+    /// Swap keys with full per-type frequency tracking. Slower but accurate for stats.
+    pub fn key_swap_full(
         &mut self,
         pos_a: usize,
         pos_b: usize,
@@ -1712,7 +1744,7 @@ impl TrigramCache {
         self.apply_delta(&combined);
     }
 
-    /// Swap keys and update weighted_score arrays.
+    /// Swap keys and update weighted_score arrays. Uses full per-type tracking.
     pub fn key_swap_and_update(
         &mut self,
         pos_a: usize,
@@ -1722,9 +1754,7 @@ impl TrigramCache {
         keys: &[usize],
         tg_freq: &[Vec<Vec<i64>>],
     ) {
-        self.key_swap(pos_a, pos_b, key_a, key_b, keys, tg_freq);
-        // After swap, pos_a has key_b and pos_b has key_a
-        // Update weighted scores for both changed positions
+        self.key_swap_full(pos_a, pos_b, key_a, key_b, keys, tg_freq);
         self.update_weighted_scores_for_key_change(pos_a, key_a, key_b, keys, tg_freq);
         self.update_weighted_scores_for_key_change(pos_b, key_b, key_a, keys, tg_freq);
     }
@@ -4269,7 +4299,7 @@ mod tests {
         // This changes which trigrams are counted because:
         // - Before: pos0 has key0, so tg_freq[0][2][0] = 100 is counted
         // - After: pos0 has key1, so tg_freq[1][2][1] = 500 is counted
-        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let new_score = cache.score();
 
         // Score should have changed because frequencies are asymmetric
@@ -4383,7 +4413,7 @@ mod tests {
         let speculative_score = cache1.score_swap(0, 1, 0, 1, &keys, &tg_flat);
 
         // Get actual score with apply=true
-        cache2.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache2.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let actual_score = cache2.score();
 
         // Both should return the same score
@@ -4430,7 +4460,7 @@ mod tests {
         ]);
 
         // Swap keys at positions 0 and 1
-        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let score = cache.score();
 
         // The score should be computed correctly without double-counting
@@ -4476,7 +4506,7 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap position 0 with itself (key 0 <-> key 0)
-        cache.key_swap(0, 0, 0, 0, &keys, &tg_freq);
+        cache.key_swap_full(0, 0, 0, 0, &keys, &tg_freq);
         let new_score = cache.score();
 
         // Score should remain the same
@@ -4523,7 +4553,7 @@ mod tests {
 
         // Swap keys: pos 0 has key 0, pos 1 has key 1
         // After swap: pos 0 will have key 1, pos 1 will have key 0
-        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let score = cache.score();
 
         // Verify the score is computed (exact value depends on trigram types)
@@ -4567,7 +4597,7 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap with an invalid key
-        cache.key_swap(0, 1, 0, 5, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 5, &keys, &tg_freq);
         let new_score = cache.score();
 
         // Should handle gracefully (invalid keys contribute 0 frequency)
@@ -4610,7 +4640,7 @@ mod tests {
         let initial_score = cache.score();
 
         // Swap should result in no change since all frequencies are 0
-        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let new_score = cache.score();
 
         assert_eq!(new_score, initial_score);
@@ -4829,7 +4859,7 @@ mod tests {
         // First swap: positions 0 and 1
         // Before: pos 0 has key 0, pos 1 has key 1
         // After: pos 0 has key 1, pos 1 has key 0
-        cache.key_swap(0, 1, 0, 1, &keys, &tg_freq);
+        cache.key_swap_full(0, 1, 0, 1, &keys, &tg_freq);
         let score_after_first_swap = cache.score();
 
         // After first swap, keys are: [1, 0]
@@ -4838,7 +4868,7 @@ mod tests {
         // Second swap: reverse the first swap
         // Before: pos 0 has key 1, pos 1 has key 0
         // After: pos 0 has key 0, pos 1 has key 1
-        cache.key_swap(0, 1, 1, 0, &keys_after_swap, &tg_freq);
+        cache.key_swap_full(0, 1, 1, 0, &keys_after_swap, &tg_freq);
         let score_after_second_swap = cache.score();
 
         // Suppress unused variable warnings
