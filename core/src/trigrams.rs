@@ -24,34 +24,29 @@ pub enum TrigramType {
 /// Pre-computed trigram combination with type (for position as first element)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrigramCombo {
-    /// Second position in the trigram
     pub pos_b: usize,
-    /// Third position in the trigram
     pub pos_c: usize,
-    /// Pre-computed trigram type
     pub trigram_type: TrigramType,
+    /// Pre-computed weight for this trigram type (set by set_weights)
+    pub weight: i64,
 }
 
 /// Pre-computed trigram combination where the key position is the second element
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrigramComboMid {
-    /// First position in the trigram
     pub pos_a: usize,
-    /// Third position in the trigram
     pub pos_c: usize,
-    /// Pre-computed trigram type
     pub trigram_type: TrigramType,
+    pub weight: i64,
 }
 
 /// Pre-computed trigram combination where the key position is the third element
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrigramComboEnd {
-    /// First position in the trigram
     pub pos_a: usize,
-    /// Second position in the trigram
     pub pos_b: usize,
-    /// Pre-computed trigram type
     pub trigram_type: TrigramType,
+    pub weight: i64,
 }
 
 /// Delta representing changes to TrigramCache state
@@ -203,25 +198,25 @@ impl TrigramCache {
                         | TrigramType::Redirect
                         | TrigramType::OnehandIn
                         | TrigramType::OnehandOut => {
-                            // Store for pos_a as first position
                             trigram_combos_per_key[pos_a].push(TrigramCombo {
                                 pos_b,
                                 pos_c,
                                 trigram_type,
+                                weight: 0, // set by set_weights
                             });
 
-                            // Store for pos_b as second position
                             trigram_combos_mid[pos_b].push(TrigramComboMid {
                                 pos_a,
                                 pos_c,
                                 trigram_type,
+                                weight: 0,
                             });
 
-                            // Store for pos_c as third position
                             trigram_combos_end[pos_c].push(TrigramComboEnd {
                                 pos_a,
                                 pos_b,
                                 trigram_type,
+                                weight: 0,
                             });
                         }
                         // Skip untracked types: Sft, Sfb, Thumb, Invalid
@@ -291,7 +286,35 @@ impl TrigramCache {
         self.redirect_weight = weights.redirect;
         self.onehandin_weight = weights.onehandin;
         self.onehandout_weight = weights.onehandout;
-        // Invalidate pre-computed scores when weights change
+
+        // Update pre-computed weights on all combos
+        let get_w = |tt: TrigramType| -> i64 {
+            match tt {
+                TrigramType::Inroll => self.inroll_weight,
+                TrigramType::Outroll => self.outroll_weight,
+                TrigramType::Alternate => self.alternate_weight,
+                TrigramType::Redirect => self.redirect_weight,
+                TrigramType::OnehandIn => self.onehandin_weight,
+                TrigramType::OnehandOut => self.onehandout_weight,
+                _ => 0,
+            }
+        };
+        for combos in &mut self.trigram_combos_per_key {
+            for combo in combos.iter_mut() {
+                combo.weight = get_w(combo.trigram_type);
+            }
+        }
+        for combos in &mut self.trigram_combos_mid {
+            for combo in combos.iter_mut() {
+                combo.weight = get_w(combo.trigram_type);
+            }
+        }
+        for combos in &mut self.trigram_combos_end {
+            for combo in combos.iter_mut() {
+                combo.weight = get_w(combo.trigram_type);
+            }
+        }
+
         self.weighted_scores_initialized = false;
     }
 
@@ -1746,20 +1769,6 @@ impl TrigramCache {
 
         let mut score_delta: i64 = 0;
 
-        macro_rules! w {
-            ($tt:expr, $fd:expr) => {
-                match $tt {
-                    TrigramType::Inroll => $fd * self.inroll_weight,
-                    TrigramType::Outroll => $fd * self.outroll_weight,
-                    TrigramType::Alternate => $fd * self.alternate_weight,
-                    TrigramType::Redirect => $fd * self.redirect_weight,
-                    TrigramType::OnehandIn => $fd * self.onehandin_weight,
-                    TrigramType::OnehandOut => $fd * self.onehandout_weight,
-                    _ => 0,
-                }
-            };
-        }
-
         // Case 1: pos is first
         for combo in &self.trigram_combos_per_key[pos] {
             let pb = combo.pos_b;
@@ -1774,7 +1783,7 @@ impl TrigramCache {
             let of = if old_valid && okb < nk && okc < nk { tg[old_key * nk2 + okb * nk + okc] } else { 0 };
             let nf = if new_valid && nkb < nk && nkc < nk { tg[new_key * nk2 + nkb * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
-            score_delta += w!(combo.trigram_type, nf - of);
+            score_delta += (nf - of) * combo.weight;
         }
 
         // Case 2: pos is middle
@@ -1792,7 +1801,7 @@ impl TrigramCache {
             let of = if old_valid && okc < nk { tg[ka * nk2 + old_key * nk + okc] } else { 0 };
             let nf = if new_valid && nkc < nk { tg[ka * nk2 + new_key * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
-            score_delta += w!(combo.trigram_type, nf - of);
+            score_delta += (nf - of) * combo.weight;
         }
 
         // Case 3: pos is last
@@ -1808,7 +1817,7 @@ impl TrigramCache {
 
             let of = if old_valid { tg[ka * nk2 + kb * nk + old_key] } else { 0 };
             let nf = if new_valid { tg[ka * nk2 + kb * nk + new_key] } else { 0 };
-            score_delta += w!(combo.trigram_type, nf - of);
+            score_delta += (nf - of) * combo.weight;
         }
 
         score_delta
@@ -1830,20 +1839,6 @@ impl TrigramCache {
         let kb_valid = key_b < nk;
         let mut sd: i64 = 0;
 
-        macro_rules! w {
-            ($tt:expr, $fd:expr) => {
-                match $tt {
-                    TrigramType::Inroll => $fd * self.inroll_weight,
-                    TrigramType::Outroll => $fd * self.outroll_weight,
-                    TrigramType::Alternate => $fd * self.alternate_weight,
-                    TrigramType::Redirect => $fd * self.redirect_weight,
-                    TrigramType::OnehandIn => $fd * self.onehandin_weight,
-                    TrigramType::OnehandOut => $fd * self.onehandout_weight,
-                    _ => 0,
-                }
-            };
-        }
-
         // Case 1: pos_a is first, pos_b appears
         for combo in &self.trigram_combos_per_key[pos_a] {
             let pb = combo.pos_b;
@@ -1859,7 +1854,7 @@ impl TrigramCache {
             if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
             let of = if ka_valid { tg[key_a * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if kb_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
-            sd += w!(combo.trigram_type, nf - of);
+            sd += (nf - of) * combo.weight;
         }
 
         // Case 2: pos_b is first, pos_a appears
@@ -1877,7 +1872,7 @@ impl TrigramCache {
             if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
             let of = if kb_valid { tg[key_b * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if ka_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
-            sd += w!(combo.trigram_type, nf - of);
+            sd += (nf - of) * combo.weight;
         }
 
         // Case 3: pos_a is mid, pos_b is end (neither is first)
@@ -1889,7 +1884,7 @@ impl TrigramCache {
             if fk >= nk { continue; }
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
-            sd += w!(combo.trigram_type, nf - of);
+            sd += (nf - of) * combo.weight;
         }
 
         // Case 4: pos_b is mid, pos_a is end (neither is first)
@@ -1901,7 +1896,7 @@ impl TrigramCache {
             if fk >= nk { continue; }
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
-            sd += w!(combo.trigram_type, nf - of);
+            sd += (nf - of) * combo.weight;
         }
 
         sd
@@ -2672,6 +2667,7 @@ mod tests {
             pos_b: 1,
             pos_c: 2,
             trigram_type: TrigramType::Inroll,
+            weight: 0,
         };
         assert_eq!(combo.pos_b, 1);
         assert_eq!(combo.pos_c, 2);
