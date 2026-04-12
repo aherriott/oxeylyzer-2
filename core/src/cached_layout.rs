@@ -485,11 +485,12 @@ impl CachedLayout {
         let key_b = self.keys[pos_b];
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
 
         let sfb = self.sfb.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
         let stretch = self.stretch.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
         let scissors = self.scissors.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        let trigram = self.trigram.score_swap(pos_a, pos_b, key_a, key_b);
+        let trigram = self.trigram.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
 
         sfb + stretch + scissors + trigram
     }

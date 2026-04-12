@@ -1614,7 +1614,7 @@ impl TrigramCache {
     }
 
     /// Speculative score for a key swap. No mutation.
-    /// Uses weighted_score flat arrays + swap_score_both correction.
+    /// Uses compute_replace_delta_score_only + swap_both_delta_score_only.
     #[inline]
     pub fn score_swap(
         &self,
@@ -1622,33 +1622,17 @@ impl TrigramCache {
         pos_b: usize,
         key_a: usize,
         key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
     ) -> i64 {
         if pos_a == pos_b {
             return self.score();
         }
 
-        let nk = self.num_keys;
-
-        // Delta from weighted_score arrays (single-position changes)
-        let delta_a = self.compute_replace_delta_fast(pos_a, key_a, key_b);
-        let delta_b = self.compute_replace_delta_fast(pos_b, key_b, key_a);
-
-        // Correction for trigrams involving BOTH positions
-        let (p_lo, p_hi, k_lo, k_hi) = if pos_a < pos_b {
-            (pos_a, pos_b, key_a, key_b)
-        } else {
-            (pos_b, pos_a, key_b, key_a)
-        };
-        let pair_idx = self.pair_index(p_lo, p_hi);
-        let pair_base = pair_idx * nk * nk;
-
-        // swap_score_both stores the weighted score for trigrams involving both positions
-        // with specific keys. We need: score_after - score_before for the "both" trigrams.
-        let old_both = self.swap_score_both[pair_base + k_lo * nk + k_hi];
-        let new_both = self.swap_score_both[pair_base + k_hi * nk + k_lo];
-        let both_delta = new_both - old_both;
-
-        self.score() + delta_a + delta_b + both_delta
+        let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
+        let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
+        let score_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+        self.score() + score_a + score_b + score_both
     }
 
     /// Compute the correction for trigrams involving BOTH swap positions when using fast path.
@@ -4012,7 +3996,7 @@ mod tests {
         let initial_onehandout = cache.onehandout_freq;
 
         // Swap keys with apply=false
-        let _speculative_score = cache.score_swap(0, 1, 0, 1);
+        let _speculative_score = cache.score_swap(0, 1, 0, 1, &keys, &tg_freq);
 
         // State should be unchanged
         assert_eq!(cache.score(), initial_score);
@@ -4064,7 +4048,7 @@ mod tests {
         ]);
 
         // Get speculative score with apply=false
-        let speculative_score = cache1.score_swap(0, 1, 0, 1);
+        let speculative_score = cache1.score_swap(0, 1, 0, 1, &keys, &tg_freq);
 
         // Get actual score with apply=true
         cache2.key_swap(0, 1, 0, 1, &keys, &tg_freq);

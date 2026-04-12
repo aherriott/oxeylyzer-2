@@ -60,7 +60,7 @@ impl Analyzer {
 
             if ap > f64::random(&mut rng) {
                 current_score = new_score;
-                self.apply_neighbor(diff);
+                self.apply_neighbor_and_update(diff);
                 // If we just applied the best neighbor, capture the layout
                 if best_neighbor == Some(diff) {
                     best = self.layout();
