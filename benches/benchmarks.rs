@@ -274,8 +274,8 @@ mod bench {
             for _ in 0..N {
                 // Replace key with EMPTY and back
                 let key = cached.get_key(pos);
-                cached.replace_key(pos, key, EMPTY_KEY, true);
-                cached.replace_key(pos, EMPTY_KEY, key, true);
+                cached.replace_key(pos, key, EMPTY_KEY);
+                cached.replace_key(pos, EMPTY_KEY, key);
             }
         })
     }
@@ -298,8 +298,8 @@ mod bench {
         bencher.bench(|| {
             for _ in 0..N {
                 // Swap and swap back
-                cached.swap_keys(pos_a, pos_b, true);
-                cached.swap_keys(pos_a, pos_b, true);
+                cached.swap_keys(pos_a, pos_b);
+                cached.swap_keys(pos_a, pos_b);
             }
         })
     }
@@ -359,7 +359,7 @@ mod bench {
         bencher.bench(|| {
             for _ in 0..N {
                 // Speculative scoring: apply=false, no state mutation
-                black_box(cached.swap_keys(pos_a, pos_b, false));
+                black_box(cached.score_neighbor(Neighbor::KeySwap(PosPair(pos_a, pos_b))));
             }
         })
     }
@@ -421,7 +421,7 @@ mod bench {
         bencher.bench(|| {
             for _ in 0..N {
                 // Full speculative scoring path: key_swap + add_rule
-                black_box(cached.swap_keys(pos_a, pos_b, false));
+                black_box(cached.score_neighbor(Neighbor::KeySwap(PosPair(pos_a, pos_b))));
                 black_box(cached.apply_magic_rule(magic_key, leader_a, output_c, false));
             }
         })

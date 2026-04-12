@@ -136,6 +136,12 @@ pub struct TrigramCache {
     /// Number of position pairs (upper triangle)
     num_pairs: usize,
 
+    /// Pre-computed total swap deltas for O(1) speculative key_swap scoring.
+    /// swap_delta[pair_idx * num_keys * num_keys + key_a * num_keys + key_b]
+    /// = total weighted score delta when swapping key_a at pos_lo with key_b at pos_hi.
+    /// Computed from weighted_score arrays + swap_score_both correction.
+    swap_delta: Vec<i64>,
+
     /// Whether the weighted scores have been initialized
     weighted_scores_initialized: bool,
 
@@ -261,6 +267,7 @@ impl TrigramCache {
             // Pre-computed swap scores for trigrams involving both positions
             swap_score_both: vec![0; num_pairs * num_keys * num_keys],
             num_pairs,
+            swap_delta: vec![0; num_pairs * num_keys * num_keys],
             weighted_scores_initialized: false,
             // Initialize active rules to empty (no magic rules active initially)
             active_rules: HashMap::default(),
@@ -673,6 +680,92 @@ impl TrigramCache {
         self.init_swap_scores(tg_freq);
 
         self.weighted_scores_initialized = true;
+    }
+
+    /// Compute total swap deltas from pre-computed weighted_score arrays.
+    /// This is O(pairs × keys²) with O(1) per entry — just arithmetic on flat arrays.
+    /// Much faster than the old init_swap_deltas which called compute_replace_delta_score_only.
+    fn init_swap_deltas_fast(&mut self, keys: &[usize]) {
+        let nk = self.num_keys;
+        let np = self.num_positions;
+
+        for pos_a in 0..np {
+            let key_a = keys[pos_a];
+            for pos_b in (pos_a + 1)..np {
+                let key_b = keys[pos_b];
+                let pair_idx = self.pair_index(pos_a, pos_b);
+                let pair_base = pair_idx * nk * nk;
+
+                for ka in 0..nk {
+                    for kb in 0..nk {
+                        if ka == kb {
+                            self.swap_delta[pair_base + ka * nk + kb] = 0;
+                            continue;
+                        }
+
+                        // Delta from weighted_score arrays:
+                        // Replacing key_a with kb at pos_a (assuming pos_b unchanged):
+                        let ws_a = (self.weighted_score_first[pos_a * nk + kb]
+                            + self.weighted_score_mid[pos_a * nk + kb]
+                            + self.weighted_score_end[pos_a * nk + kb])
+                            - (self.weighted_score_first[pos_a * nk + ka]
+                            + self.weighted_score_mid[pos_a * nk + ka]
+                            + self.weighted_score_end[pos_a * nk + ka]);
+
+                        // Replacing key_b with ka at pos_b (assuming pos_a unchanged):
+                        let ws_b = (self.weighted_score_first[pos_b * nk + ka]
+                            + self.weighted_score_mid[pos_b * nk + ka]
+                            + self.weighted_score_end[pos_b * nk + ka])
+                            - (self.weighted_score_first[pos_b * nk + kb]
+                            + self.weighted_score_mid[pos_b * nk + kb]
+                            + self.weighted_score_end[pos_b * nk + kb]);
+
+                        // Correction: the weighted_score arrays assumed the OTHER position
+                        // keeps its current key. But in a swap, both change. The swap_score_both
+                        // array stores the score for trigrams involving BOTH positions.
+                        // We need to subtract what the weighted_scores assumed for the cross-pair
+                        // and add the actual cross-pair contribution.
+                        //
+                        // The weighted_score for pos_a with key kb includes trigrams involving pos_b
+                        // assuming pos_b has key_b (current). Similarly for pos_b.
+                        // After swap, pos_a has kb and pos_b has ka.
+                        //
+                        // swap_score_both[pair_base + x * nk + y] = score when pos_a has x, pos_b has y
+                        // Current: swap_score_both[pair_base + key_a * nk + key_b]
+                        // After swap: swap_score_both[pair_base + kb * nk + ka]
+                        //
+                        // But the weighted_score delta for pos_a already includes the cross-pair
+                        // contribution assuming pos_b has key_b:
+                        //   ws_a includes: score_both(kb, key_b) - score_both(ka, key_b)
+                        // And ws_b includes the cross-pair assuming pos_a has key_a:
+                        //   ws_b includes: score_both(key_a, ka) - score_both(key_a, kb)
+                        //
+                        // The actual cross-pair change is:
+                        //   score_both(kb, ka) - score_both(ka, kb)
+                        //
+                        // So correction = actual - assumed_a - assumed_b
+                        //   = (score_both(kb, ka) - score_both(ka, kb))
+                        //     - (score_both(kb, key_b) - score_both(ka, key_b))
+                        //     - (score_both(key_a, ka) - score_both(key_a, kb))
+
+                        let sb = |x: usize, y: usize| -> i64 {
+                            if x < nk && y < nk {
+                                self.swap_score_both[pair_base + x * nk + y]
+                            } else {
+                                0
+                            }
+                        };
+
+                        let actual = sb(kb, ka) - sb(ka, kb);
+                        let assumed_a = sb(kb, key_b) - sb(ka, key_b);
+                        let assumed_b = sb(key_a, ka) - sb(key_a, kb);
+                        let correction = actual - assumed_a - assumed_b;
+
+                        self.swap_delta[pair_base + ka * nk + kb] = ws_a + ws_b + correction;
+                    }
+                }
+            }
+        }
     }
 
     /// Initialize pre-computed swap scores for trigrams involving both positions.
@@ -1614,7 +1707,7 @@ impl TrigramCache {
     }
 
     /// Speculative score for a key swap. No mutation.
-    /// Uses compute_replace_delta_score_only + swap_both_delta_score_only.
+    /// Iterates over trigram combos for both positions.
     #[inline]
     pub fn score_swap(
         &self,
@@ -1633,6 +1726,68 @@ impl TrigramCache {
         let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
         let score_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
         self.score() + score_a + score_b + score_both
+    }
+
+    /// Compute the correction needed for trigrams involving both swap positions.
+    /// The weighted_score arrays include these trigrams assuming the other position
+    /// keeps its current key. We need to subtract that assumption and add the actual.
+    fn compute_swap_both_correction(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) -> i64 {
+        // The weighted_score delta for pos_a (key_a -> key_b) includes cross-pair trigrams
+        // assuming pos_b has keys[pos_b]. Similarly for pos_b.
+        // The actual cross-pair delta (both positions change) is computed by
+        // compute_swap_both_delta_score_only.
+        //
+        // We need: actual_both - assumed_both_in_a - assumed_both_in_b
+        //
+        // But it's simpler to compute the full swap delta for the "both" trigrams directly
+        // and subtract what the weighted_score deltas already included.
+        //
+        // Actually, the cleanest approach: compute the "both" delta directly,
+        // then subtract the "both" contribution that's already in delta_a and delta_b.
+        //
+        // delta_a includes: for each combo of pos_a where pos_b appears,
+        //   (tg_freq[key_b][keys[pos_b]][...] - tg_freq[key_a][keys[pos_b]][...]) * weight
+        // delta_b includes: for each combo of pos_b where pos_a appears,
+        //   (tg_freq[...][key_a][...] - tg_freq[...][key_b][...]) * weight (with keys[pos_a])
+        //
+        // The actual "both" delta uses the swapped keys at both positions.
+        // compute_swap_both_delta_score_only computes exactly this.
+        //
+        // So: correction = compute_swap_both_delta_score_only(...)
+        //     - (contribution of "both" trigrams in delta_a)
+        //     - (contribution of "both" trigrams in delta_b)
+        //
+        // The contribution of "both" trigrams in delta_a is:
+        //   compute_replace_delta_fast_for_both_only(pos_a, key_a, key_b, pos_b)
+        // which we don't have a method for.
+        //
+        // Simpler: just compute the full swap delta using the slow path for the "both" part,
+        // and use compute_replace_delta_score_only with skip_pos for the single parts.
+        // But that defeats the purpose of the fast path.
+        //
+        // Simplest correct approach: compute the FULL swap delta using the slow path
+        // (compute_replace_delta_score_only × 2 + compute_swap_both_delta_score_only)
+        // and subtract the fast-path single-position deltas to get the correction.
+
+        let slow_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
+        let slow_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
+        let slow_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+
+        let fast_a = self.compute_replace_delta_fast(pos_a, key_a, key_b);
+        let fast_b = self.compute_replace_delta_fast(pos_b, key_b, key_a);
+
+        // The slow path gives the correct total: slow_a + slow_b + slow_both
+        // The fast path gives: fast_a + fast_b (which includes cross-pair with wrong assumption)
+        // Correction = correct_total - fast_total
+        (slow_a + slow_b + slow_both) - (fast_a + fast_b)
     }
 
     /// Compute the correction for trigrams involving BOTH swap positions when using fast path.

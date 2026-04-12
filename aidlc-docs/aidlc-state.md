@@ -17,9 +17,9 @@
 - [x] Units Generation (3 units defined)
 
 ### CONSTRUCTION PHASE
-- [ ] Unit 1: Sub-Cache API Refactor + Flat Array Scoring
-- [ ] Unit 2: CachedLayout + Analyzer API Refactor
-- [ ] Unit 3: Optimization Loop Updates + Benchmarks
+- [x] Unit 1: Sub-Cache API Refactor + Flat Array Scoring
+- [x] Unit 2: CachedLayout + Analyzer API Refactor
+- [x] Unit 3: Optimization Loop Updates + Benchmarks
 - [ ] Build and Test
 
 ## Extension Configuration
