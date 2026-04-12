@@ -1707,7 +1707,7 @@ impl TrigramCache {
     }
 
     /// Speculative score for a key swap. No mutation.
-    /// Iterates over trigram combos for both positions.
+    /// Uses flat trigram array for cache-friendly access.
     #[inline]
     pub fn score_swap(
         &self,
@@ -1716,16 +1716,195 @@ impl TrigramCache {
         key_a: usize,
         key_b: usize,
         keys: &[usize],
-        tg_freq: &[Vec<Vec<i64>>],
+        tg_freq_flat: &[i64],
     ) -> i64 {
         if pos_a == pos_b {
             return self.score();
         }
 
-        let score_a = self.compute_replace_delta_score_only(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq);
-        let score_b = self.compute_replace_delta_score_only(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq);
-        let score_both = self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq);
+        let score_a = self.compute_replace_delta_flat(pos_a, key_a, key_b, keys, Some(pos_b), tg_freq_flat);
+        let score_b = self.compute_replace_delta_flat(pos_b, key_b, key_a, keys, Some(pos_a), tg_freq_flat);
+        let score_both = self.compute_swap_both_delta_flat(pos_a, pos_b, key_a, key_b, keys, tg_freq_flat);
         self.score() + score_a + score_b + score_both
+    }
+
+    /// Fast replace delta using flat trigram array. Single contiguous memory access per lookup.
+    #[inline]
+    fn compute_replace_delta_flat(
+        &self,
+        pos: usize,
+        old_key: usize,
+        new_key: usize,
+        keys: &[usize],
+        skip_pos: Option<usize>,
+        tg: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let old_valid = old_key < nk;
+        let new_valid = new_key < nk;
+
+        let mut score_delta: i64 = 0;
+
+        macro_rules! w {
+            ($tt:expr, $fd:expr) => {
+                match $tt {
+                    TrigramType::Inroll => $fd * self.inroll_weight,
+                    TrigramType::Outroll => $fd * self.outroll_weight,
+                    TrigramType::Alternate => $fd * self.alternate_weight,
+                    TrigramType::Redirect => $fd * self.redirect_weight,
+                    TrigramType::OnehandIn => $fd * self.onehandin_weight,
+                    TrigramType::OnehandOut => $fd * self.onehandout_weight,
+                    _ => 0,
+                }
+            };
+        }
+
+        // Case 1: pos is first
+        for combo in &self.trigram_combos_per_key[pos] {
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
+            if let Some(skip) = skip_pos { if pb == skip || pc == skip { continue; } }
+
+            let okb = if pb == pos { old_key } else { keys[pb] };
+            let okc = if pc == pos { old_key } else { keys[pc] };
+            let nkb = if pb == pos { new_key } else { keys[pb] };
+            let nkc = if pc == pos { new_key } else { keys[pc] };
+
+            let of = if old_valid && okb < nk && okc < nk { tg[old_key * nk2 + okb * nk + okc] } else { 0 };
+            let nf = if new_valid && nkb < nk && nkc < nk { tg[new_key * nk2 + nkb * nk + nkc] } else { 0 };
+            if of == 0 && nf == 0 { continue; }
+            score_delta += w!(combo.trigram_type, nf - of);
+        }
+
+        // Case 2: pos is middle
+        for combo in &self.trigram_combos_mid[pos] {
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
+            if pa == pos { continue; }
+            if let Some(skip) = skip_pos { if pa == skip || pc == skip { continue; } }
+
+            let ka = keys[pa];
+            if ka >= nk { continue; }
+            let okc = if pc == pos { old_key } else { keys[pc] };
+            let nkc = if pc == pos { new_key } else { keys[pc] };
+
+            let of = if old_valid && okc < nk { tg[ka * nk2 + old_key * nk + okc] } else { 0 };
+            let nf = if new_valid && nkc < nk { tg[ka * nk2 + new_key * nk + nkc] } else { 0 };
+            if of == 0 && nf == 0 { continue; }
+            score_delta += w!(combo.trigram_type, nf - of);
+        }
+
+        // Case 3: pos is last
+        for combo in &self.trigram_combos_end[pos] {
+            let pa = combo.pos_a;
+            let pb = combo.pos_b;
+            if pa == pos || pb == pos { continue; }
+            if let Some(skip) = skip_pos { if pa == skip || pb == skip { continue; } }
+
+            let ka = keys[pa];
+            let kb = keys[pb];
+            if ka >= nk || kb >= nk { continue; }
+
+            let of = if old_valid { tg[ka * nk2 + kb * nk + old_key] } else { 0 };
+            let nf = if new_valid { tg[ka * nk2 + kb * nk + new_key] } else { 0 };
+            score_delta += w!(combo.trigram_type, nf - of);
+        }
+
+        score_delta
+    }
+
+    /// Fast swap-both delta using flat trigram array.
+    fn compute_swap_both_delta_flat(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let ka_valid = key_a < nk;
+        let kb_valid = key_b < nk;
+        let mut sd: i64 = 0;
+
+        macro_rules! w {
+            ($tt:expr, $fd:expr) => {
+                match $tt {
+                    TrigramType::Inroll => $fd * self.inroll_weight,
+                    TrigramType::Outroll => $fd * self.outroll_weight,
+                    TrigramType::Alternate => $fd * self.alternate_weight,
+                    TrigramType::Redirect => $fd * self.redirect_weight,
+                    TrigramType::OnehandIn => $fd * self.onehandin_weight,
+                    TrigramType::OnehandOut => $fd * self.onehandout_weight,
+                    _ => 0,
+                }
+            };
+        }
+
+        // Case 1: pos_a is first, pos_b appears
+        for combo in &self.trigram_combos_per_key[pos_a] {
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
+            if pb != pos_b && pc != pos_b { continue; }
+
+            let ok2 = keys[pb];
+            let ok3 = keys[pc];
+            let nk1 = key_b;
+            let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
+            let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
+
+            if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
+            let of = if ka_valid { tg[key_a * nk2 + ok2 * nk + ok3] } else { 0 };
+            let nf = if kb_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
+            sd += w!(combo.trigram_type, nf - of);
+        }
+
+        // Case 2: pos_b is first, pos_a appears
+        for combo in &self.trigram_combos_per_key[pos_b] {
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
+            if pb != pos_a && pc != pos_a { continue; }
+
+            let ok2 = keys[pb];
+            let ok3 = keys[pc];
+            let nk1 = key_a;
+            let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
+            let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
+
+            if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
+            let of = if kb_valid { tg[key_b * nk2 + ok2 * nk + ok3] } else { 0 };
+            let nf = if ka_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
+            sd += w!(combo.trigram_type, nf - of);
+        }
+
+        // Case 3: pos_a is mid, pos_b is end (neither is first)
+        for combo in &self.trigram_combos_mid[pos_a] {
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
+            if pa == pos_a || pc != pos_b || pa == pos_b { continue; }
+            let fk = keys[pa];
+            if fk >= nk { continue; }
+            let of = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
+            let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
+            sd += w!(combo.trigram_type, nf - of);
+        }
+
+        // Case 4: pos_b is mid, pos_a is end (neither is first)
+        for combo in &self.trigram_combos_mid[pos_b] {
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
+            if pa == pos_b || pc != pos_a || pa == pos_a { continue; }
+            let fk = keys[pa];
+            if fk >= nk { continue; }
+            let of = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
+            let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
+            sd += w!(combo.trigram_type, nf - of);
+        }
+
+        sd
     }
 
     /// Compute the correction needed for trigrams involving both swap positions.
@@ -4151,7 +4330,8 @@ mod tests {
         let initial_onehandout = cache.onehandout_freq;
 
         // Swap keys with apply=false
-        let _speculative_score = cache.score_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let tg_flat: Vec<i64> = tg_freq.iter().flat_map(|p| p.iter().flat_map(|r| r.iter().copied())).collect();
+        let _speculative_score = cache.score_swap(0, 1, 0, 1, &keys, &tg_flat);
 
         // State should be unchanged
         assert_eq!(cache.score(), initial_score);
@@ -4203,7 +4383,8 @@ mod tests {
         ]);
 
         // Get speculative score with apply=false
-        let speculative_score = cache1.score_swap(0, 1, 0, 1, &keys, &tg_freq);
+        let tg_flat: Vec<i64> = tg_freq.iter().flat_map(|p| p.iter().flat_map(|r| r.iter().copied())).collect();
+        let speculative_score = cache1.score_swap(0, 1, 0, 1, &keys, &tg_flat);
 
         // Get actual score with apply=true
         cache2.key_swap(0, 1, 0, 1, &keys, &tg_freq);

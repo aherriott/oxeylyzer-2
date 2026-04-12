@@ -57,25 +57,12 @@ pub const EMPTY_KEY: CacheKey = CacheKey::MAX;
 /// ~5400 trigram combinations. The constant-frequency architecture targets ~1µs per speculative score.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MagicCache {
-    /// Flat bigram frequencies indexed as `bg_freq[a * num_keys + b]`.
-    ///
-    /// **Constant after initialization**: Set once via [`init_from_data`](Self::init_from_data)
-    /// and never modified. This enables pre-computed O(1) lookup tables for speculative scoring.
     bg_freq: Vec<i64>,
-
-    /// Flat skipgram frequencies indexed as `sg_freq[a * num_keys + b]`.
-    ///
-    /// **Constant after initialization**: Set once via [`init_from_data`](Self::init_from_data)
-    /// and never modified. This enables pre-computed O(1) lookup tables for speculative scoring.
     sg_freq: Vec<i64>,
-
-    /// Trigram frequencies indexed as `tg_freq[a][b][c]`.
-    ///
-    /// **Constant after initialization**: Set once via [`init_from_data`](Self::init_from_data)
-    /// and never modified. This enables pre-computed O(1) lookup tables for speculative scoring.
+    /// Trigram frequencies indexed as `tg_freq[a][b][c]` (kept for compatibility).
     tg_freq: Vec<Vec<Vec<i64>>>,
-
-    /// Number of keys for flat array indexing calculations.
+    /// Flat trigram frequencies indexed as `tg_freq_flat[a * nk * nk + b * nk + c]`.
+    tg_freq_flat: Vec<i64>,
     num_keys: usize,
 }
 
@@ -85,6 +72,7 @@ impl MagicCache {
             bg_freq: vec![0; num_keys * num_keys],
             sg_freq: vec![0; num_keys * num_keys],
             tg_freq: vec![vec![vec![0; num_keys]; num_keys]; num_keys],
+            tg_freq_flat: vec![0; num_keys * num_keys * num_keys],
             num_keys,
         }
     }
@@ -121,6 +109,15 @@ impl MagicCache {
             }
         }
         self.tg_freq = trigrams.to_vec();
+        // Also populate flat trigram array
+        let nk2 = num_keys * num_keys;
+        for (a, plane) in trigrams.iter().enumerate() {
+            for (b, row) in plane.iter().enumerate() {
+                for (c, &freq) in row.iter().enumerate() {
+                    self.tg_freq_flat[a * nk2 + b * num_keys + c] = freq;
+                }
+            }
+        }
     }
 
     #[inline]
@@ -136,6 +133,10 @@ impl MagicCache {
     #[inline]
     pub fn tg_freq(&self) -> &[Vec<Vec<i64>>] {
         &self.tg_freq
+    }
+
+    pub fn tg_freq_flat(&self) -> &[i64] {
+        &self.tg_freq_flat
     }
 
     #[inline]
@@ -485,12 +486,12 @@ impl CachedLayout {
         let key_b = self.keys[pos_b];
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
+        let tg_freq_flat = self.magic.tg_freq_flat();
 
         let sfb = self.sfb.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
         let stretch = self.stretch.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
         let scissors = self.scissors.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        let trigram = self.trigram.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
+        let trigram = self.trigram.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq_flat);
 
         sfb + stretch + scissors + trigram
     }
