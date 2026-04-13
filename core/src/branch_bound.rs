@@ -240,22 +240,12 @@ impl BranchBound {
         let mut cache = self.create_empty_cache();
         let mut top_layouts = TopKHeap::new(top_k);
         let mut stats = BranchBoundStats::default();
-
-        // Available positions (all positions initially)
-        let available: Vec<usize> = (0..self.num_positions).collect();
-
-        // Current assignment: (char, position) pairs
+        let mut available: Vec<usize> = (0..self.num_positions).collect();
         let mut assignment: Vec<(char, usize)> = Vec::with_capacity(self.num_positions);
 
-        // Start recursive search
         self.search_recursive(
-            &mut cache,
-            0, // depth (which character we're placing)
-            &available,
-            &mut assignment,
-            bound,
-            &mut top_layouts,
-            &mut stats,
+            &mut cache, 0, &mut available, &mut assignment,
+            bound, &mut top_layouts, &mut stats,
         );
 
         (top_layouts.into_sorted_vec(), stats)
@@ -265,23 +255,15 @@ impl BranchBound {
         &self,
         cache: &mut CachedLayout,
         depth: usize,
-        available_positions: &[usize],
+        available_positions: &mut Vec<usize>,
         assignment: &mut Vec<(char, usize)>,
         bound: i64,
         top_layouts: &mut TopKHeap,
         stats: &mut BranchBoundStats,
     ) {
-        use crate::cached_layout::EMPTY_KEY;
-
         self.search_recursive_limited(
-            cache,
-            depth,
-            available_positions,
-            assignment,
-            bound,
-            top_layouts,
-            stats,
-            usize::MAX, // no depth limit
+            cache, depth, available_positions, assignment,
+            bound, top_layouts, stats, usize::MAX,
         );
     }
 
@@ -289,7 +271,7 @@ impl BranchBound {
         &self,
         cache: &mut CachedLayout,
         depth: usize,
-        available_positions: &[usize],
+        available_positions: &mut Vec<usize>,
         assignment: &mut Vec<(char, usize)>,
         bound: i64,
         top_layouts: &mut TopKHeap,
@@ -305,7 +287,6 @@ impl BranchBound {
 
         // Pruning: if current partial score is already worse than bound, prune
         if current_score < bound {
-            // Count leaf nodes (complete layouts) we're skipping
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);
@@ -331,19 +312,18 @@ impl BranchBound {
 
         let key = self.keys_by_freq[depth];
         let c = self.chars_by_freq[depth];
+        let num_available = available_positions.len();
 
         // Try placing this character at each available position
-        for (i, &pos) in available_positions.iter().enumerate() {
+        for i in 0..num_available {
+            let pos = available_positions[i];
+
             // Place the key
             cache.replace_key(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
 
-            // Create new available positions (excluding current)
-            let new_available: Vec<usize> = available_positions.iter()
-                .enumerate()
-                .filter(|&(j, _)| j != i)
-                .map(|(_, &p)| p)
-                .collect();
+            // Remove position from available by swap-removing (O(1), no allocation)
+            available_positions.swap_remove(i);
 
             // Update bound from top_layouts if we have enough
             let effective_bound = if top_layouts.len() >= top_layouts.capacity {
@@ -356,7 +336,7 @@ impl BranchBound {
             self.search_recursive_limited(
                 cache,
                 depth + 1,
-                &new_available,
+                available_positions,
                 assignment,
                 effective_bound,
                 top_layouts,
@@ -364,7 +344,16 @@ impl BranchBound {
                 max_depth,
             );
 
-            // Backtrack
+            // Backtrack: restore the position
+            // swap_remove moved the last element to index i, so we need to
+            // push pos back and swap it to position i to restore order
+            available_positions.push(pos);
+            let last = available_positions.len() - 1;
+            available_positions.swap(i, last);
+            // Now the element that was at `last` before swap_remove is back at `last`,
+            // and `pos` is back at `i`. But the order may differ from original.
+            // That's fine — B&B explores all orderings anyway.
+
             assignment.pop();
             cache.replace_key(pos, key, EMPTY_KEY);
         }
@@ -399,25 +388,16 @@ impl BranchBound {
         let mut top_layouts = TopKHeap::new(top_k);
         let mut stats = BranchBoundStats::default();
 
-        let available: Vec<usize> = (0..self.num_positions).collect();
+        let mut available: Vec<usize> = (0..self.num_positions).collect();
         let mut assignment: Vec<(char, usize)> = Vec::with_capacity(max_depth);
 
-        // Estimate total leaf nodes (complete layouts): P(n, depth) = n!/(n-depth)!
         let estimated_total_layouts = Self::estimate_leaf_nodes_f64(self.num_positions, max_depth);
         let estimated_total_nodes = Self::estimate_total_nodes_f64(self.num_positions, max_depth);
 
         self.search_recursive_with_progress(
-            &mut cache,
-            0,
-            &available,
-            &mut assignment,
-            bound,
-            &mut top_layouts,
-            &mut stats,
-            max_depth,
-            estimated_total_layouts,
-            estimated_total_nodes,
-            &mut progress_callback,
+            &mut cache, 0, &mut available, &mut assignment,
+            bound, &mut top_layouts, &mut stats, max_depth,
+            estimated_total_layouts, estimated_total_nodes, &mut progress_callback,
         );
 
         (top_layouts.into_sorted_vec(), stats)
@@ -466,7 +446,7 @@ impl BranchBound {
         &self,
         cache: &mut CachedLayout,
         depth: usize,
-        available_positions: &[usize],
+        available_positions: &mut Vec<usize>,
         assignment: &mut Vec<(char, usize)>,
         bound: i64,
         top_layouts: &mut TopKHeap,
@@ -486,9 +466,7 @@ impl BranchBound {
 
         let current_score = cache.score();
 
-        // Pruning: if current partial score is already worse than bound, prune
         if current_score < bound {
-            // Count leaf nodes (complete layouts) we're skipping
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);
@@ -498,7 +476,6 @@ impl BranchBound {
             stats.prune_count += 1;
             stats.weighted_prune_depth_sum += depth as f64 * leaves_pruned;
 
-            // Report progress after pruning
             let progress = BranchBoundProgress {
                 nodes_visited: stats.nodes_visited,
                 nodes_pruned: stats.nodes_pruned,
@@ -518,7 +495,6 @@ impl BranchBound {
             return;
         }
 
-        // Base case: all characters placed OR depth limit reached
         if depth >= self.keys_by_freq.len() || available_positions.is_empty() || depth >= max_depth {
             stats.layouts_evaluated += 1.0;
             stats.solutions_found += 1.0;
@@ -532,43 +508,31 @@ impl BranchBound {
 
         let key = self.keys_by_freq[depth];
         let c = self.chars_by_freq[depth];
+        let num_available = available_positions.len();
 
-        // Try placing this character at each available position
-        for (i, &pos) in available_positions.iter().enumerate() {
-            // Place the key
+        for i in 0..num_available {
+            let pos = available_positions[i];
+
             cache.replace_key(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
+            available_positions.swap_remove(i);
 
-            // Create new available positions (excluding current)
-            let new_available: Vec<usize> = available_positions.iter()
-                .enumerate()
-                .filter(|&(j, _)| j != i)
-                .map(|(_, &p)| p)
-                .collect();
-
-            // Update bound from top_layouts if we have enough
             let effective_bound = if top_layouts.len() >= top_layouts.capacity {
                 top_layouts.worst_score().unwrap_or(bound).max(bound)
             } else {
                 bound
             };
 
-            // Recurse
             self.search_recursive_with_progress(
-                cache,
-                depth + 1,
-                &new_available,
-                assignment,
-                effective_bound,
-                top_layouts,
-                stats,
-                max_depth,
-                estimated_total_layouts,
-                estimated_total_nodes,
-                progress_callback,
+                cache, depth + 1, available_positions, assignment,
+                effective_bound, top_layouts, stats, max_depth,
+                estimated_total_layouts, estimated_total_nodes, progress_callback,
             );
 
-            // Backtrack
+            available_positions.push(pos);
+            let last = available_positions.len() - 1;
+            available_positions.swap(i, last);
+
             assignment.pop();
             cache.replace_key(pos, key, EMPTY_KEY);
         }
