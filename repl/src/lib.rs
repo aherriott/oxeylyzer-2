@@ -536,21 +536,23 @@ impl Repl {
         Ok(())
     }
 
-    fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>) -> Result<()> {
+    fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>) -> Result<()> {
         use oxeylyzer_core::mcts::MctsSearch;
 
         let layout = self.layout(name)?.clone();
-        let iterations = iterations.unwrap_or(10_000) as u64;
+        let iterations = iterations.unwrap_or(1_000) as u64;
         let explore = explore.unwrap_or(1.41);
+        let sa_iters = sa_iters.unwrap_or(10_000);
 
-        println!("MCTS: {} positions, {} rollouts, exploration={:.2}", layout.keyboard.len(), iterations, explore);
+        println!("MCTS: {} positions, {} rollouts, exploration={:.2}, SA={} iters/rollout",
+            layout.keyboard.len(), iterations, explore, sa_iters);
 
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
         let mut search = MctsSearch::new(layout, self.a.data().clone(), self.a.weights().clone(), 10);
 
-        search.search(iterations, explore, |iter, total, best, avg| {
+        search.search(iterations, explore, sa_iters, |iter, total, best, avg| {
             if last_print.elapsed().as_millis() > 500 {
                 last_print = std::time::Instant::now();
                 let elapsed = start.elapsed().as_secs_f64();
@@ -611,7 +613,7 @@ impl Repl {
             OxeylyzerCmd::Bb2(b) => self.branch_bound_position_first(&b.name, b.top)?,
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
-            OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore)?,
+            OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

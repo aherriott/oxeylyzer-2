@@ -103,13 +103,13 @@ impl MctsSearch {
         }
     }
 
-    /// Run MCTS for a given number of iterations.
-    /// Can be called multiple times to continue searching.
+    /// Run MCTS for a given number of iterations with SA rollouts.
     pub fn search(
         &mut self,
         iterations: u64,
         exploration_constant: f64,
-        mut progress: impl FnMut(u64, u64, i64, f64), // (iteration, total_rollouts, best_score, avg_score)
+        sa_iterations: usize,
+        mut progress: impl FnMut(u64, u64, i64, f64),
     ) {
         let mut cache = CachedLayout::new(&self.layout, self.data.clone(), &self.weights);
 
@@ -187,12 +187,12 @@ impl MctsSearch {
                 }
             }
 
-            // ROLLOUT: randomly complete the layout from current state
+            // ROLLOUT: random placement + SA polish directly on cache
             let mut rollout_positions: Vec<usize> = Vec::new();
             let mut occupied = vec![false; self.num_positions];
             for &p in &path { occupied[p] = true; }
 
-            // Build list of available positions
+            // Randomly place remaining keys
             let mut avail: Vec<usize> = (0..self.num_positions).filter(|&p| !occupied[p]).collect();
 
             for d in depth..num_keys {
@@ -200,38 +200,38 @@ impl MctsSearch {
                 let nk = cache.trigram_num_keys();
                 if key >= nk || avail.is_empty() { continue; }
 
-                // Semi-random: score all positions, pick randomly from top 3
-                if avail.len() <= 3 {
-                    let idx = rng.generate_range(0..avail.len());
-                    let pos = avail.swap_remove(idx);
-                    cache.replace_key_fast(pos, EMPTY_KEY, key);
-                    rollout_positions.push(pos);
-                } else {
-                    // Score each available position
-                    let mut scored: Vec<(i64, usize)> = avail.iter().map(|&pos| {
-                        cache.replace_key_fast(pos, EMPTY_KEY, key);
-                        let s = cache.score();
-                        cache.replace_key_fast(pos, key, EMPTY_KEY);
-                        (s, pos)
-                    }).collect();
-                    scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+                let idx = rng.generate_range(0..avail.len());
+                let pos = avail.swap_remove(idx);
+                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                rollout_positions.push(pos);
+            }
 
-                    // Pick randomly from top 3
-                    let top_n = 3.min(scored.len());
-                    let pick = rng.generate_range(0..top_n);
-                    let pos = scored[pick].1;
+            // SA polish: swap random unpinned key pairs using swap_keys_only + compute_score
+            // Only swap among rollout positions (MCTS path positions are pinned)
+            if rollout_positions.len() >= 2 && sa_iterations > 0 {
+                let mut current_score = cache.compute_score();
+                for _ in 0..sa_iterations {
+                    let a = rng.generate_range(0..rollout_positions.len());
+                    let mut b = rng.generate_range(0..rollout_positions.len() - 1);
+                    if b >= a { b += 1; }
 
-                    let idx = avail.iter().position(|&p| p == pos).unwrap();
-                    avail.swap_remove(idx);
-                    cache.replace_key_fast(pos, EMPTY_KEY, key);
-                    rollout_positions.push(pos);
+                    let pos_a = rollout_positions[a];
+                    let pos_b = rollout_positions[b];
+
+                    cache.swap_keys_only(pos_a, pos_b);
+                    let new_score = cache.compute_score();
+
+                    if new_score > current_score {
+                        current_score = new_score;
+                    } else {
+                        cache.swap_keys_only(pos_a, pos_b); // revert
+                    }
                 }
             }
 
-            let final_score = cache.score();
+            let final_score = cache.compute_score();
             self.total_rollouts += 1;
 
-            // Record if this is a top-K layout
             let mut full_positions = path.clone();
             full_positions.extend_from_slice(&rollout_positions);
             self.record_layout(final_score, &full_positions);
@@ -256,7 +256,7 @@ impl MctsSearch {
             }
 
             // Progress callback
-            if (iter + 1) % 100 == 0 {
+            if (iter + 1) % 10 == 0 {
                 let best = self.best_layouts.first().map(|(s, _)| *s).unwrap_or(i64::MIN);
                 let avg = root.avg_score();
                 progress(iter + 1, self.total_rollouts, best, avg);

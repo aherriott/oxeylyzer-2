@@ -76,10 +76,12 @@ xflags::xflags! {
         cmd mcts {
             /// Name of the layout to use as a basis.
             required name: String
-            /// Number of rollouts. Defaults to 10000.
+            /// Number of rollouts. Defaults to 1000.
             optional -i, --iterations iterations: usize
             /// Exploration constant. Defaults to 1.41.
             optional -c, --explore explore: f64
+            /// SA iterations per rollout. Defaults to 10000.
+            optional -s, --sa sa_iters: usize
         }
         /// Quit the analyzer
         cmd q quit {}
