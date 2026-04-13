@@ -72,6 +72,15 @@ xflags::xflags! {
             /// Prune interval (prune every N depths). Defaults to 1.
             optional -n, --interval interval: usize
         }
+        /// Monte Carlo Tree Search
+        cmd mcts {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// Number of rollouts. Defaults to 10000.
+            optional -i, --iterations iterations: usize
+            /// Exploration constant. Defaults to 1.41.
+            optional -c, --explore explore: f64
+        }
         /// Quit the analyzer
         cmd q quit {}
     }

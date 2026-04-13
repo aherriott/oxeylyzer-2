@@ -536,6 +536,48 @@ impl Repl {
         Ok(())
     }
 
+    fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>) -> Result<()> {
+        use oxeylyzer_core::mcts::MctsSearch;
+
+        let layout = self.layout(name)?.clone();
+        let iterations = iterations.unwrap_or(10_000) as u64;
+        let explore = explore.unwrap_or(1.41);
+
+        println!("MCTS: {} positions, {} rollouts, exploration={:.2}", layout.keyboard.len(), iterations, explore);
+
+        let start = std::time::Instant::now();
+        let mut last_print = std::time::Instant::now();
+
+        let mut search = MctsSearch::new(layout, self.a.data().clone(), self.a.weights().clone(), 10);
+
+        search.search(iterations, explore, |iter, total, best, avg| {
+            if last_print.elapsed().as_millis() > 500 {
+                last_print = std::time::Instant::now();
+                let elapsed = start.elapsed().as_secs_f64();
+                let rate = total as f64 / elapsed;
+                print!("\r  {} rollouts | best: {} | avg: {} | {:.0} rollouts/s | {:.1}s elapsed   ",
+                    fmt_num(total as f64),
+                    fmt_num(best as f64),
+                    fmt_num(avg),
+                    rate,
+                    elapsed,
+                );
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+            }
+        });
+        println!();
+
+        let elapsed = start.elapsed();
+        println!("MCTS completed in {:.2}s ({} rollouts)", elapsed.as_secs_f64(), iterations);
+
+        let results = search.results();
+        for (i, result) in results.iter().enumerate().take(10) {
+            println!("#{}: score {}", i + 1, fmt_num(result.score as f64));
+        }
+
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         let new = Self::with_config(&self.config_path)?;
 
@@ -569,6 +611,7 @@ impl Repl {
             OxeylyzerCmd::Bb2(b) => self.branch_bound_position_first(&b.name, b.top)?,
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
+            OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 
