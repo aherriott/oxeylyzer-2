@@ -305,12 +305,14 @@ impl BranchBound {
             let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
             if !remaining_keys.is_empty() && !available_positions.is_empty() {
                 let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
-                if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
-                    score: greedy_score,
-                    key_positions: assignment.clone(),
-                }) {
-                    stats.solutions_found += 1.0;
-                    stats.layouts_evaluated += 1.0;
+                if greedy_score > bound {
+                    if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                        score: greedy_score,
+                        key_positions: assignment.clone(),
+                    }) {
+                        stats.solutions_found += 1.0;
+                        stats.layouts_evaluated += 1.0;
+                    }
                 }
             }
         }
@@ -500,12 +502,14 @@ impl BranchBound {
             let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
             if !remaining_keys.is_empty() && !available_positions.is_empty() {
                 let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
-                if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
-                    score: greedy_score,
-                    key_positions: assignment.clone(),
-                }) {
-                    stats.solutions_found += 1.0;
-                    stats.layouts_evaluated += 1.0;
+                if greedy_score > bound {
+                    if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                        score: greedy_score,
+                        key_positions: assignment.clone(),
+                    }) {
+                        stats.solutions_found += 1.0;
+                        stats.layouts_evaluated += 1.0;
+                    }
                 }
             }
         }
