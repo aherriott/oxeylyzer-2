@@ -323,7 +323,7 @@ impl Repl {
                         f64::INFINITY
                     };
 
-                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {:.0} nodes/s | {:.1}% done | ~{}s left   ",
+                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {:.0} nodes/s | {:.1}% done | ~{} left   ",
                         fmt_num(progress.nodes_visited as f64),
                         fmt_num(progress.nodes_pruned),
                         progress.solutions_found as u64,
@@ -331,7 +331,7 @@ impl Repl {
                         avg_prune_depth,
                         nodes_per_sec,
                         pct,
-                        if est_remaining.is_finite() { format!("{:.0}", est_remaining) } else { "?".to_string() },
+                        fmt_duration(est_remaining),
                     );
                     std::io::Write::flush(&mut std::io::stdout()).ok();
                 }
@@ -437,6 +437,17 @@ fn fmt_num(n: f64) -> String {
     else if abs >= 1e6 { format!("{:.1}M", n / 1e6) }
     else if abs >= 1e3 { format!("{:.1}K", n / 1e3) }
     else { format!("{:.0}", n) }
+}
+
+fn fmt_duration(secs: f64) -> String {
+    if !secs.is_finite() { return "?".to_string(); }
+    let s = secs.abs();
+    if s < 60.0 { format!("{:.0}s", s) }
+    else if s < 3600.0 { format!("{:.1}m", s / 60.0) }
+    else if s < 86400.0 { format!("{:.1}h", s / 3600.0) }
+    else if s < 604800.0 { format!("{:.1}d", s / 86400.0) }
+    else if s < 31536000.0 { format!("{:.1}w", s / 604800.0) }
+    else { format!("{:.1}y", s / 31536000.0) }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
