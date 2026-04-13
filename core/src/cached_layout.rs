@@ -411,6 +411,10 @@ impl CachedLayout {
         &self.data
     }
 
+    pub fn trigram_combo_counts(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        self.trigram.combo_counts()
+    }
+
     pub fn char_mapping(&self) -> &CharMapping {
         self.data.char_mapping()
     }

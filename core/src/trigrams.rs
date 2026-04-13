@@ -1228,6 +1228,13 @@ impl TrigramCache {
             + self.magic_rule_score_delta
     }
 
+    pub fn combo_counts(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        let first: Vec<usize> = self.trigram_combos_per_key.iter().map(|v| v.len()).collect();
+        let mid: Vec<usize> = self.trigram_combos_mid.iter().map(|v| v.len()).collect();
+        let end: Vec<usize> = self.trigram_combos_end.iter().map(|v| v.len()).collect();
+        (first, mid, end)
+    }
+
     /// Compute the delta for replacing a key at a position.
     ///
     /// Iterates over all pre-computed trigram combinations involving the position
