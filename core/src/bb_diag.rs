@@ -22,73 +22,50 @@ mod tests {
 
         let bound: i64 = -143_714_244_130;
         let bg_freq = cache.magic_bg_freq().to_vec();
+        let tg_flat = cache.magic_tg_freq_flat().to_vec();
         let nk = cache.trigram_num_keys();
+        let nk2 = nk * nk;
+        let max_w = cache.trigram_max_weight();
 
-        // Count same-finger position pairs
-        let mut sf_pair_count = 0;
-        for pos in 0..num_pos {
-            sf_pair_count += cache.sfb_pairs(pos).len();
-        }
-        sf_pair_count /= 2; // each pair counted twice
-        println!("\n=== Precomputed bound analysis ===");
-        println!("Same-finger position pairs: {}", sf_pair_count);
+        println!("\n=== Trigram-based remaining cost bound ===");
+        println!("Bound (nrts-oxey): {}", bound);
+        println!("max_trigram_weight: {}", max_w);
 
-        // For each depth, compute:
-        // 1. Current score (from placed keys)
-        // 2. Minimum remaining SFB penalty (from unplaced key pairs)
+        // For each depth, compute the total trigram frequency among remaining keys
+        // Every trigram contributes (weight - max_w) * freq, and weight <= max_w,
+        // so every contribution is <= 0. The total is a valid lower bound.
         for depth in 0..12 {
             let score = cache.score();
-
-            // Collect all bigram frequencies between remaining keys
             let remaining = &all_keys[depth..num_pos];
-            let mut remaining_bigrams: Vec<i64> = Vec::new();
-            for (i, &ka) in remaining.iter().enumerate() {
-                for &kb in &remaining[i+1..] {
-                    if ka < nk && kb < nk {
-                        let freq = bg_freq[ka * nk + kb] + bg_freq[kb * nk + ka];
-                        if freq > 0 {
-                            remaining_bigrams.push(freq);
+
+            // Sum ALL trigram frequencies among remaining keys
+            // For each triple (a, b, c) of remaining keys, sum tg_freq[a][b][c]
+            // weighted by the MINIMUM possible (weight - max_w) for any position triple.
+            // Since we don't know positions, use the most negative offset weight.
+            let min_offset_weight: i64 = [-6, -1, -1, -4, -5].iter().copied().min().unwrap(); // redirect=-6 is worst
+
+            let mut total_tg_freq: i64 = 0;
+            for &ka in remaining {
+                for &kb in remaining {
+                    for &kc in remaining {
+                        if ka < nk && kb < nk && kc < nk {
+                            total_tg_freq += tg_flat[ka * nk2 + kb * nk + kc];
                         }
                     }
                 }
             }
-            remaining_bigrams.sort_unstable(); // ascending - smallest first
 
-            // The minimum SFB penalty: the `sf_pair_count` highest-frequency
-            // remaining bigrams MUST go on same-finger pairs (pigeonhole).
-            // Wait - that's backwards. We WANT to minimize penalty, so we'd
-            // put the LOWEST frequency bigrams on same-finger pairs.
-            // But we can't choose - the positions are fixed.
-            //
-            // Actually: there are `sf_pair_count` same-finger position pairs
-            // among the available positions. Each will have some bigram on it.
-            // The minimum penalty is when the lowest-frequency bigrams land there.
-            //
-            // But we have C(remaining, 2) bigrams and sf_pair_count positions.
-            // The minimum SFB is: sum of the sf_pair_count smallest bigram freqs
-            // × minimum same-finger distance × minimum finger weight.
+            // Every trigram gets at least min_offset_weight penalty
+            // But not all position triples are tracked trigram types.
+            // The fraction that are tracked is roughly 60-70%.
+            // Use 100% for a valid (conservative) bound.
+            let tg_bound = total_tg_freq * min_offset_weight;
 
-            let min_sfb_weight: i64 = (0..10)
-                .map(|f| cache.sfb_weight(f))
-                .filter(|&w| w != 0)
-                .min()
-                .unwrap_or(0);
-
-            let min_sf_dist: i64 = (0..num_pos)
-                .flat_map(|p| cache.sfb_pairs(p).iter().map(|sf| sf.dist))
-                .min()
-                .unwrap_or(0);
-
-            // Sum the sf_pair_count smallest remaining bigram frequencies
-            let n_pairs = sf_pair_count.min(remaining_bigrams.len());
-            let min_sfb_penalty: i64 = remaining_bigrams[..n_pairs].iter().sum::<i64>()
-                * min_sf_dist * min_sfb_weight;
-
-            let projected = score + min_sfb_penalty;
+            let projected = score + tg_bound;
             let prune = projected < bound;
 
-            println!("  depth {:2}: score={:>15}, remaining_bigrams={:>5}, min_sfb_penalty={:>15}, projected={:>15} {}",
-                depth, score, remaining_bigrams.len(), min_sfb_penalty, projected,
+            println!("  depth {:2}: score={:>15}, tg_freq_sum={:>15}, tg_bound={:>15}, projected={:>15} {}",
+                depth, score, total_tg_freq, tg_bound, projected,
                 if prune { "<-- PRUNE" } else { "" });
 
             if depth < all_keys.len() {
