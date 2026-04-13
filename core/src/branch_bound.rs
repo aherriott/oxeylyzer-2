@@ -604,6 +604,218 @@ impl BranchBound {
         self.num_positions
     }
 
+    // ==================== BB3: Hybrid key-freq + finger-fill ====================
+
+    /// Search by placing the most frequent key first (at any position),
+    /// then filling the rest of that finger, then the next most frequent key, etc.
+    pub fn search_hybrid(
+        &mut self,
+        bound: i64,
+        top_k: usize,
+        mut progress_callback: impl FnMut(&BranchBoundProgress),
+    ) -> (Vec<ScoredLayout>, BranchBoundStats) {
+        let mut cache = self.create_empty_cache();
+        let mut top_layouts = TopKHeap::new(top_k);
+        let mut stats = BranchBoundStats::default();
+        let mut assignment: Vec<(char, usize)> = Vec::with_capacity(self.num_positions);
+
+        // Build the finger map: for each position, which other positions share its finger
+        let mut finger_map: Vec<Vec<usize>> = vec![Vec::new(); self.num_positions];
+        for i in 0..self.num_positions {
+            for j in 0..self.num_positions {
+                if i != j && self.base_layout.fingers[i] == self.base_layout.fingers[j] {
+                    finger_map[i].push(j);
+                }
+            }
+        }
+
+        // Available keys (sorted by frequency, highest first)
+        let mut available_keys: Vec<(CacheKey, char)> = self.all_keys_by_freq.iter()
+            .zip(self.all_chars_by_freq.iter())
+            .map(|(&k, &c)| (k, c))
+            .collect();
+
+        // Available positions
+        let mut available_positions: Vec<usize> = (0..self.num_positions).collect();
+
+        // Pending finger positions to fill (positions on the same finger as the last placed key)
+        let mut pending_finger_positions: Vec<usize> = Vec::new();
+
+        let estimated_total = Self::estimate_total_nodes_f64(self.num_positions, self.num_positions);
+
+        self.search_hybrid_recursive(
+            &mut cache,
+            0,
+            &mut available_keys,
+            &mut available_positions,
+            &mut pending_finger_positions,
+            &finger_map,
+            &mut assignment,
+            bound,
+            &mut top_layouts,
+            &mut stats,
+            estimated_total,
+            &mut progress_callback,
+        );
+
+        (top_layouts.into_sorted_vec(), stats)
+    }
+
+    fn search_hybrid_recursive(
+        &self,
+        cache: &mut CachedLayout,
+        depth: usize,
+        available_keys: &mut Vec<(CacheKey, char)>,
+        available_positions: &mut Vec<usize>,
+        pending_finger_positions: &mut Vec<usize>,
+        finger_map: &[Vec<usize>],
+        assignment: &mut Vec<(char, usize)>,
+        bound: i64,
+        top_layouts: &mut TopKHeap,
+        stats: &mut BranchBoundStats,
+        estimated_total: f64,
+        progress_callback: &mut impl FnMut(&BranchBoundProgress),
+    ) {
+        use crate::cached_layout::EMPTY_KEY;
+
+        stats.max_depth_reached = stats.max_depth_reached.max(depth);
+        stats.nodes_visited += 1;
+
+        let current_score = cache.score();
+
+        // Pruning
+        if current_score < bound {
+            let remaining = available_keys.len();
+            let leaves_pruned = Self::estimate_leaf_nodes_f64(remaining, remaining);
+            let nodes_pruned = Self::count_subtree_nodes_f64(remaining, remaining);
+            stats.layouts_pruned += leaves_pruned;
+            stats.nodes_pruned += nodes_pruned;
+            stats.prune_depth_sum += depth as u64;
+            stats.prune_count += 1;
+            stats.weighted_prune_depth_sum += depth as f64 * leaves_pruned;
+
+            if stats.nodes_visited % 100_000 == 0 {
+                let progress = BranchBoundProgress {
+                    nodes_visited: stats.nodes_visited,
+                    nodes_pruned: stats.nodes_pruned,
+                    layouts_evaluated: stats.layouts_evaluated,
+                    layouts_pruned: stats.layouts_pruned,
+                    estimated_total_layouts: estimated_total,
+                    estimated_total_nodes: estimated_total,
+                    prune_count: stats.prune_count,
+                    prune_depth_sum: stats.prune_depth_sum,
+                    weighted_prune_depth_sum: stats.weighted_prune_depth_sum,
+                    current_depth: depth,
+                    max_depth: self.num_positions,
+                    best_score: top_layouts.best_score(),
+                    solutions_found: stats.solutions_found,
+                };
+                progress_callback(&progress);
+            }
+            return;
+        }
+
+        // Base case
+        if available_keys.is_empty() || available_positions.is_empty() {
+            stats.layouts_evaluated += 1.0;
+            stats.solutions_found += 1.0;
+            top_layouts.try_insert(ScoredLayout {
+                score: current_score,
+                key_positions: assignment.clone(),
+            });
+            return;
+        }
+
+        if !pending_finger_positions.is_empty() {
+            // MODE: Fill the current finger — pick a position from pending, try all keys
+            let pos = pending_finger_positions.pop().unwrap();
+
+            let num_keys = available_keys.len();
+            for i in 0..num_keys {
+                let (key, c) = available_keys[i];
+
+                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                assignment.push((c, pos));
+                available_keys.swap_remove(i);
+
+                let effective_bound = if top_layouts.len() >= top_layouts.capacity {
+                    top_layouts.worst_score().unwrap_or(bound).max(bound)
+                } else { bound };
+
+                self.search_hybrid_recursive(
+                    cache, depth + 1, available_keys, available_positions,
+                    pending_finger_positions, finger_map, assignment,
+                    effective_bound, top_layouts, stats, estimated_total, progress_callback,
+                );
+
+                available_keys.push((key, c));
+                let last = available_keys.len() - 1;
+                available_keys.swap(i, last);
+                assignment.pop();
+                cache.replace_key_fast(pos, key, EMPTY_KEY);
+            }
+
+            // Restore the pending position
+            pending_finger_positions.push(pos);
+        } else {
+            // MODE: Place the next most frequent key — try all available positions
+            // The first key in available_keys is the most frequent remaining
+            let (key, c) = available_keys[0];
+            available_keys.swap_remove(0);
+
+            let num_positions = available_positions.len();
+            for i in 0..num_positions {
+                let pos = available_positions[i];
+
+                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                assignment.push((c, pos));
+                available_positions.swap_remove(i);
+
+                // Queue up the other positions on this finger for filling
+                let same_finger: Vec<usize> = finger_map[pos].iter()
+                    .filter(|&&p| available_positions.contains(&p))
+                    .copied()
+                    .collect();
+                // Remove them from available_positions and add to pending
+                for &fp in &same_finger {
+                    if let Some(idx) = available_positions.iter().position(|&p| p == fp) {
+                        available_positions.swap_remove(idx);
+                        pending_finger_positions.push(fp);
+                    }
+                }
+
+                let effective_bound = if top_layouts.len() >= top_layouts.capacity {
+                    top_layouts.worst_score().unwrap_or(bound).max(bound)
+                } else { bound };
+
+                self.search_hybrid_recursive(
+                    cache, depth + 1, available_keys, available_positions,
+                    pending_finger_positions, finger_map, assignment,
+                    effective_bound, top_layouts, stats, estimated_total, progress_callback,
+                );
+
+                // Restore: move pending finger positions back to available
+                for &fp in &same_finger {
+                    if let Some(idx) = pending_finger_positions.iter().position(|&p| p == fp) {
+                        pending_finger_positions.swap_remove(idx);
+                        available_positions.push(fp);
+                    }
+                }
+
+                available_positions.push(pos);
+                let last = available_positions.len() - 1;
+                available_positions.swap(i, last);
+                assignment.pop();
+                cache.replace_key_fast(pos, key, EMPTY_KEY);
+            }
+
+            // Restore the key
+            available_keys.push((key, c));
+            let last = available_keys.len() - 1;
+            available_keys.swap(0, last);
+        }
+    }
+
     /// Get the finger-ordered positions
     pub fn positions_by_finger(&self) -> &[usize] {
         &self.positions_by_finger
