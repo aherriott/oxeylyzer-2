@@ -276,17 +276,27 @@ impl Repl {
 
         println!("Branch & bound: {} positions, depth limit {}, top-{}", layout.keyboard.len(), max_depth, top_k);
 
-        // Use the SA score of a random layout as the initial bound
-        let random = layout.random();
-        self.a.use_layout(&random, &[]);
-        let (_, sa_score) = self.a.annealing_improve(random.clone(), &[], 1.0, 1E-4, 100_000);
-        println!("Initial bound from SA: {}", sa_score);
+        // Get a tight initial bound by running multiple SA + greedy passes
+        let bound_start = std::time::Instant::now();
+        let mut best_bound = i64::MIN;
+        for i in 0..5 {
+            let random = layout.random();
+            self.a.use_layout(&random, &[]);
+            let (sa_layout, _) = self.a.annealing_improve(random.clone(), &[], 1.0, 1E-4, 100_000);
+            let (_, greedy_score) = self.a.greedy_improve(&sa_layout, &[]);
+            if greedy_score > best_bound {
+                best_bound = greedy_score;
+            }
+            print!("\r  bound pass {}/5: {}", i + 1, best_bound);
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        println!("\nInitial bound: {} (found in {:.1}s)", best_bound, bound_start.elapsed().as_secs_f64());
 
         let start = std::time::Instant::now();
 
         let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
         let (results, stats) = bb.search_limited_with_progress(
-            sa_score,
+            best_bound,
             top_k,
             max_depth,
             &mut |progress: &oxeylyzer_core::branch_bound::BranchBoundProgress| {
