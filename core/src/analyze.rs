@@ -95,7 +95,7 @@ impl Analyzer {
         neighbors[rng.generate_range(0..neighbors.len())]
     }
 
-    pub fn best_neighbor(&mut self, neighbors: &[Neighbor]) -> Option<(Neighbor, i64)> {
+    pub fn best_neighbor(&self, neighbors: &[Neighbor]) -> Option<(Neighbor, i64)> {
         let mut best_score = self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
@@ -112,8 +112,16 @@ impl Analyzer {
         best
     }
 
-    /// Speculative score for a neighbor. No mutation for KeySwap.
-    pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
+    /// Speculative score for a neighbor. O(1) for KeySwap (precomputed table).
+    pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
+        self.cache
+            .as_ref()
+            .expect("Analyzer has no Layout set")
+            .score_neighbor(neighbor)
+    }
+
+    /// Speculative score for a neighbor (mutable version for MagicRule).
+    pub fn score_neighbor_mut(&mut self, neighbor: Neighbor) -> i64 {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
@@ -121,9 +129,8 @@ impl Analyzer {
     }
 
     /// Test a neighbor without applying it. Returns the score.
-    /// Alias for score_neighbor for backwards compatibility.
     pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        self.score_neighbor(neighbor)
+        self.score_neighbor_mut(neighbor)
     }
 
     /// Apply a neighbor (fast path, no weighted_score update).

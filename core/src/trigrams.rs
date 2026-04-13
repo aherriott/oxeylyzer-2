@@ -2337,6 +2337,18 @@ impl TrigramCache {
         delta
     }
 
+    pub(crate) fn compute_swap_both_delta_score_only_pub(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) -> i64 {
+        self.compute_swap_both_delta_score_only(pos_a, pos_b, key_a, key_b, keys, tg_freq)
+    }
+
     /// Compute only the score delta for trigrams involving BOTH swap positions.
     fn compute_swap_both_delta_score_only(
         &self,

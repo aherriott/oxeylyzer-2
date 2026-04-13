@@ -194,10 +194,10 @@ pub struct CachedLayout {
     key_positions: Vec<Option<CachePos>>,
     num_positions: usize,
     neighbors: Vec<Neighbor>,
+    /// Precomputed score for each neighbor. neighbor_scores[i] = total score if neighbor[i] is applied.
+    /// Only valid for KeySwap neighbors. Recomputed after each accepted swap.
+    neighbor_scores: Vec<i64>,
     current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey>,
-    // NOTE: affected_grams field has been removed as part of the const-freq-analyzers refactoring (Task 1.3).
-    // This field was used to track frequency changes for reverting, which is no longer needed
-    // since frequencies will be constant after initialization.
     dist: DistCache,
     sfb: SFCache,
     stretch: StretchCache,
@@ -218,6 +218,7 @@ impl Default for CachedLayout {
             key_positions: Vec::new(),
             num_positions: 0,
             neighbors: Vec::new(),
+            neighbor_scores: Vec::new(),
             current_magic_rules: HashMap::default(),
             dist: DistCache::default(),
             sfb: SFCache::default(),
@@ -309,6 +310,7 @@ impl CachedLayout {
             key_positions,
             num_positions: len,
             neighbors,
+            neighbor_scores: Vec::new(),
             current_magic_rules,
             dist,
             sfb,
@@ -339,7 +341,74 @@ impl CachedLayout {
             cache.apply_magic_rule(magic_key, leader, output, true);
         }
 
+        // Precompute neighbor scores for O(1) score_neighbor lookups
+        cache.precompute_neighbor_scores();
+
         cache
+    }
+
+    /// Precompute the score for every neighbor. Makes score_neighbor O(1).
+    fn precompute_neighbor_scores(&mut self) {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+        let tg_flat = self.magic.tg_freq_flat();
+
+        self.neighbor_scores = self.neighbors.iter().map(|neighbor| {
+            match neighbor {
+                Neighbor::KeySwap(PosPair(a, b)) => {
+                    let (pos_a, pos_b) = (*a, *b);
+                    let key_a = self.keys[pos_a];
+                    let key_b = self.keys[pos_b];
+
+                    let sfb = self.sfb.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                    let stretch = self.stretch.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
+                    let scissors = self.scissors.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+
+                    // Use the slow but correct trigram path
+                    let tg_a = self.trigram.compute_replace_delta_score_only(pos_a, key_a, key_b, &self.keys, Some(pos_b), tg_freq);
+                    let tg_b = self.trigram.compute_replace_delta_score_only(pos_b, key_b, key_a, &self.keys, Some(pos_a), tg_freq);
+                    let tg_both = self.trigram.compute_swap_both_delta_score_only_pub(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
+                    let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
+
+                    sfb + stretch + scissors + trigram
+                }
+                Neighbor::MagicRule(_) => {
+                    // Magic rules use the existing apply_magic_rule(false) path
+                    0 // placeholder, computed on-demand
+                }
+            }
+        }).collect();
+    }
+
+    /// Recompute neighbor scores for neighbors involving the given positions.
+    /// Called after a swap is accepted.
+    fn recompute_neighbor_scores_for_positions(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+
+        for (i, neighbor) in self.neighbors.iter().enumerate() {
+            if let Neighbor::KeySwap(PosPair(a, b)) = neighbor {
+                let (pa, pb) = (*a, *b);
+                // Only recompute if this neighbor involves one of the swapped positions
+                if pa == pos_a || pa == pos_b || pb == pos_a || pb == pos_b {
+                    let key_a = self.keys[pa];
+                    let key_b = self.keys[pb];
+
+                    let sfb = self.sfb.score_swap(pa, pb, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                    let stretch = self.stretch.score_swap(pa, pb, key_a, key_b, &self.keys, bg_freq);
+                    let scissors = self.scissors.score_swap(pa, pb, key_a, key_b, &self.keys, bg_freq, sg_freq);
+
+                    let tg_a = self.trigram.compute_replace_delta_score_only(pa, key_a, key_b, &self.keys, Some(pb), tg_freq);
+                    let tg_b = self.trigram.compute_replace_delta_score_only(pb, key_b, key_a, &self.keys, Some(pa), tg_freq);
+                    let tg_both = self.trigram.compute_swap_both_delta_score_only_pub(pa, pb, key_a, key_b, &self.keys, tg_freq);
+                    let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
+
+                    self.neighbor_scores[i] = sfb + stretch + scissors + trigram;
+                }
+            }
+        }
     }
 
     pub fn data(&self) -> &AnalyzerData {
@@ -423,17 +492,20 @@ impl CachedLayout {
 
     // ==================== New API ====================
 
-    /// Speculative score for a neighbor. No mutation.
-    /// For SA: O(1) for trigrams (flat arrays), O(pairs) for bigram caches.
-    /// Only valid when trigram weighted_scores are fresh.
+    /// Speculative score for a neighbor. O(1) for KeySwap (precomputed table lookup).
+    /// Only valid when neighbor_scores are fresh (after new(), swap_keys_and_update()).
     pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
         match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => self.score_swap(a, b),
-            Neighbor::MagicRule(_rule) => {
-                // Magic rule speculative scoring requires &mut self due to add_rule API.
-                // Callers should use apply_magic_rule(... , false) directly for magic rules.
-                // For KeySwap neighbors (the common case in SA), this is pure &self.
-                panic!("Use apply_magic_rule with apply=false for speculative magic rule scoring")
+            Neighbor::KeySwap(PosPair(a, b)) => {
+                // Find the neighbor index. For KeySwap neighbors, the index is deterministic:
+                // pairs are stored in order (0,1), (0,2), ..., (0,n-1), (1,2), ..., (n-2,n-1)
+                // index = a * num_positions - a * (a + 1) / 2 + (b - a - 1)
+                let np = self.num_positions;
+                let idx = a * np - a * (a + 1) / 2 + (b - a - 1);
+                self.neighbor_scores[idx]
+            }
+            Neighbor::MagicRule(_) => {
+                panic!("Use score_neighbor_mut for MagicRule neighbors")
             }
         }
     }
@@ -578,6 +650,9 @@ impl CachedLayout {
         if key_b < self.key_positions.len() {
             self.key_positions[key_b] = Some(pos_a);
         }
+
+        // Recompute neighbor scores for affected positions
+        self.recompute_neighbor_scores_for_positions(pos_a, pos_b);
     }
 
 
