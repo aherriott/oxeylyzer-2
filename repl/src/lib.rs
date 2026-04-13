@@ -293,6 +293,7 @@ impl Repl {
         println!("\nInitial bound: {} (found in {:.1}s)", best_bound, bound_start.elapsed().as_secs_f64());
 
         let start = std::time::Instant::now();
+        let mut last_print = std::time::Instant::now();
 
         let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
         let (results, stats) = bb.search_limited_with_progress(
@@ -300,14 +301,37 @@ impl Repl {
             top_k,
             max_depth,
             &mut |progress: &oxeylyzer_core::branch_bound::BranchBoundProgress| {
-                if progress.nodes_visited % 100_000 == 0 {
-                    print!("\r  nodes: {}  pruned: {:.0}  solutions: {:.0}  best: {:?}  depth: {}/{}",
-                        progress.nodes_visited,
-                        progress.nodes_pruned,
-                        progress.solutions_found,
-                        progress.best_score,
-                        progress.current_depth,
-                        progress.max_depth,
+                if progress.nodes_visited % 100_000 == 0 && last_print.elapsed().as_millis() > 500 {
+                    last_print = std::time::Instant::now();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let nodes_per_sec = progress.nodes_visited as f64 / elapsed;
+                    let total_nodes = progress.nodes_visited as f64 + progress.nodes_pruned;
+                    let avg_prune_depth = if progress.prune_count > 0 {
+                        progress.prune_depth_sum as f64 / progress.prune_count as f64
+                    } else {
+                        0.0
+                    };
+                    // Estimate remaining: ratio of pruned to visited gives a rough completion %
+                    let pct = if progress.estimated_total_nodes > 0.0 {
+                        total_nodes / progress.estimated_total_nodes * 100.0
+                    } else {
+                        0.0
+                    };
+                    let est_remaining = if pct > 0.01 {
+                        elapsed / (pct / 100.0) - elapsed
+                    } else {
+                        f64::INFINITY
+                    };
+
+                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {:.0} nodes/s | {:.1}% done | ~{}s left   ",
+                        fmt_num(progress.nodes_visited as f64),
+                        fmt_num(progress.nodes_pruned),
+                        progress.solutions_found as u64,
+                        progress.best_score.map_or("none".to_string(), |s| s.to_string()),
+                        avg_prune_depth,
+                        nodes_per_sec,
+                        pct,
+                        if est_remaining.is_finite() { format!("{:.0}", est_remaining) } else { "?".to_string() },
                     );
                     std::io::Write::flush(&mut std::io::stdout()).ok();
                 }
@@ -397,6 +421,17 @@ fn readline() -> std::io::Result<String> {
 
     std::io::stdin().read_line(&mut buf)?;
     Ok(buf)
+}
+
+fn fmt_num(n: f64) -> String {
+    let abs = n.abs();
+    if abs >= 1e18 { format!("{:.1}Qi", n / 1e18) }
+    else if abs >= 1e15 { format!("{:.1}Qa", n / 1e15) }
+    else if abs >= 1e12 { format!("{:.1}T", n / 1e12) }
+    else if abs >= 1e9 { format!("{:.1}B", n / 1e9) }
+    else if abs >= 1e6 { format!("{:.1}M", n / 1e6) }
+    else if abs >= 1e3 { format!("{:.1}K", n / 1e3) }
+    else { format!("{:.0}", n) }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
