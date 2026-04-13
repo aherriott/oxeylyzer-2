@@ -150,11 +150,11 @@ impl Repl {
         for i in 0..count {
             let random_layout = layout.random_with_pins(&pins);
 
-            // Simulated annealing followed by greedy depth-3 optimization
+            // Simulated annealing followed by greedy optimization
             self.a.use_layout(&random_layout, &pins);
             let (annealed_layout, _) =
-                self.a.annealing_improve(random_layout, &pins, 10.0, 1E-5, 10_000_000);
-            let (final_layout, final_score) = self.a.alternative_d3(annealed_layout, &pins);
+                self.a.annealing_improve(random_layout, &pins, 10.0, 1E-5, 1_000_000);
+            let (final_layout, final_score) = self.a.greedy_improve(&annealed_layout, &pins);
 
             results.push((final_layout, final_score));
 
