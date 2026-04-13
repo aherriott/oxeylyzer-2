@@ -347,6 +347,20 @@ impl CachedLayout {
         self.trigram.combo_counts()
     }
 
+    // Accessors for B&B diagnostics and lower bound computation
+    pub fn magic_bg_freq(&self) -> &[i64] { self.magic.bg_freq_flat() }
+    pub fn magic_sg_freq(&self) -> &[i64] { self.magic.sg_freq_flat() }
+    pub fn magic_tg_freq_flat(&self) -> &[i64] { self.magic.tg_freq_flat() }
+    pub fn trigram_num_keys(&self) -> usize { self.trigram.num_keys() }
+    pub fn trigram_max_weight(&self) -> i64 { self.trigram.max_weight() }
+    pub fn sfb_pairs(&self, pos: usize) -> &[crate::same_finger::SfPair] { self.sfb.pairs_for_pos(pos) }
+    pub fn sfb_weight(&self, finger: usize) -> i64 { self.sfb.sfb_weight_for_finger(finger) }
+    pub fn sfs_weight(&self, finger: usize) -> i64 { self.sfb.sfs_weight_for_finger(finger) }
+    pub fn stretch_pairs(&self, pos: usize) -> &[crate::stretches::StretchPair] { self.stretch.pairs_for_pos(pos) }
+    pub fn stretch_weight_val(&self) -> i64 { self.stretch.weight() }
+    pub fn trigram_combos_first(&self, pos: usize) -> &[crate::trigrams::TrigramCombo] { self.trigram.combos_first(pos) }
+    pub fn get_key_at(&self, pos: usize) -> usize { self.keys[pos] }
+
     pub fn char_mapping(&self) -> &CharMapping {
         self.data.char_mapping()
     }
