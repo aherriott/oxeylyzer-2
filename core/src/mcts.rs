@@ -9,6 +9,7 @@ use crate::data::Data;
 use crate::layout::Layout;
 use crate::weights::Weights;
 use crate::types::CacheKey;
+use nanorand::Rng;
 
 /// A node in the MCTS tree.
 struct MctsNode {
@@ -129,6 +130,7 @@ impl MctsSearch {
 
         let mut root = MctsNode::new(usize::MAX); // root has no position
         let num_keys = self.keys_by_freq.len().min(self.num_positions);
+        let mut rng = nanorand::WyRand::new();
 
         for iter in 0..iterations {
             // Path from root to the selected leaf
@@ -164,14 +166,11 @@ impl MctsSearch {
 
             // EXPAND: if this node hasn't been expanded, create children
             if !node.expanded && depth < num_keys {
-                let occupied: Vec<bool> = {
-                    let mut occ = vec![false; self.num_positions];
-                    for &p in &path { occ[p] = true; }
-                    occ
-                };
+                let mut occ = vec![false; self.num_positions];
+                for &p in &path { occ[p] = true; }
 
                 for pos in 0..self.num_positions {
-                    if !occupied[pos] {
+                    if !occ[pos] {
                         node.children.push(MctsNode::new(pos));
                     }
                 }
@@ -188,27 +187,45 @@ impl MctsSearch {
                 }
             }
 
-            // ROLLOUT: greedily complete the layout from current state
+            // ROLLOUT: randomly complete the layout from current state
             let mut rollout_positions: Vec<usize> = Vec::new();
+            let mut occupied = vec![false; self.num_positions];
+            for &p in &path { occupied[p] = true; }
+
+            // Build list of available positions
+            let mut avail: Vec<usize> = (0..self.num_positions).filter(|&p| !occupied[p]).collect();
+
             for d in depth..num_keys {
                 let key = self.keys_by_freq[d];
                 let nk = cache.trigram_num_keys();
-                if key >= nk { continue; }
+                if key >= nk || avail.is_empty() { continue; }
 
-                let mut best_pos = 0;
-                let mut best_score = i64::MIN;
-                for pos in 0..self.num_positions {
-                    if path.contains(&pos) || rollout_positions.contains(&pos) { continue; }
+                // Semi-random: score all positions, pick randomly from top 3
+                if avail.len() <= 3 {
+                    let idx = rng.generate_range(0..avail.len());
+                    let pos = avail.swap_remove(idx);
                     cache.replace_key_fast(pos, EMPTY_KEY, key);
-                    let s = cache.score();
-                    cache.replace_key_fast(pos, key, EMPTY_KEY);
-                    if s > best_score {
-                        best_score = s;
-                        best_pos = pos;
-                    }
+                    rollout_positions.push(pos);
+                } else {
+                    // Score each available position
+                    let mut scored: Vec<(i64, usize)> = avail.iter().map(|&pos| {
+                        cache.replace_key_fast(pos, EMPTY_KEY, key);
+                        let s = cache.score();
+                        cache.replace_key_fast(pos, key, EMPTY_KEY);
+                        (s, pos)
+                    }).collect();
+                    scored.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+
+                    // Pick randomly from top 3
+                    let top_n = 3.min(scored.len());
+                    let pick = rng.generate_range(0..top_n);
+                    let pos = scored[pick].1;
+
+                    let idx = avail.iter().position(|&p| p == pos).unwrap();
+                    avail.swap_remove(idx);
+                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    rollout_positions.push(pos);
                 }
-                cache.replace_key_fast(best_pos, EMPTY_KEY, key);
-                rollout_positions.push(best_pos);
             }
 
             let final_score = cache.score();
