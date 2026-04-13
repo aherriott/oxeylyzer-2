@@ -509,6 +509,22 @@ impl BranchBound {
         let c = self.chars_by_freq[depth];
         let num_available = available_positions.len();
 
+        // Order positions by score impact (best first)
+        if num_available > 1 {
+            let mut position_scores: Vec<(usize, i64)> = available_positions.iter()
+                .map(|&pos| {
+                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    let score = cache.score();
+                    cache.replace_key_fast(pos, key, EMPTY_KEY);
+                    (pos, score)
+                })
+                .collect();
+            position_scores.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            for (i, &(pos, _)) in position_scores.iter().enumerate() {
+                available_positions[i] = pos;
+            }
+        }
+
         for i in 0..num_available {
             let pos = available_positions[i];
 
