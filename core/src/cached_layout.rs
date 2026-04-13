@@ -351,7 +351,6 @@ impl CachedLayout {
     fn precompute_neighbor_scores(&mut self) {
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
         let tg_flat = self.magic.tg_freq_flat();
 
         self.neighbor_scores = self.neighbors.iter().map(|neighbor| {
@@ -365,16 +364,14 @@ impl CachedLayout {
                     let stretch = self.stretch.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
                     let scissors = self.scissors.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
 
-                    // Use the slow but correct trigram path
-                    let tg_a = self.trigram.compute_replace_delta_score_only(pos_a, key_a, key_b, &self.keys, Some(pos_b), tg_freq);
-                    let tg_b = self.trigram.compute_replace_delta_score_only(pos_b, key_b, key_a, &self.keys, Some(pos_a), tg_freq);
-                    let tg_both = self.trigram.compute_swap_both_delta_score_only_pub(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
+                    let tg_a = self.trigram.compute_replace_delta_flat(pos_a, key_a, key_b, &self.keys, Some(pos_b), tg_flat);
+                    let tg_b = self.trigram.compute_replace_delta_flat(pos_b, key_b, key_a, &self.keys, Some(pos_a), tg_flat);
+                    let tg_both = self.trigram.compute_swap_both_delta_flat(pos_a, pos_b, key_a, key_b, &self.keys, tg_flat);
                     let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
 
                     sfb + stretch + scissors + trigram
                 }
                 Neighbor::MagicRule(_) => {
-                    // Magic rules use the existing apply_magic_rule(false) path
                     0 // placeholder, computed on-demand
                 }
             }
@@ -386,12 +383,11 @@ impl CachedLayout {
     fn recompute_neighbor_scores_for_positions(&mut self, pos_a: CachePos, pos_b: CachePos) {
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
+        let tg_flat = self.magic.tg_freq_flat();
 
         for (i, neighbor) in self.neighbors.iter().enumerate() {
             if let Neighbor::KeySwap(PosPair(a, b)) = neighbor {
                 let (pa, pb) = (*a, *b);
-                // Only recompute if this neighbor involves one of the swapped positions
                 if pa == pos_a || pa == pos_b || pb == pos_a || pb == pos_b {
                     let key_a = self.keys[pa];
                     let key_b = self.keys[pb];
@@ -400,9 +396,9 @@ impl CachedLayout {
                     let stretch = self.stretch.score_swap(pa, pb, key_a, key_b, &self.keys, bg_freq);
                     let scissors = self.scissors.score_swap(pa, pb, key_a, key_b, &self.keys, bg_freq, sg_freq);
 
-                    let tg_a = self.trigram.compute_replace_delta_score_only(pa, key_a, key_b, &self.keys, Some(pb), tg_freq);
-                    let tg_b = self.trigram.compute_replace_delta_score_only(pb, key_b, key_a, &self.keys, Some(pa), tg_freq);
-                    let tg_both = self.trigram.compute_swap_both_delta_score_only_pub(pa, pb, key_a, key_b, &self.keys, tg_freq);
+                    let tg_a = self.trigram.compute_replace_delta_flat(pa, key_a, key_b, &self.keys, Some(pb), tg_flat);
+                    let tg_b = self.trigram.compute_replace_delta_flat(pb, key_b, key_a, &self.keys, Some(pa), tg_flat);
+                    let tg_both = self.trigram.compute_swap_both_delta_flat(pa, pb, key_a, key_b, &self.keys, tg_flat);
                     let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
 
                     self.neighbor_scores[i] = sfb + stretch + scissors + trigram;
@@ -623,33 +619,12 @@ impl CachedLayout {
         }
     }
 
-    /// Swap keys and update trigram weighted_score arrays.
-    /// Both score() and score_neighbor() remain valid.
+    /// Swap keys and recompute affected neighbor scores.
+    /// score() and score_neighbor() remain valid.
+    /// Does NOT update trigram weighted_score arrays (not needed for score_neighbor).
     #[inline]
     pub fn swap_keys_and_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
-        let key_a = self.keys[pos_a];
-        let key_b = self.keys[pos_b];
-
-        debug_assert!(key_a != EMPTY_KEY, "Position {pos_a} is empty");
-        debug_assert!(key_b != EMPTY_KEY, "Position {pos_b} is empty");
-
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
-
-        self.sfb.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
-        self.scissors.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        self.trigram.key_swap_and_update(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq);
-
-        self.keys[pos_a] = key_b;
-        self.keys[pos_b] = key_a;
-        if key_a < self.key_positions.len() {
-            self.key_positions[key_a] = Some(pos_b);
-        }
-        if key_b < self.key_positions.len() {
-            self.key_positions[key_b] = Some(pos_a);
-        }
+        self.swap_keys(pos_a, pos_b);
 
         // Recompute neighbor scores for affected positions
         self.recompute_neighbor_scores_for_positions(pos_a, pos_b);

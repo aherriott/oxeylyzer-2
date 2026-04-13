@@ -1783,7 +1783,7 @@ impl TrigramCache {
 
     /// Fast replace delta using flat trigram array. Single contiguous memory access per lookup.
     #[inline]
-    fn compute_replace_delta_flat(
+    pub(crate) fn compute_replace_delta_flat(
         &self,
         pos: usize,
         old_key: usize,
@@ -1854,7 +1854,7 @@ impl TrigramCache {
     }
 
     /// Fast swap-both delta using flat trigram array.
-    fn compute_swap_both_delta_flat(
+    pub(crate) fn compute_swap_both_delta_flat(
         &self,
         pos_a: usize,
         pos_b: usize,

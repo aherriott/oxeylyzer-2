@@ -42,9 +42,16 @@ mod tests {
         a.use_layout(&l, &[]);
         let ns = a.neighbors();
         let n = 1_000;
+
+        // Profile just the swap (no neighbor recompute)
+        let t = Instant::now();
+        for i in 0..n { let nb = ns[i % ns.len()]; a.apply_neighbor(nb); a.apply_neighbor(nb); }
+        println!("\n=== apply_neighbor (fast): {n} iters, {:?}/iter ===", t.elapsed() / n as u32);
+
+        // Profile full apply_and_update (swap + weighted_score update + neighbor recompute)
         let t = Instant::now();
         for i in 0..n { let nb = ns[i % ns.len()]; a.apply_neighbor_and_update(nb); a.apply_neighbor_and_update(nb); }
-        println!("\n=== apply_and_update: {n} iters, {:?}/iter ===", t.elapsed() / n as u32);
+        println!("=== apply_and_update: {n} iters, {:?}/iter ===", t.elapsed() / n as u32);
     }
 
     #[test]

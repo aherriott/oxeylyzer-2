@@ -44,7 +44,7 @@ impl Analyzer {
         let mut best_neighbor: Option<crate::analyze::Neighbor> = None;
         for _ in 0..max_iterations {
             let diff = self.random_neighbor(&mut rng, &neighbors);
-            let new_score = self.test_neighbor(diff);
+            let new_score = self.score_neighbor(diff);
 
             if new_score < worst_score {
                 worst_score = new_score;
