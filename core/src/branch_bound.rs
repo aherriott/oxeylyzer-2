@@ -314,45 +314,44 @@ impl BranchBound {
         let c = self.chars_by_freq[depth];
         let num_available = available_positions.len();
 
-        // Try placing this character at each available position
+        // Order positions by score impact (best first) to find good solutions early.
+        // This tightens the bound faster, improving pruning at deeper levels.
+        if num_available > 1 {
+            let mut position_scores: Vec<(usize, i64)> = available_positions.iter()
+                .map(|&pos| {
+                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    let score = cache.score();
+                    cache.replace_key_fast(pos, key, EMPTY_KEY);
+                    (pos, score)
+                })
+                .collect();
+            position_scores.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+            for (i, &(pos, _)) in position_scores.iter().enumerate() {
+                available_positions[i] = pos;
+            }
+        }
+
         for i in 0..num_available {
             let pos = available_positions[i];
 
-            // Place the key
             cache.replace_key_fast(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
-
-            // Remove position from available by swap-removing (O(1), no allocation)
             available_positions.swap_remove(i);
 
-            // Update bound from top_layouts if we have enough
             let effective_bound = if top_layouts.len() >= top_layouts.capacity {
                 top_layouts.worst_score().unwrap_or(bound).max(bound)
             } else {
                 bound
             };
 
-            // Recurse
             self.search_recursive_limited(
-                cache,
-                depth + 1,
-                available_positions,
-                assignment,
-                effective_bound,
-                top_layouts,
-                stats,
-                max_depth,
+                cache, depth + 1, available_positions, assignment,
+                effective_bound, top_layouts, stats, max_depth,
             );
 
-            // Backtrack: restore the position
-            // swap_remove moved the last element to index i, so we need to
-            // push pos back and swap it to position i to restore order
             available_positions.push(pos);
             let last = available_positions.len() - 1;
             available_positions.swap(i, last);
-            // Now the element that was at `last` before swap_remove is back at `last`,
-            // and `pos` is back at `i`. But the order may differ from original.
-            // That's fine — B&B explores all orderings anyway.
 
             assignment.pop();
             cache.replace_key_fast(pos, key, EMPTY_KEY);
