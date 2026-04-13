@@ -1720,6 +1720,21 @@ impl TrigramCache {
         self.update_weighted_scores_for_key_change(pos, old_key, new_key, keys, tg_freq);
     }
 
+    /// Replace key — fast path. Updates running totals only (no weighted_score update).
+    /// score() remains valid. score_neighbor() becomes invalid.
+    /// Uses flat trigram array for cache-friendly access.
+    pub fn replace_key_fast(
+        &mut self,
+        pos: usize,
+        old_key: usize,
+        new_key: usize,
+        keys: &[usize],
+        tg_flat: &[i64],
+    ) {
+        let score_delta = self.compute_replace_delta_flat(pos, old_key, new_key, keys, None, tg_flat);
+        self.magic_rule_score_delta += score_delta;
+    }
+
     /// Speculative score for replacing a key. No mutation.
     #[inline]
     pub fn score_replace(

@@ -577,7 +577,7 @@ impl CachedLayout {
 
     // ==================== Mutation ====================
 
-    /// Replace key at position. Mutates state.
+    /// Replace key at position. Mutates state. Full update (slow, for init).
     #[inline]
     pub fn replace_key(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
         debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
@@ -590,6 +590,30 @@ impl CachedLayout {
         self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq);
         self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
         self.trigram.replace_key(pos, old_key, new_key, &self.keys, None, tg_freq);
+
+        self.keys[pos] = new_key;
+        if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
+            self.key_positions[old_key] = None;
+        }
+        if new_key != EMPTY_KEY && new_key < self.key_positions.len() {
+            self.key_positions[new_key] = Some(pos);
+        }
+    }
+
+    /// Replace key — fast path. Uses flat arrays, skips weighted_score update.
+    /// score() remains valid. score_neighbor() becomes invalid.
+    #[inline]
+    pub fn replace_key_fast(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
+        debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
+
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_flat = self.magic.tg_freq_flat();
+
+        self.sfb.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
+        self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq);
+        self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
+        self.trigram.replace_key_fast(pos, old_key, new_key, &self.keys, tg_flat);
 
         self.keys[pos] = new_key;
         if old_key != EMPTY_KEY && old_key < self.key_positions.len() {

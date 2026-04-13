@@ -201,7 +201,7 @@ impl BranchBound {
     }
 
     /// Create an empty CachedLayout and initialize keys_by_freq
-    fn create_empty_cache(&mut self) -> CachedLayout {
+    pub fn create_empty_cache(&mut self) -> CachedLayout {
         use crate::cached_layout::EMPTY_KEY;
 
         let mut cache = CachedLayout::new(&self.base_layout, self.data.clone(), &self.weights);
@@ -216,7 +216,7 @@ impl BranchBound {
         // Remove all keys to get empty positions
         for pos in 0..self.num_positions {
             let key = cache.get_key(pos);
-            cache.replace_key(pos, key, EMPTY_KEY);
+            cache.replace_key_fast(pos, key, EMPTY_KEY);
         }
         cache
     }
@@ -319,7 +319,7 @@ impl BranchBound {
             let pos = available_positions[i];
 
             // Place the key
-            cache.replace_key(pos, EMPTY_KEY, key);
+            cache.replace_key_fast(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
 
             // Remove position from available by swap-removing (O(1), no allocation)
@@ -355,7 +355,7 @@ impl BranchBound {
             // That's fine — B&B explores all orderings anyway.
 
             assignment.pop();
-            cache.replace_key(pos, key, EMPTY_KEY);
+            cache.replace_key_fast(pos, key, EMPTY_KEY);
         }
     }
 
@@ -513,7 +513,7 @@ impl BranchBound {
         for i in 0..num_available {
             let pos = available_positions[i];
 
-            cache.replace_key(pos, EMPTY_KEY, key);
+            cache.replace_key_fast(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
             available_positions.swap_remove(i);
 
@@ -534,7 +534,7 @@ impl BranchBound {
             available_positions.swap(i, last);
 
             assignment.pop();
-            cache.replace_key(pos, key, EMPTY_KEY);
+            cache.replace_key_fast(pos, key, EMPTY_KEY);
         }
     }
 
@@ -623,8 +623,8 @@ mod tests {
             println!("  {}: score={}, keys={:?}", i + 1, sol.score, sol.key_positions);
         }
 
-        assert!(stats.nodes_explored > 0);
-        assert!(stats.solutions_found > 0);
+        assert!(stats.nodes_visited > 0);
+        assert!(stats.solutions_found > 0.0);
         assert_eq!(stats.max_depth_reached, max_depth);
         assert!(results.len() <= top_k);
     }
@@ -655,6 +655,6 @@ mod tests {
         // With pruning, we should have pruned some nodes
         // (unless bound is too loose)
         println!("Prune rate: {:.2}%",
-            stats.nodes_pruned as f64 / stats.nodes_explored as f64 * 100.0);
+            stats.nodes_pruned as f64 / stats.nodes_visited as f64 * 100.0);
     }
 }
