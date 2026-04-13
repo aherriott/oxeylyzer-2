@@ -577,21 +577,53 @@ impl CachedLayout {
 
     // ==================== Lower Bound ====================
 
-    /// Compute a lower bound on the remaining cost from unplaced keys.
+    /// Compute a lower bound on the remaining cost by greedy completion.
+    /// Places each remaining key at its best available position (greedily),
+    /// then returns the difference between the resulting score and the current score.
+    /// This is a valid lower bound because the optimal placement can only be better
+    /// than or equal to the greedy placement.
     ///
-    /// Aggregates lower bounds from all sub-caches (SFB, stretch, scissors, trigrams).
-    /// Used by branch-and-bound search for early pruning.
-    pub fn lower_bound_remaining(&self, unplaced_keys: &[usize], available_positions: &[usize]) -> i64 {
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_flat = self.magic.tg_freq_flat();
+    /// Wait - this is actually an UPPER bound on the remaining cost (less negative
+    /// than optimal). For B&B we need a LOWER bound (more negative than optimal).
+    /// The greedy completion gives us a feasible solution whose score we can use
+    /// to TIGHTEN the bound, not for pruning the current node.
+    ///
+    /// For pruning, we use: if current_score < bound, prune.
+    /// The greedy completion helps by finding better solutions faster.
+    pub fn greedy_completion_score(&self, unplaced_keys: &[usize], available_positions: &[usize]) -> i64 {
+        // Clone the cache state so we can mutate it
+        let mut cache = self.clone();
+        let mut avail = available_positions.to_vec();
 
-        let sfb = self.sfb.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq, sg_freq);
-        let stretch = self.stretch.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq);
-        let scissors = self.scissors.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq, sg_freq);
-        let trigram = self.trigram.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, tg_flat);
+        let bg_freq = cache.magic.bg_freq_flat().to_vec();
+        let sg_freq = cache.magic.sg_freq_flat().to_vec();
+        let tg_flat = cache.magic.tg_freq_flat().to_vec();
 
-        sfb + stretch + scissors + trigram
+        for &key in unplaced_keys {
+            if avail.is_empty() { break; }
+            let nk = cache.trigram.num_keys();
+            if key >= nk { continue; }
+
+            // Find the best position for this key
+            let mut best_pos = avail[0];
+            let mut best_score = i64::MIN;
+
+            for &pos in &avail {
+                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                let score = cache.score();
+                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                if score > best_score {
+                    best_score = score;
+                    best_pos = pos;
+                }
+            }
+
+            // Place at best position
+            cache.replace_key_fast(best_pos, EMPTY_KEY, key);
+            avail.retain(|&p| p != best_pos);
+        }
+
+        cache.score()
     }
 
     // ==================== Mutation ====================

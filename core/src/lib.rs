@@ -5,6 +5,7 @@ pub mod analyze;
 pub mod analyzer_data;
 pub mod branch_bound;
 pub mod bb_bench;
+pub mod bb_diag;
 pub mod cached_layout;
 pub mod char_mapping;
 pub mod corpus_cleaner;

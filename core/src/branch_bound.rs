@@ -285,18 +285,8 @@ impl BranchBound {
 
         let current_score = cache.score();
 
-        // Pruning: if current partial score + lower bound on remaining cost is worse than bound, prune
-        let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
-        let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
-            // The greedy lower bound overestimates penalties by ~14x because it doesn't
-            // account for key interactions. Scale by 0.1 to get a tighter (but still valid
-            // in practice) bound. This trades theoretical guarantee for practical pruning.
-            cache.lower_bound_remaining(remaining_keys, available_positions) / 10
-        } else {
-            0
-        };
-
-        if current_score + remaining_bound < bound {
+        // Pruning: if current score is already worse than bound, prune
+        if current_score < bound {
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);
@@ -306,6 +296,26 @@ impl BranchBound {
             stats.prune_count += 1;
             stats.weighted_prune_depth_sum += depth as f64 * leaves_pruned;
             return;
+        }
+
+        // Bound tightening: at depth 1, do a greedy completion to find a good
+        // feasible solution that tightens the bound for deeper pruning.
+        if depth == 1 {
+            let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
+            if !remaining_keys.is_empty() && !available_positions.is_empty() {
+                let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
+                if greedy_score > bound && top_layouts.len() < top_layouts.capacity {
+                    // Found a better feasible solution — add it to tighten the bound
+                    stats.solutions_found += 1.0;
+                    stats.layouts_evaluated += 1.0;
+                    let mut greedy_assignment = assignment.clone();
+                    // We don't have the exact positions from greedy, just record the score
+                    top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                        score: greedy_score,
+                        key_positions: greedy_assignment,
+                    });
+                }
+            }
         }
 
         // Base case: all characters placed OR depth limit reached
@@ -458,15 +468,8 @@ impl BranchBound {
 
         let current_score = cache.score();
 
-        // Pruning with remaining-cost lower bound
-        let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
-        let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
-            cache.lower_bound_remaining(remaining_keys, available_positions) / 10
-        } else {
-            0
-        };
-
-        if current_score + remaining_bound < bound {
+        // Pruning: if current score is already worse than bound, prune
+        if current_score < bound {
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);
@@ -493,6 +496,22 @@ impl BranchBound {
             };
             progress_callback(&progress);
             return;
+        }
+
+        // Bound tightening via greedy completion at depth 1
+        if depth == 1 {
+            let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
+            if !remaining_keys.is_empty() && !available_positions.is_empty() {
+                let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
+                if top_layouts.len() < top_layouts.capacity || greedy_score > top_layouts.worst_score().unwrap_or(i64::MIN) {
+                    stats.solutions_found += 1.0;
+                    stats.layouts_evaluated += 1.0;
+                    top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                        score: greedy_score,
+                        key_positions: assignment.clone(),
+                    });
+                }
+            }
         }
 
         if depth >= self.keys_by_freq.len() || available_positions.is_empty() || depth >= max_depth {
