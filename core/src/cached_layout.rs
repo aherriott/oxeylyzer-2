@@ -556,6 +556,7 @@ impl CachedLayout {
         }
 
         // Trigrams: iterate over all combos (first position only to avoid triple-counting)
+        let mut total_tg_freq: i64 = 0;
         for pos in 0..self.num_positions {
             let key = self.keys[pos];
             if key >= nk { continue; }
@@ -565,8 +566,11 @@ impl CachedLayout {
                 if kb >= nk || kc >= nk { continue; }
                 let freq = tg_flat[key * nk2 + kb * nk + kc];
                 trigram_score += freq * combo.weight;
+                total_tg_freq += freq;
             }
         }
+        // Apply the offset: subtract max_weight * total_freq so all trigram contributions are ≤ 0
+        trigram_score -= self.trigram.max_weight() * total_tg_freq;
 
         sfb_score + stretch_score + scissors_score + trigram_score
     }

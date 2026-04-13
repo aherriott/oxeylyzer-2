@@ -108,6 +108,9 @@ pub struct TrigramCache {
     onehandin_weight: i64,
     onehandout_weight: i64,
 
+    /// Maximum trigram weight — used to offset all trigram scores so they're ≤ 0.
+    max_trigram_weight: i64,
+
     /// Finger assignments for trigram type lookup (as usize indices)
     fingers: Vec<usize>,
 
@@ -253,6 +256,7 @@ impl TrigramCache {
             redirect_weight: 0,
             onehandin_weight: 0,
             onehandout_weight: 0,
+            max_trigram_weight: 0,
             // Store finger indices
             fingers: finger_indices,
             // Pre-computed weighted scores (initialized lazily)
@@ -286,6 +290,11 @@ impl TrigramCache {
         self.redirect_weight = weights.redirect;
         self.onehandin_weight = weights.onehandin;
         self.onehandout_weight = weights.onehandout;
+
+        self.max_trigram_weight = *[
+            self.inroll_weight, self.outroll_weight, self.alternate_weight,
+            self.redirect_weight, self.onehandin_weight, self.onehandout_weight,
+        ].iter().max().unwrap_or(&0);
 
         // Update pre-computed weights on all combos
         let get_w = |tt: TrigramType| -> i64 {
@@ -1219,12 +1228,23 @@ impl TrigramCache {
     ///
     /// Requirements: 6.1, 6.2
     pub fn score(&self) -> i64 {
+        // Trigram score uses offset weights: each type's weight is reduced by max_weight
+        // so that the best trigram type contributes 0 and all others are negative.
+        // This ensures every key placement makes the score worse (more negative),
+        // enabling branch-and-bound pruning.
+        //
+        // The offset is: -max_weight * total_trigram_freq
+        // where total_trigram_freq = sum of all per-type frequencies.
+        let total_freq = self.inroll_freq + self.outroll_freq + self.alternate_freq
+            + self.redirect_freq + self.onehandin_freq + self.onehandout_freq;
+
         self.inroll_freq * self.inroll_weight
             + self.outroll_freq * self.outroll_weight
             + self.alternate_freq * self.alternate_weight
             + self.redirect_freq * self.redirect_weight
             + self.onehandin_freq * self.onehandin_weight
             + self.onehandout_freq * self.onehandout_weight
+            - self.max_trigram_weight * total_freq
             + self.magic_rule_score_delta
     }
 
@@ -1243,6 +1263,11 @@ impl TrigramCache {
     #[inline]
     pub fn num_keys(&self) -> usize {
         self.num_keys
+    }
+
+    #[inline]
+    pub fn max_weight(&self) -> i64 {
+        self.max_trigram_weight
     }
 
     /// For each position, return the set of OTHER positions referenced by its trigram combos.
@@ -1842,6 +1867,7 @@ impl TrigramCache {
         let nk2 = nk * nk;
         let old_valid = old_key < nk;
         let new_valid = new_key < nk;
+        let max_w = self.max_trigram_weight;
 
         let mut score_delta: i64 = 0;
 
@@ -1859,7 +1885,8 @@ impl TrigramCache {
             let of = if old_valid && okb < nk && okc < nk { tg[old_key * nk2 + okb * nk + okc] } else { 0 };
             let nf = if new_valid && nkb < nk && nkc < nk { tg[new_key * nk2 + nkb * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
-            score_delta += (nf - of) * combo.weight;
+            let fd = nf - of;
+            score_delta += fd * combo.weight - fd * max_w;
         }
 
         // Case 2: pos is middle
@@ -1877,7 +1904,8 @@ impl TrigramCache {
             let of = if old_valid && okc < nk { tg[ka * nk2 + old_key * nk + okc] } else { 0 };
             let nf = if new_valid && nkc < nk { tg[ka * nk2 + new_key * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
-            score_delta += (nf - of) * combo.weight;
+            let fd = nf - of;
+            score_delta += fd * combo.weight - fd * max_w;
         }
 
         // Case 3: pos is last
@@ -1893,7 +1921,8 @@ impl TrigramCache {
 
             let of = if old_valid { tg[ka * nk2 + kb * nk + old_key] } else { 0 };
             let nf = if new_valid { tg[ka * nk2 + kb * nk + new_key] } else { 0 };
-            score_delta += (nf - of) * combo.weight;
+            let fd = nf - of;
+            score_delta += fd * combo.weight - fd * max_w;
         }
 
         score_delta
@@ -1913,66 +1942,59 @@ impl TrigramCache {
         let nk2 = nk * nk;
         let ka_valid = key_a < nk;
         let kb_valid = key_b < nk;
+        let max_w = self.max_trigram_weight;
         let mut sd: i64 = 0;
 
-        // Case 1: pos_a is first, pos_b appears
         for combo in &self.trigram_combos_per_key[pos_a] {
             let pb = combo.pos_b;
             let pc = combo.pos_c;
             if pb != pos_b && pc != pos_b { continue; }
-
-            let ok2 = keys[pb];
-            let ok3 = keys[pc];
+            let ok2 = keys[pb]; let ok3 = keys[pc];
             let nk1 = key_b;
             let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
             let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
-
             if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
             let of = if ka_valid { tg[key_a * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if kb_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
-            sd += (nf - of) * combo.weight;
+            let fd = nf - of;
+            sd += fd * combo.weight - fd * max_w;
         }
 
-        // Case 2: pos_b is first, pos_a appears
         for combo in &self.trigram_combos_per_key[pos_b] {
             let pb = combo.pos_b;
             let pc = combo.pos_c;
             if pb != pos_a && pc != pos_a { continue; }
-
-            let ok2 = keys[pb];
-            let ok3 = keys[pc];
+            let ok2 = keys[pb]; let ok3 = keys[pc];
             let nk1 = key_a;
             let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
             let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
-
             if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
             let of = if kb_valid { tg[key_b * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if ka_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
-            sd += (nf - of) * combo.weight;
+            let fd = nf - of;
+            sd += fd * combo.weight - fd * max_w;
         }
 
-        // Case 3: pos_a is mid, pos_b is end (neither is first)
         for combo in &self.trigram_combos_mid[pos_a] {
-            let pa = combo.pos_a;
-            let pc = combo.pos_c;
+            let pa = combo.pos_a; let pc = combo.pos_c;
             if pa == pos_a || pc != pos_b || pa == pos_b { continue; }
             let fk = keys[pa];
             if fk >= nk { continue; }
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
-            sd += (nf - of) * combo.weight;
+            let fd = nf - of;
+            sd += fd * combo.weight - fd * max_w;
         }
 
-        // Case 4: pos_b is mid, pos_a is end (neither is first)
         for combo in &self.trigram_combos_mid[pos_b] {
-            let pa = combo.pos_a;
-            let pc = combo.pos_c;
+            let pa = combo.pos_a; let pc = combo.pos_c;
             if pa == pos_b || pc != pos_a || pa == pos_a { continue; }
             let fk = keys[pa];
             if fk >= nk { continue; }
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
-            sd += (nf - of) * combo.weight;
+            let fd = nf - of;
+            sd += fd * combo.weight - fd * max_w;
         }
 
         sd
