@@ -7,6 +7,7 @@
 use crate::cached_layout::{CachedLayout, EMPTY_KEY};
 use crate::data::Data;
 use crate::layout::Layout;
+use crate::optimization::RolloutPolicy;
 use crate::weights::Weights;
 use crate::types::CacheKey;
 use nanorand::Rng;
@@ -103,15 +104,14 @@ impl MctsSearch {
         }
     }
 
-    /// Run MCTS for a given number of iterations with SA rollouts + optional greedy polish.
-    /// `max_tree_depth`: how many keys MCTS decides via tree (rest go to SA). 0 = full depth.
+    /// Run MCTS with a configurable rollout policy.
+    /// `max_tree_depth`: how many keys MCTS decides via tree (rest go to rollout policy). 0 = full depth.
     /// Progress callback returns true to request early stop.
     pub fn search(
         &mut self,
         iterations: u64,
         exploration_constant: f64,
-        sa_iterations: usize,
-        greedy_depth: usize,
+        policy: &RolloutPolicy,
         max_tree_depth: usize,
         mut progress: impl FnMut(u64, u64, i64, f64) -> bool,
     ) {
@@ -211,61 +211,10 @@ impl MctsSearch {
                 rollout_positions.push(pos);
             }
 
-            // SA polish: swap random pairs among rollout positions (all filled).
-            // Path positions (MCTS decisions) are pinned and never swapped.
-            if rollout_positions.len() >= 2 && sa_iterations > 0 {
-                // Build neighbor list for rollout positions only
-                let mut sa_neighbors: Vec<(usize, usize)> = Vec::new();
-                for i in 0..rollout_positions.len() {
-                    for j in (i+1)..rollout_positions.len() {
-                        sa_neighbors.push((rollout_positions[i], rollout_positions[j]));
-                    }
-                }
+            // Run rollout policy (SA, greedy, etc.) with MCTS path as pins
+            cache.optimize(policy, &path);
 
-                let initial_temp: f64 = 10.0;
-                let final_temp: f64 = 1E-5;
-                let cooling_rate = (final_temp / initial_temp).powf(1.0 / sa_iterations as f64);
-                let mut temperature = initial_temp;
-                let mut current_score = cache.compute_score();
-                let mut worst_score = current_score;
-
-                for _ in 0..sa_iterations {
-                    let idx = rng.generate_range(0..sa_neighbors.len());
-                    let (pos_a, pos_b) = sa_neighbors[idx];
-
-                    // Speculative score: swap_keys_only + compute_score (no running total update)
-                    cache.swap_keys_only(pos_a, pos_b);
-                    let new_score = cache.compute_score();
-
-                    if new_score < worst_score {
-                        worst_score = new_score;
-                    }
-
-                    if new_score > current_score {
-                        current_score = new_score;
-                        // Keep the swap
-                    } else {
-                        let delta = (new_score - current_score) as f64 / worst_score.abs() as f64;
-                        let ap = (delta / temperature).exp();
-                        let r: f64 = rng.generate_range(0u64..u64::MAX) as f64 / u64::MAX as f64;
-                        if ap > r {
-                            current_score = new_score;
-                            // Keep the swap
-                        } else {
-                            cache.swap_keys_only(pos_a, pos_b); // revert
-                        }
-                    }
-
-                    temperature *= cooling_rate;
-                }
-            }
-
-            // Greedy depth-N polish after SA (pins = MCTS path positions)
-            if greedy_depth > 0 {
-                cache.greedy_improve_depth_n(&path, greedy_depth);
-            }
-
-            let final_score = cache.compute_score();
+            let final_score = cache.score();
             self.total_rollouts += 1;
 
             // Build actual key->position mapping after SA swaps.

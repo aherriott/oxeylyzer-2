@@ -136,11 +136,24 @@ impl Repl {
     }
 
     fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>) -> Result<()> {
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+
         let layout = self.layout(name)?.clone();
         let count = count.unwrap_or(10);
         let pins = match pin_chars {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
+        };
+
+        let policy = RolloutPolicy {
+            steps: vec![
+                OptStep::SA {
+                    initial_temp: 10.0,
+                    final_temp: 1E-5,
+                    iterations: 1_000_000,
+                },
+                OptStep::Greedy,
+            ],
         };
 
         let start = std::time::Instant::now();
@@ -150,11 +163,12 @@ impl Repl {
         for i in 0..count {
             let random_layout = layout.random_with_pins(&pins);
 
-            // Simulated annealing followed by greedy optimization
-            self.a.use_layout(&random_layout, &pins);
-            let (annealed_layout, _) =
-                self.a.annealing_improve(random_layout, &pins, 10.0, 1E-5, 1_000_000);
-            let (final_layout, final_score) = self.a.greedy_improve(&annealed_layout, &pins);
+            // Initialize cache and run policy
+            let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                &random_layout, self.a.data().clone(), self.a.weights(),
+            );
+            let final_score = cache.optimize(&policy, &pins);
+            let final_layout = cache.to_layout();
 
             results.push((final_layout, final_score));
 
@@ -538,6 +552,7 @@ impl Repl {
 
     fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>, greedy_depth: Option<usize>, tree_depth: Option<usize>) -> Result<()> {
         use oxeylyzer_core::mcts::MctsSearch;
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
@@ -549,10 +564,29 @@ impl Repl {
         let tree_depth = tree_depth.unwrap_or(0);
         let num_pos = layout.keyboard.len();
 
+        // Build rollout policy from flags
+        let mut steps = Vec::new();
+        if sa_iters > 0 {
+            steps.push(OptStep::SA {
+                initial_temp: 10.0,
+                final_temp: 1E-5,
+                iterations: sa_iters,
+            });
+        }
+        match greedy_depth {
+            0 => {} // no greedy
+            1 => steps.push(OptStep::Greedy), // fast hill-climb
+            n => steps.push(OptStep::GreedyDepthN(n)), // depth-N search
+        }
+        if steps.is_empty() {
+            steps.push(OptStep::Greedy);
+        }
+        let policy = RolloutPolicy { steps };
+
         let td_display = if tree_depth == 0 { format!("all {}", num_pos) } else { format!("{}", tree_depth) };
         let iter_display = if iterations == u64::MAX { "∞".to_string() } else { format!("{}", iterations) };
-        println!("MCTS: {} positions, {} rollouts, exploration={:.2}, SA={}/rollout, tree depth={}, greedy={}",
-            num_pos, iter_display, explore, sa_iters, td_display, greedy_depth);
+        println!("MCTS: {} positions, {} rollouts, exploration={:.2}, tree depth={}, policy={:?}",
+            num_pos, iter_display, explore, td_display, policy.steps);
         if iterations == u64::MAX {
             println!("  (Ctrl+C to stop)");
         }
@@ -568,7 +602,7 @@ impl Repl {
 
         let mut search = MctsSearch::new(layout, self.a.data().clone(), self.a.weights().clone(), 10);
 
-        search.search(iterations, explore, sa_iters, greedy_depth, tree_depth, |_iter, total, best, avg| {
+        search.search(iterations, explore, &policy, tree_depth, |_iter, total, best, avg| {
             if last_print.elapsed().as_millis() > 500 {
                 last_print = std::time::Instant::now();
                 let elapsed = start.elapsed().as_secs_f64();
