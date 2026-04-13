@@ -103,12 +103,15 @@ impl MctsSearch {
         }
     }
 
-    /// Run MCTS for a given number of iterations with SA rollouts.
+    /// Run MCTS for a given number of iterations with SA rollouts + optional greedy polish.
+    /// `max_tree_depth`: how many keys MCTS decides via tree (rest go to SA). 0 = full depth.
     pub fn search(
         &mut self,
         iterations: u64,
         exploration_constant: f64,
         sa_iterations: usize,
+        greedy_depth: usize,
+        max_tree_depth: usize,
         mut progress: impl FnMut(u64, u64, i64, f64),
     ) {
         let mut cache = CachedLayout::new(&self.layout, self.data.clone(), &self.weights);
@@ -130,6 +133,7 @@ impl MctsSearch {
 
         let mut root = MctsNode::new(usize::MAX); // root has no position
         let num_keys = self.keys_by_freq.len().min(self.num_positions);
+        let tree_depth = if max_tree_depth == 0 { num_keys } else { max_tree_depth.min(num_keys) };
         let mut rng = nanorand::WyRand::new();
 
         for iter in 0..iterations {
@@ -140,8 +144,8 @@ impl MctsSearch {
             let mut node = &mut root;
             let mut depth = 0;
 
-            // Place keys along the selected path
-            while node.expanded && !node.children.is_empty() && depth < num_keys {
+            // Place keys along the selected path (up to tree depth limit)
+            while node.expanded && !node.children.is_empty() && depth < tree_depth {
                 // Pick child with best UCB1
                 let parent_visits = node.visits;
                 let best_child_idx = node.children.iter()
@@ -164,8 +168,8 @@ impl MctsSearch {
                 depth += 1;
             }
 
-            // EXPAND: if this node hasn't been expanded, create children
-            if !node.expanded && depth < num_keys {
+            // EXPAND: if this node hasn't been expanded and we're within tree depth, create children
+            if !node.expanded && depth < tree_depth {
                 let mut occ = vec![false; self.num_positions];
                 for &p in &path { occ[p] = true; }
 
@@ -206,10 +210,16 @@ impl MctsSearch {
                 rollout_positions.push(pos);
             }
 
-            // SA polish: swap random unpinned key pairs using swap_keys_only + compute_score
-            // Only swap among rollout positions (MCTS path positions are pinned)
+            // SA polish: swap random pairs among rollout positions (all filled).
+            // Path positions (MCTS decisions) are pinned and never swapped.
             if rollout_positions.len() >= 2 && sa_iterations > 0 {
-                let mut current_score = cache.compute_score();
+                let initial_temp: f64 = 10.0;
+                let final_temp: f64 = 1E-5;
+                let cooling_rate = (final_temp / initial_temp).powf(1.0 / sa_iterations as f64);
+                let mut temperature = initial_temp;
+                let mut current_score = cache.score();
+                let mut worst_score = current_score;
+
                 for _ in 0..sa_iterations {
                     let a = rng.generate_range(0..rollout_positions.len());
                     let mut b = rng.generate_range(0..rollout_positions.len() - 1);
@@ -218,27 +228,53 @@ impl MctsSearch {
                     let pos_a = rollout_positions[a];
                     let pos_b = rollout_positions[b];
 
-                    cache.swap_keys_only(pos_a, pos_b);
-                    let new_score = cache.compute_score();
+                    // Use swap_keys (updates running totals) so score() is valid
+                    cache.swap_keys(pos_a, pos_b);
+                    let new_score = cache.score();
+
+                    if new_score < worst_score {
+                        worst_score = new_score;
+                    }
 
                     if new_score > current_score {
                         current_score = new_score;
                     } else {
-                        cache.swap_keys_only(pos_a, pos_b); // revert
+                        let delta = (new_score - current_score) as f64 / worst_score.abs() as f64;
+                        let ap = (delta / temperature).exp();
+                        let r: f64 = rng.generate_range(0u64..u64::MAX) as f64 / u64::MAX as f64;
+                        if ap > r {
+                            current_score = new_score;
+                        } else {
+                            cache.swap_keys(pos_a, pos_b); // revert
+                        }
                     }
+
+                    temperature *= cooling_rate;
                 }
             }
 
-            let final_score = cache.compute_score();
+            // Greedy depth-N polish after SA (pins = MCTS path positions)
+            if greedy_depth > 0 {
+                cache.greedy_improve_depth_n(&path, greedy_depth);
+            }
+
+            let final_score = cache.score();
             self.total_rollouts += 1;
 
-            let mut full_positions = path.clone();
-            full_positions.extend_from_slice(&rollout_positions);
-            self.record_layout(final_score, &full_positions);
+            // Build actual key->position mapping after SA swaps.
+            // Path positions are unchanged by SA, rollout keys may have moved.
+            let num_placed = path.len() + rollout_positions.len();
+            let mut actual_positions = Vec::with_capacity(num_placed);
+            for d in 0..num_placed {
+                let key = self.keys_by_freq[d];
+                actual_positions.push(cache.get_pos(key).unwrap_or(0));
+            }
+            self.record_layout(final_score, &actual_positions);
 
-            // Undo rollout
-            for (i, &pos) in rollout_positions.iter().enumerate().rev() {
-                let key = self.keys_by_freq[depth + i];
+            // Undo rollout — after SA swaps, keys may have moved between
+            // rollout positions, so read the actual key at each position.
+            for &pos in rollout_positions.iter().rev() {
+                let key = cache.get_key(pos);
                 cache.replace_key_fast(pos, key, EMPTY_KEY);
             }
 

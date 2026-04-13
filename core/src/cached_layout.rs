@@ -832,6 +832,74 @@ impl CachedLayout {
         }
     }
 
+    /// Greedy depth-N improvement directly on the cache (no use_layout needed).
+    /// `pins` is a set of positions that must not be swapped.
+    /// Returns the final score after improvement.
+    pub fn greedy_improve_depth_n(&mut self, pins: &[usize], depth: usize) -> i64 {
+        // Build neighbor list excluding pinned positions
+        let pin_set: fxhash::FxHashSet<usize> = pins.iter().copied().collect();
+        let neighbors: Vec<Neighbor> = self.neighbors.iter()
+            .filter(|n| match n {
+                Neighbor::KeySwap(PosPair(a, b)) => !pin_set.contains(a) && !pin_set.contains(b),
+                Neighbor::MagicRule(_) => false, // skip magic for rollout polish
+            })
+            .copied()
+            .collect();
+
+        let mut diffs = vec![Neighbor::default(); depth];
+        let mut cur_best = self.score();
+
+        while Self::best_neighbor_recursive(self, &neighbors, depth, &mut diffs, &mut cur_best) {
+            for &neighbor in &diffs {
+                self.apply_neighbor(neighbor);
+            }
+        }
+
+        self.score()
+    }
+
+    fn best_neighbor_recursive(
+        cache: &mut CachedLayout,
+        neighbors: &[Neighbor],
+        depth: usize,
+        diffs: &mut Vec<Neighbor>,
+        cur_best: &mut i64,
+    ) -> bool {
+        if depth > 0 {
+            let mut return_best = false;
+            for &neighbor in neighbors {
+                match neighbor {
+                    Neighbor::KeySwap(PosPair(a, b)) => cache.swap_keys_only(a, b),
+                    _ => { cache.apply_neighbor(neighbor); }
+                }
+
+                let best = Self::best_neighbor_recursive(cache, neighbors, depth - 1, diffs, cur_best);
+
+                match neighbor {
+                    Neighbor::KeySwap(PosPair(a, b)) => cache.swap_keys_only(a, b),
+                    _ => {
+                        let revert = cache.get_revert_neighbor(neighbor);
+                        cache.apply_neighbor(revert);
+                    }
+                }
+
+                if best {
+                    diffs[depth - 1] = neighbor;
+                    return_best = true;
+                }
+            }
+            return_best
+        } else {
+            let score = cache.compute_score();
+            if score > *cur_best {
+                *cur_best = score;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
     // NOTE: affected_grams() method has been removed as part of the const-freq-analyzers refactoring (Task 1.3).
     // The affected_grams field and DeltaGram types have been removed since frequencies
     // will be constant after initialization.

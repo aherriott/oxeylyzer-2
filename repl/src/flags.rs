@@ -80,8 +80,12 @@ xflags::xflags! {
             optional -i, --iterations iterations: usize
             /// Exploration constant. Defaults to 1.41.
             optional -c, --explore explore: f64
-            /// SA iterations per rollout. Defaults to 10000.
+            /// SA iterations per rollout. Defaults to 1000.
             optional -s, --sa sa_iters: usize
+            /// Greedy polish depth after SA. Defaults to 0 (off).
+            optional -g, --greedy greedy_depth: usize
+            /// Tree depth limit (keys decided by MCTS). 0 = all keys. Defaults to 0.
+            optional -d, --tree-depth tree_depth: usize
         }
         /// Quit the analyzer
         cmd q quit {}
