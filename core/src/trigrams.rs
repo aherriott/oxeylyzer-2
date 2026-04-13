@@ -1235,6 +1235,16 @@ impl TrigramCache {
         (first, mid, end)
     }
 
+    #[inline]
+    pub fn combos_first(&self, pos: usize) -> &[TrigramCombo] {
+        &self.trigram_combos_per_key[pos]
+    }
+
+    #[inline]
+    pub fn num_keys(&self) -> usize {
+        self.num_keys
+    }
+
     /// For each position, return the set of OTHER positions referenced by its trigram combos.
     pub fn combo_counts_with_positions(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
         let first: Vec<Vec<usize>> = self.trigram_combos_per_key.iter().map(|combos| {

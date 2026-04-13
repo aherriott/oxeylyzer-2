@@ -118,6 +118,16 @@ impl StretchCache {
         self.total * self.stretch_weight + self.magic_rule_score_delta
     }
 
+    #[inline]
+    pub fn pairs_for_pos(&self, pos: usize) -> &[StretchPair] {
+        &self.stretch_pairs_per_key[pos]
+    }
+
+    #[inline]
+    pub fn weight(&self) -> i64 {
+        self.stretch_weight
+    }
+
     pub fn stats(&self, stats: &mut Stats, bigram_total: f64) {
         stats.stretches = self.total as f64 / (bigram_total * 100.0);
     }

@@ -467,6 +467,15 @@ impl ScissorsCache {
         self.half_scissors_skip_weight = weights.half_scissors_skip;
     }
 
+    #[inline]
+    pub fn full_weight(&self) -> i64 { self.full_scissors_weight }
+    #[inline]
+    pub fn full_skip_weight(&self) -> i64 { self.full_scissors_skip_weight }
+    #[inline]
+    pub fn half_weight(&self) -> i64 { self.half_scissors_weight }
+    #[inline]
+    pub fn half_skip_weight(&self) -> i64 { self.half_scissors_skip_weight }
+
     /// Compute the score delta for replacing a key at a position.
     ///
     /// This is a helper function used by `replace_key()` and `key_swap()`. It computes

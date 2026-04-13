@@ -474,9 +474,101 @@ impl CachedLayout {
         }
     }
 
+    /// Swap only the keys array entries. O(1). Does NOT update sub-cache running totals.
+    /// score() will be INVALID after this. Use compute_score() for the correct score.
+    #[inline]
+    pub fn swap_keys_only(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        self.keys.swap(pos_a, pos_b);
+        // Update key_positions
+        let key_a = self.keys[pos_a]; // after swap
+        let key_b = self.keys[pos_b];
+        if key_a < self.key_positions.len() {
+            self.key_positions[key_a] = Some(pos_a);
+        }
+        if key_b < self.key_positions.len() {
+            self.key_positions[key_b] = Some(pos_b);
+        }
+    }
+
     /// Rebuild trigram weighted_score arrays from current state.
     pub fn update_scores(&mut self) {
         self.trigram.init_weighted_scores(&self.keys, self.magic.tg_freq());
+    }
+
+    /// Compute the full score from scratch using current keys and frequency tables.
+    /// Does not depend on sub-cache running totals. O(pairs + combos).
+    pub fn compute_score(&self) -> i64 {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_flat = self.magic.tg_freq_flat();
+        let nk = self.trigram.num_keys();
+        let nk2 = nk * nk;
+
+        let mut sfb_score: i64 = 0;
+        let mut stretch_score: i64 = 0;
+        let mut scissors_score: i64 = 0;
+        let mut trigram_score: i64 = 0;
+
+        // SFB: iterate over all same-finger pairs
+        for pos in 0..self.num_positions {
+            let key = self.keys[pos];
+            if key >= nk { continue; }
+            for sf in self.sfb.pairs_for_pos(pos) {
+                let other_key = self.keys[sf.other_pos];
+                if other_key >= nk { continue; }
+                let bg = bg_freq[key * nk + other_key];
+                let sg = sg_freq[key * nk + other_key];
+                sfb_score += bg * sf.dist * self.sfb.sfb_weight_for_finger(sf.finger)
+                    + sg * sf.dist * self.sfb.sfs_weight_for_finger(sf.finger);
+            }
+        }
+
+        // Stretch: iterate over all stretch pairs
+        for pos in 0..self.num_positions {
+            let key = self.keys[pos];
+            if key >= nk { continue; }
+            for sp in self.stretch.pairs_for_pos(pos) {
+                let other_key = self.keys[sp.other_pos];
+                if other_key >= nk { continue; }
+                let bg = bg_freq[key * nk + other_key];
+                stretch_score += bg * sp.dist;
+            }
+        }
+        stretch_score *= self.stretch.weight();
+
+        // Scissors: iterate over all scissor pairs
+        for pos in 0..self.num_positions {
+            let key = self.keys[pos];
+            if key >= nk { continue; }
+            for sp in self.scissors.get_scissor_pairs(pos) {
+                let other_key = self.keys[sp.other_pos];
+                if other_key >= nk { continue; }
+                let bg = bg_freq[key * nk + other_key];
+                let sg = sg_freq[key * nk + other_key];
+                if sp.is_full {
+                    scissors_score += bg * sp.severity * self.scissors.full_weight()
+                        + sg * sp.severity * self.scissors.full_skip_weight();
+                } else {
+                    scissors_score += bg * sp.severity * self.scissors.half_weight()
+                        + sg * sp.severity * self.scissors.half_skip_weight();
+                }
+            }
+        }
+
+        // Trigrams: iterate over all combos (first position only to avoid triple-counting)
+        for pos in 0..self.num_positions {
+            let key = self.keys[pos];
+            if key >= nk { continue; }
+            for combo in self.trigram.combos_first(pos) {
+                let kb = self.keys[combo.pos_b];
+                let kc = self.keys[combo.pos_c];
+                if kb >= nk || kc >= nk { continue; }
+                let freq = tg_flat[key * nk2 + kb * nk + kc];
+                trigram_score += freq * combo.weight;
+            }
+        }
+
+        sfb_score + stretch_score + scissors_score + trigram_score
     }
 
     // ==================== Mutation ====================

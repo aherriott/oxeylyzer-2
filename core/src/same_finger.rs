@@ -122,6 +122,21 @@ impl SFCache {
         self.total_score + self.magic_rule_score_delta
     }
 
+    #[inline]
+    pub fn pairs_for_pos(&self, pos: usize) -> &[SfPair] {
+        &self.sf_pairs_per_key[pos]
+    }
+
+    #[inline]
+    pub fn sfb_weight_for_finger(&self, finger: usize) -> i64 {
+        self.sfb_finger_weights[finger]
+    }
+
+    #[inline]
+    pub fn sfs_weight_for_finger(&self, finger: usize) -> i64 {
+        self.sfs_finger_weights[finger]
+    }
+
     pub fn stats(&self, stats: &mut Stats, bigram_total: f64, skipgram_total: f64) {
         let total_sfb: i64 = self.sfb_freq_per_finger.iter().sum();
         let total_sfs: i64 = self.sfs_freq_per_finger.iter().sum();

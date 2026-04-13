@@ -66,4 +66,13 @@ mod tests {
         println!("\n=== update_scores: {n} iters, {:?}/iter ===", t.elapsed() / n);
     }
 
+    #[test]
+    fn verify_compute_score() {
+        let (mut a, l) = make();
+        a.use_layout(&l, &[]);
+        let score = a.score();
+        let computed = a.compute_score();
+        println!("\n=== score()={score}, compute_score()={computed} ===");
+        assert_eq!(score, computed, "compute_score must match score()");
+    }
 }

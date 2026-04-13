@@ -1,6 +1,6 @@
 use crate::{
     analyze::{Analyzer, Neighbor},
-    layout::Layout,
+    layout::{Layout, PosPair},
 };
 
 impl Analyzer {
@@ -109,19 +109,24 @@ impl Analyzer {
         if depth > 0 {
             let mut return_best = false;
             for &neighbor in neighbors {
-                // Get the revert neighbor BEFORE applying (needs current state)
-                let revert = self.get_revert_neighbor(neighbor);
-
-                // Apply the neighbor
-                self.apply_neighbor(neighbor);
+                // Swap keys only — O(1), no sub-cache updates
+                match neighbor {
+                    Neighbor::KeySwap(PosPair(a, b)) => self.swap_only(a, b),
+                    _ => { self.apply_neighbor(neighbor); }
+                }
 
                 // Recurse
                 let best = self.best_neighbor_recursive(neighbors, depth - 1, diffs, cur_best);
 
-                // Revert the neighbor
-                self.apply_neighbor(revert);
+                // Revert — KeySwap is self-inverse
+                match neighbor {
+                    Neighbor::KeySwap(PosPair(a, b)) => self.swap_only(a, b),
+                    _ => {
+                        let revert = self.get_revert_neighbor(neighbor);
+                        self.apply_neighbor(revert);
+                    }
+                }
 
-                // This chain is the current known best. Update diffs
                 if best {
                     diffs[depth - 1] = neighbor;
                     return_best = true;
@@ -129,9 +134,9 @@ impl Analyzer {
             }
             return_best
         } else {
-            let score = self.score();
+            // Leaf: compute score from scratch
+            let score = self.compute_score();
             if score > *cur_best {
-                // This chain is the current known best. Update cur_best
                 *cur_best = score;
                 true
             } else {
