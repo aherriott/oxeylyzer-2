@@ -323,13 +323,13 @@ impl Repl {
                         f64::INFINITY
                     };
 
-                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {:.0} nodes/s | {:.1}% done | ~{} left   ",
+                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {} nodes/s | {:.1}% done | ~{} left   ",
                         fmt_num(progress.nodes_visited as f64),
                         fmt_num(progress.nodes_pruned),
-                        progress.solutions_found as u64,
+                        fmt_num(progress.solutions_found),
                         progress.best_score.map_or("none".to_string(), |s| s.to_string()),
                         avg_prune_depth,
-                        nodes_per_sec,
+                        fmt_num(nodes_per_sec),
                         pct,
                         fmt_duration(est_remaining),
                     );
