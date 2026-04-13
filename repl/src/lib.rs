@@ -550,7 +550,7 @@ impl Repl {
         Ok(())
     }
 
-    fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>, greedy_depth: Option<usize>, tree_depth: Option<usize>) -> Result<()> {
+    fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>, greedy_depth: Option<usize>, tree_depth: Option<usize>, time_secs: Option<usize>) -> Result<()> {
         use oxeylyzer_core::mcts::MctsSearch;
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -562,6 +562,7 @@ impl Repl {
         let sa_iters = sa_iters.unwrap_or(1_000);
         let greedy_depth = greedy_depth.unwrap_or(0);
         let tree_depth = tree_depth.unwrap_or(0);
+        let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
         let num_pos = layout.keyboard.len();
 
         // Build rollout policy from flags
@@ -584,10 +585,16 @@ impl Repl {
         let policy = RolloutPolicy { steps };
 
         let td_display = if tree_depth == 0 { format!("all {}", num_pos) } else { format!("{}", tree_depth) };
-        let iter_display = if iterations == u64::MAX { "∞".to_string() } else { format!("{}", iterations) };
+        let iter_display = if time_limit.is_some() {
+            format!("{}s", time_secs.unwrap())
+        } else if iterations == u64::MAX {
+            "∞".to_string()
+        } else {
+            format!("{}", iterations)
+        };
         println!("MCTS: {} positions, {} rollouts, exploration={:.2}, tree depth={}, policy={:?}",
             num_pos, iter_display, explore, td_display, policy.steps);
-        if iterations == u64::MAX {
+        if iterations == u64::MAX && time_limit.is_none() {
             println!("  (Ctrl+C to stop)");
         }
 
@@ -616,7 +623,12 @@ impl Repl {
                 );
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
-            stop.load(Ordering::SeqCst)
+            // Stop on Ctrl+C or time limit
+            if stop.load(Ordering::SeqCst) { return true; }
+            if let Some(limit) = time_limit {
+                if start.elapsed() >= limit { return true; }
+            }
+            false
         });
         println!();
 
@@ -665,7 +677,7 @@ impl Repl {
             OxeylyzerCmd::Bb2(b) => self.branch_bound_position_first(&b.name, b.top)?,
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
-            OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth)?,
+            OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 
