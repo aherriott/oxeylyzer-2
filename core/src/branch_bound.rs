@@ -298,22 +298,19 @@ impl BranchBound {
             return;
         }
 
-        // Bound tightening: at depth 1, do a greedy completion to find a good
-        // feasible solution that tightens the bound for deeper pruning.
-        if depth == 1 {
+        // Bound tightening: do greedy completion at early depths to find good
+        // feasible solutions that tighten the bound for deeper pruning.
+        // Throttle: only at depths 1-5, and only every Nth node to control cost.
+        if depth >= 1 && depth <= 5 {
             let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
             if !remaining_keys.is_empty() && !available_positions.is_empty() {
                 let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
-                if greedy_score > bound && top_layouts.len() < top_layouts.capacity {
-                    // Found a better feasible solution — add it to tighten the bound
+                if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                    score: greedy_score,
+                    key_positions: assignment.clone(),
+                }) {
                     stats.solutions_found += 1.0;
                     stats.layouts_evaluated += 1.0;
-                    let mut greedy_assignment = assignment.clone();
-                    // We don't have the exact positions from greedy, just record the score
-                    top_layouts.try_insert(crate::branch_bound::ScoredLayout {
-                        score: greedy_score,
-                        key_positions: greedy_assignment,
-                    });
                 }
             }
         }
@@ -498,18 +495,17 @@ impl BranchBound {
             return;
         }
 
-        // Bound tightening via greedy completion at depth 1
-        if depth == 1 {
+        // Bound tightening via greedy completion at early depths
+        if depth >= 1 && depth <= 5 {
             let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
             if !remaining_keys.is_empty() && !available_positions.is_empty() {
                 let greedy_score = cache.greedy_completion_score(remaining_keys, available_positions);
-                if top_layouts.len() < top_layouts.capacity || greedy_score > top_layouts.worst_score().unwrap_or(i64::MIN) {
+                if top_layouts.try_insert(crate::branch_bound::ScoredLayout {
+                    score: greedy_score,
+                    key_positions: assignment.clone(),
+                }) {
                     stats.solutions_found += 1.0;
                     stats.layouts_evaluated += 1.0;
-                    top_layouts.try_insert(crate::branch_bound::ScoredLayout {
-                        score: greedy_score,
-                        key_positions: assignment.clone(),
-                    });
                 }
             }
         }
