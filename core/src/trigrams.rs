@@ -341,6 +341,74 @@ impl TrigramCache {
         }
     }
 
+    // ==================== Lower Bound ====================
+
+    /// Compute a lower bound on the remaining trigram penalty from unplaced keys.
+    ///
+    /// For each unplaced key, estimates the minimum trigram penalty by only counting
+    /// trigrams where the other TWO positions are already filled. This underestimates
+    /// but is a valid lower bound.
+    pub fn lower_bound_remaining(
+        &self,
+        unplaced_keys: &[usize],
+        available_positions: &[usize],
+        keys: &[usize],
+        tg_flat: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let max_w = self.max_trigram_weight;
+        let mut total_min: i64 = 0;
+
+        for &key in unplaced_keys {
+            if key >= nk { continue; }
+            let mut best_penalty = i64::MAX;
+            for &pos in available_positions {
+                let mut penalty: i64 = 0;
+
+                // Case 1: pos is first in trigram, other two positions have placed keys
+                for combo in &self.trigram_combos_per_key[pos] {
+                    let kb = keys[combo.pos_b];
+                    let kc = keys[combo.pos_c];
+                    if kb >= nk || kc >= nk { continue; }
+                    // Skip combos where pos_b or pos_c equals pos (self-referencing)
+                    if combo.pos_b == pos || combo.pos_c == pos { continue; }
+                    let freq = tg_flat[key * nk2 + kb * nk + kc];
+                    penalty += freq * combo.weight - freq * max_w;
+                }
+
+                // Case 2: pos is middle, other two positions have placed keys
+                for combo in &self.trigram_combos_mid[pos] {
+                    if combo.pos_a == pos || combo.pos_c == pos { continue; }
+                    let ka = keys[combo.pos_a];
+                    let kc = keys[combo.pos_c];
+                    if ka >= nk || kc >= nk { continue; }
+                    let freq = tg_flat[ka * nk2 + key * nk + kc];
+                    penalty += freq * combo.weight - freq * max_w;
+                }
+
+                // Case 3: pos is last, other two positions have placed keys
+                for combo in &self.trigram_combos_end[pos] {
+                    if combo.pos_a == pos || combo.pos_b == pos { continue; }
+                    let ka = keys[combo.pos_a];
+                    let kb = keys[combo.pos_b];
+                    if ka >= nk || kb >= nk { continue; }
+                    let freq = tg_flat[ka * nk2 + kb * nk + key];
+                    penalty += freq * combo.weight - freq * max_w;
+                }
+
+                if penalty < best_penalty {
+                    best_penalty = penalty;
+                }
+            }
+            if best_penalty != i64::MAX {
+                total_min += best_penalty;
+            }
+        }
+
+        total_min
+    }
+
     /// Compute the score delta for applying a magic rule.
     ///
     /// When rule A→M steals output B:

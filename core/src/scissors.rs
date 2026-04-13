@@ -881,6 +881,55 @@ impl ScissorsCache {
         }
     }
 
+    // ==================== Lower Bound ====================
+
+    /// Compute a lower bound on the remaining scissors penalty from unplaced keys.
+    ///
+    /// For each unplaced key, finds the available position that minimizes the
+    /// scissors penalty with all already-placed keys, and sums these minimums.
+    pub fn lower_bound_remaining(
+        &self,
+        unplaced_keys: &[usize],
+        available_positions: &[usize],
+        keys: &[usize],
+        bg_freq: &[i64],
+        sg_freq: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let mut total_min: i64 = 0;
+
+        for &key in unplaced_keys {
+            if key >= nk { continue; }
+            let mut best_penalty = i64::MAX;
+            for &pos in available_positions {
+                let mut penalty: i64 = 0;
+                for sp in &self.scissor_pairs_per_key[pos] {
+                    let other_key = keys[sp.other_pos];
+                    if other_key >= nk { continue; }
+                    let bg = bg_freq[key * nk + other_key] + bg_freq[other_key * nk + key];
+                    let sg = sg_freq[key * nk + other_key] + sg_freq[other_key * nk + key];
+                    let bg_score = bg * sp.severity;
+                    let sg_score = sg * sp.severity;
+                    if sp.is_full {
+                        penalty += bg_score * self.full_scissors_weight
+                            + sg_score * self.full_scissors_skip_weight;
+                    } else {
+                        penalty += bg_score * self.half_scissors_weight
+                            + sg_score * self.half_scissors_skip_weight;
+                    }
+                }
+                if penalty < best_penalty {
+                    best_penalty = penalty;
+                }
+            }
+            if best_penalty != i64::MAX {
+                total_min += best_penalty;
+            }
+        }
+
+        total_min
+    }
+
     /// Compute the score delta for a magic rule application.
     ///
     /// When rule A→M steals output B:

@@ -285,8 +285,15 @@ impl BranchBound {
 
         let current_score = cache.score();
 
-        // Pruning: if current partial score is already worse than bound, prune
-        if current_score < bound {
+        // Pruning: if current partial score + lower bound on remaining cost is worse than bound, prune
+        let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
+        let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
+            cache.lower_bound_remaining(remaining_keys, available_positions)
+        } else {
+            0
+        };
+
+        if current_score + remaining_bound < bound {
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);
@@ -448,7 +455,15 @@ impl BranchBound {
 
         let current_score = cache.score();
 
-        if current_score < bound {
+        // Pruning with remaining-cost lower bound
+        let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
+        let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
+            cache.lower_bound_remaining(remaining_keys, available_positions)
+        } else {
+            0
+        };
+
+        if current_score + remaining_bound < bound {
             let remaining_levels = max_depth.saturating_sub(depth);
             let leaves_pruned = Self::estimate_leaf_nodes_f64(available_positions.len(), remaining_levels);
             let nodes_pruned = Self::count_subtree_nodes_f64(available_positions.len(), remaining_levels);

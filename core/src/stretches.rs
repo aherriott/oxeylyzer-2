@@ -251,6 +251,46 @@ impl StretchCache {
         if dist > 0 { dist * self.stretch_weight } else { 0 }
     }
 
+    // ==================== Lower Bound ====================
+
+    /// Compute a lower bound on the remaining stretch penalty from unplaced keys.
+    ///
+    /// For each unplaced key, finds the available position that minimizes the stretch
+    /// penalty with all already-placed keys, and sums these minimums. This is a valid
+    /// lower bound because it independently minimizes each key's placement.
+    pub fn lower_bound_remaining(
+        &self,
+        unplaced_keys: &[usize],
+        available_positions: &[usize],
+        keys: &[usize],
+        bg_freq: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let mut total_min: i64 = 0;
+
+        for &key in unplaced_keys {
+            if key >= nk { continue; }
+            let mut best_penalty = i64::MAX;
+            for &pos in available_positions {
+                let mut penalty: i64 = 0;
+                for sp in &self.stretch_pairs_per_key[pos] {
+                    let other_key = keys[sp.other_pos];
+                    if other_key >= nk { continue; }
+                    let bg = bg_freq[key * nk + other_key] + bg_freq[other_key * nk + key];
+                    penalty += bg * sp.dist;
+                }
+                if penalty < best_penalty {
+                    best_penalty = penalty;
+                }
+            }
+            if best_penalty != i64::MAX {
+                total_min += best_penalty;
+            }
+        }
+
+        total_min * self.stretch_weight
+    }
+
     // ==================== Magic Rules ====================
 
     fn compute_rule_delta(

@@ -367,6 +367,48 @@ impl SFCache {
         } else { 0 }
     }
 
+    // ==================== Lower Bound ====================
+
+    /// Compute a lower bound on the remaining SFB/SFS penalty from unplaced keys.
+    ///
+    /// For each unplaced key, finds the available position that minimizes the
+    /// same-finger penalty with all already-placed keys, and sums these minimums.
+    pub fn lower_bound_remaining(
+        &self,
+        unplaced_keys: &[usize],
+        available_positions: &[usize],
+        keys: &[usize],
+        bg_freq: &[i64],
+        sg_freq: &[i64],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let mut total_min: i64 = 0;
+
+        for &key in unplaced_keys {
+            if key >= nk { continue; }
+            let mut best_penalty = i64::MAX;
+            for &pos in available_positions {
+                let mut penalty: i64 = 0;
+                for sf in &self.sf_pairs_per_key[pos] {
+                    let other_key = keys[sf.other_pos];
+                    if other_key >= nk { continue; }
+                    let bg = bg_freq[key * nk + other_key] + bg_freq[other_key * nk + key];
+                    let sg = sg_freq[key * nk + other_key] + sg_freq[other_key * nk + key];
+                    penalty += bg * sf.dist * self.sfb_finger_weights[sf.finger]
+                        + sg * sf.dist * self.sfs_finger_weights[sf.finger];
+                }
+                if penalty < best_penalty {
+                    best_penalty = penalty;
+                }
+            }
+            if best_penalty != i64::MAX {
+                total_min += best_penalty;
+            }
+        }
+
+        total_min
+    }
+
     // ==================== Magic Rules ====================
 
     fn compute_rule_delta(

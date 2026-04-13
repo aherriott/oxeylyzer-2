@@ -575,6 +575,25 @@ impl CachedLayout {
         sfb_score + stretch_score + scissors_score + trigram_score
     }
 
+    // ==================== Lower Bound ====================
+
+    /// Compute a lower bound on the remaining cost from unplaced keys.
+    ///
+    /// Aggregates lower bounds from all sub-caches (SFB, stretch, scissors, trigrams).
+    /// Used by branch-and-bound search for early pruning.
+    pub fn lower_bound_remaining(&self, unplaced_keys: &[usize], available_positions: &[usize]) -> i64 {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_flat = self.magic.tg_freq_flat();
+
+        let sfb = self.sfb.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq, sg_freq);
+        let stretch = self.stretch.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq);
+        let scissors = self.scissors.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, bg_freq, sg_freq);
+        let trigram = self.trigram.lower_bound_remaining(unplaced_keys, available_positions, &self.keys, tg_flat);
+
+        sfb + stretch + scissors + trigram
+    }
+
     // ==================== Mutation ====================
 
     /// Replace key at position. Mutates state. Full update (slow, for init).

@@ -121,4 +121,116 @@ mod tests {
                 results.first().map(|r| r.score));
         }
     }
+
+    #[test]
+    fn test_lower_bound_no_unplaced_keys_returns_zero() {
+        let (bb, mut cache) = setup();
+
+        // Place a few keys so the cache has some state
+        for depth in 0..3 {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let unplaced: Vec<usize> = vec![];
+        let available: Vec<usize> = (3..bb.num_positions()).collect();
+
+        let lb = cache.lower_bound_remaining(&unplaced, &available);
+        assert_eq!(lb, 0, "Lower bound with no unplaced keys should be 0");
+    }
+
+    #[test]
+    fn test_lower_bound_is_non_positive() {
+        let (bb, mut cache) = setup();
+
+        // Place first 5 keys
+        for depth in 0..5 {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let unplaced: Vec<usize> = (5..bb.num_positions())
+            .map(|d| cache.char_mapping().get_u(bb.chars_by_frequency()[d]))
+            .collect();
+        let available: Vec<usize> = (5..bb.num_positions()).collect();
+
+        let lb = cache.lower_bound_remaining(&unplaced, &available);
+        assert!(lb <= 0, "Lower bound should be <= 0 (all penalties are non-positive), got {lb}");
+    }
+
+    #[test]
+    fn test_lower_bound_is_valid_bound() {
+        let (bb, _) = setup();
+        let data = Data::load("../data/english.json").expect("data");
+        let weights = dummy_weights();
+        let layout = Layout::load("../layouts/qwerty.dof").expect("layout");
+
+        let mut bb = BranchBound::new(layout, data, weights);
+        let mut cache = bb.create_empty_cache();
+
+        // Place first 5 keys at positions 0..5
+        let num_to_place = 5;
+        for depth in 0..num_to_place {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let score_after_partial = cache.score();
+
+        // Compute lower bound for remaining keys
+        let unplaced: Vec<usize> = (num_to_place..bb.num_positions())
+            .map(|d| cache.char_mapping().get_u(bb.chars_by_frequency()[d]))
+            .collect();
+        let available: Vec<usize> = (num_to_place..bb.num_positions()).collect();
+
+        let lb = cache.lower_bound_remaining(&unplaced, &available);
+
+        // Now actually place all remaining keys and get the real score
+        for depth in num_to_place..bb.num_positions() {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let final_score = cache.score();
+        let actual_remaining = final_score - score_after_partial;
+
+        println!("Score after {} keys: {}", num_to_place, score_after_partial);
+        println!("Final score: {}", final_score);
+        println!("Actual remaining cost: {}", actual_remaining);
+        println!("Lower bound estimate: {}", lb);
+
+        assert!(
+            lb <= actual_remaining,
+            "Lower bound ({lb}) should be <= actual remaining cost ({actual_remaining})"
+        );
+    }
+
+    #[test]
+    fn bench_lower_bound_cost() {
+        let (bb, mut cache) = setup();
+
+        // Place first 5 keys
+        for depth in 0..5 {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let unplaced: Vec<usize> = (5..bb.num_positions())
+            .map(|d| cache.char_mapping().get_u(bb.chars_by_frequency()[d]))
+            .collect();
+        let available: Vec<usize> = (5..bb.num_positions()).collect();
+
+        let n = 1_000u32;
+        let t = Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(cache.lower_bound_remaining(&unplaced, &available));
+        }
+        let elapsed = t.elapsed();
+        let per_call = elapsed / n;
+        let lb = cache.lower_bound_remaining(&unplaced, &available);
+        println!("\n=== lower_bound_remaining cost ===");
+        println!("  {} unplaced keys, {} available positions", unplaced.len(), available.len());
+        println!("  {:?}/call ({n} iterations)", per_call);
+        println!("  lower bound value: {}", lb);
+    }
 }
