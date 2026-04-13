@@ -27,7 +27,7 @@ impl Analyzer {
 
         let mut rng = WyRand::new();
 
-        self.use_layout(&layout, pins);
+        // Caller must have called use_layout() already
         let neighbors = self.neighbors();
         let mut best_score = self.score();
         let mut current_score = best_score;
