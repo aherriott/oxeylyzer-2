@@ -1235,6 +1235,35 @@ impl TrigramCache {
         (first, mid, end)
     }
 
+    /// For each position, return the set of OTHER positions referenced by its trigram combos.
+    pub fn combo_counts_with_positions(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        let first: Vec<Vec<usize>> = self.trigram_combos_per_key.iter().map(|combos| {
+            let mut positions = Vec::new();
+            for c in combos { positions.push(c.pos_b); positions.push(c.pos_c); }
+            positions.sort_unstable();
+            positions.dedup();
+            positions
+        }).collect();
+
+        let mid: Vec<Vec<usize>> = self.trigram_combos_mid.iter().map(|combos| {
+            let mut positions = Vec::new();
+            for c in combos { positions.push(c.pos_a); positions.push(c.pos_c); }
+            positions.sort_unstable();
+            positions.dedup();
+            positions
+        }).collect();
+
+        let end: Vec<Vec<usize>> = self.trigram_combos_end.iter().map(|combos| {
+            let mut positions = Vec::new();
+            for c in combos { positions.push(c.pos_a); positions.push(c.pos_b); }
+            positions.sort_unstable();
+            positions.dedup();
+            positions
+        }).collect();
+
+        (first, mid, end)
+    }
+
     /// Compute the delta for replacing a key at a position.
     ///
     /// Iterates over all pre-computed trigram combinations involving the position

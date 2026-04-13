@@ -65,4 +65,22 @@ mod tests {
         for _ in 0..n { c.update_scores(); }
         println!("\n=== update_scores: {n} iters, {:?}/iter ===", t.elapsed() / n);
     }
+
+    #[test]
+    fn profile_affected_counts() {
+        let (_, l) = make();
+        let data = crate::data::Data::load("../data/english.json").expect("data");
+        let weights = dummy_weights();
+        let cached = CachedLayout::new(&l, data, &weights);
+
+        let counts = cached.affected_neighbor_counts();
+        let total: usize = counts.iter().sum();
+        let max = counts.iter().max().unwrap_or(&0);
+        let min = counts.iter().min().unwrap_or(&0);
+        println!("\n=== Affected neighbors per position ===");
+        println!("Positions: {}", counts.len());
+        println!("Min: {min}, Max: {max}, Avg: {:.1}", total as f64 / counts.len() as f64);
+        println!("Total neighbors: {}", cached.neighbors().len());
+        println!("For a swap of 2 positions, ~{} neighbors affected (union, with overlap)", max * 2);
+    }
 }

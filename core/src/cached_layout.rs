@@ -194,9 +194,11 @@ pub struct CachedLayout {
     key_positions: Vec<Option<CachePos>>,
     num_positions: usize,
     neighbors: Vec<Neighbor>,
-    /// Precomputed score for each neighbor. neighbor_scores[i] = total score if neighbor[i] is applied.
-    /// Only valid for KeySwap neighbors. Recomputed after each accepted swap.
+    /// Precomputed score for each neighbor.
     neighbor_scores: Vec<i64>,
+    /// For each position, which neighbor indices are affected when that position's key changes.
+    /// affected_neighbors[pos] = sorted list of neighbor indices whose score depends on keys[pos].
+    affected_neighbors: Vec<Vec<usize>>,
     current_magic_rules: HashMap<(CacheKey, CacheKey), CacheKey>,
     dist: DistCache,
     sfb: SFCache,
@@ -219,6 +221,7 @@ impl Default for CachedLayout {
             num_positions: 0,
             neighbors: Vec::new(),
             neighbor_scores: Vec::new(),
+            affected_neighbors: Vec::new(),
             current_magic_rules: HashMap::default(),
             dist: DistCache::default(),
             sfb: SFCache::default(),
@@ -311,6 +314,7 @@ impl CachedLayout {
             num_positions: len,
             neighbors,
             neighbor_scores: Vec::new(),
+            affected_neighbors: Vec::new(),
             current_magic_rules,
             dist,
             sfb,
@@ -344,7 +348,57 @@ impl CachedLayout {
         // Precompute neighbor scores for O(1) score_neighbor lookups
         cache.precompute_neighbor_scores();
 
+        // Build the affected_neighbors dependency map
+        cache.build_affected_neighbors();
+
         cache
+    }
+
+    /// Build the affected_neighbors map: for each position, which neighbor indices
+    /// depend on the key at that position.
+    fn build_affected_neighbors(&mut self) {
+        let np = self.num_positions;
+        let mut affected: Vec<Vec<usize>> = vec![Vec::new(); np];
+
+        // Get the trigram combo topology to determine dependencies
+        let (first_combos, mid_combos, end_combos) = self.trigram.combo_counts_with_positions();
+
+        for (i, neighbor) in self.neighbors.iter().enumerate() {
+            if let Neighbor::KeySwap(PosPair(a, b)) = neighbor {
+                let (pa, pb) = (*a, *b);
+
+                // This neighbor's score depends on keys at pa, pb (directly),
+                // plus any position referenced by trigram combos for pa or pb.
+                let mut deps = std::collections::HashSet::new();
+                deps.insert(pa);
+                deps.insert(pb);
+
+                // Trigram combos for pa reference other positions
+                for &pos in &first_combos[pa] { deps.insert(pos); }
+                for &pos in &mid_combos[pa] { deps.insert(pos); }
+                for &pos in &end_combos[pa] { deps.insert(pos); }
+
+                // Trigram combos for pb reference other positions
+                for &pos in &first_combos[pb] { deps.insert(pos); }
+                for &pos in &mid_combos[pb] { deps.insert(pos); }
+                for &pos in &end_combos[pb] { deps.insert(pos); }
+
+                // Register this neighbor as affected by each dependency position
+                for &dep_pos in &deps {
+                    if dep_pos < np {
+                        affected[dep_pos].push(i);
+                    }
+                }
+            }
+        }
+
+        // Deduplicate (shouldn't be needed but just in case)
+        for list in &mut affected {
+            list.sort_unstable();
+            list.dedup();
+        }
+
+        self.affected_neighbors = affected;
     }
 
     /// Precompute the score for every neighbor. Makes score_neighbor O(1).
@@ -413,6 +467,10 @@ impl CachedLayout {
 
     pub fn trigram_combo_counts(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
         self.trigram.combo_counts()
+    }
+
+    pub fn affected_neighbor_counts(&self) -> Vec<usize> {
+        self.affected_neighbors.iter().map(|v| v.len()).collect()
     }
 
     pub fn char_mapping(&self) -> &CharMapping {
@@ -600,9 +658,44 @@ impl CachedLayout {
     pub fn swap_keys_and_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
         self.swap_keys(pos_a, pos_b);
 
-        // Must recompute ALL neighbor scores because trigram combos for any neighbor
-        // may reference the swapped positions as third-party positions.
-        self.precompute_neighbor_scores();
+        // Recompute only the neighbor scores affected by the swapped positions.
+        // A neighbor is affected if its trigram combos reference pos_a or pos_b.
+        self.recompute_affected_neighbor_scores(pos_a, pos_b);
+    }
+
+    fn recompute_affected_neighbor_scores(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_flat = self.magic.tg_freq_flat();
+
+        // Collect affected neighbor indices from both positions, deduplicated
+        let mut affected: Vec<usize> = Vec::new();
+        if pos_a < self.affected_neighbors.len() {
+            affected.extend_from_slice(&self.affected_neighbors[pos_a]);
+        }
+        if pos_b < self.affected_neighbors.len() {
+            affected.extend_from_slice(&self.affected_neighbors[pos_b]);
+        }
+        affected.sort_unstable();
+        affected.dedup();
+
+        for &i in &affected {
+            if let Neighbor::KeySwap(PosPair(a, b)) = self.neighbors[i] {
+                let key_a = self.keys[a];
+                let key_b = self.keys[b];
+
+                let sfb = self.sfb.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                let stretch = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
+                let scissors = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+
+                let tg_a = self.trigram.compute_replace_delta_flat(a, key_a, key_b, &self.keys, Some(b), tg_flat);
+                let tg_b = self.trigram.compute_replace_delta_flat(b, key_b, key_a, &self.keys, Some(a), tg_flat);
+                let tg_both = self.trigram.compute_swap_both_delta_flat(a, b, key_a, key_b, &self.keys, tg_flat);
+                let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
+
+                self.neighbor_scores[i] = sfb + stretch + scissors + trigram;
+            }
+        }
     }
 
 
