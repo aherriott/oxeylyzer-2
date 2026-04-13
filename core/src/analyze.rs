@@ -49,6 +49,9 @@ impl Analyzer {
         }
     }
 
+    pub fn data(&self) -> &Data { &self.data }
+    pub fn weights(&self) -> &Weights { &self.weights }
+
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
         self.cache = Some(CachedLayout::new(layout, self.data.clone(), &self.weights));

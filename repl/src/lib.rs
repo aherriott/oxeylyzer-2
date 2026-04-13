@@ -267,6 +267,58 @@ impl Repl {
         Ok(())
     }
 
+    fn branch_bound(&mut self, name: &str, max_depth: Option<usize>, top_k: Option<usize>) -> Result<()> {
+        use oxeylyzer_core::branch_bound::BranchBound;
+
+        let layout = self.layout(name)?.clone();
+        let top_k = top_k.unwrap_or(5);
+        let max_depth = max_depth.unwrap_or(layout.keyboard.len());
+
+        println!("Branch & bound: {} positions, depth limit {}, top-{}", layout.keyboard.len(), max_depth, top_k);
+
+        // Use the SA score of a random layout as the initial bound
+        let random = layout.random();
+        self.a.use_layout(&random, &[]);
+        let (_, sa_score) = self.a.annealing_improve(random.clone(), &[], 1.0, 1E-4, 100_000);
+        println!("Initial bound from SA: {}", sa_score);
+
+        let start = std::time::Instant::now();
+
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+        let (results, stats) = bb.search_limited_with_progress(
+            sa_score,
+            top_k,
+            max_depth,
+            &mut |progress: &oxeylyzer_core::branch_bound::BranchBoundProgress| {
+                if progress.nodes_visited % 100_000 == 0 {
+                    print!("\r  nodes: {}  pruned: {:.0}  solutions: {:.0}  best: {:?}  depth: {}/{}",
+                        progress.nodes_visited,
+                        progress.nodes_pruned,
+                        progress.solutions_found,
+                        progress.best_score,
+                        progress.current_depth,
+                        progress.max_depth,
+                    );
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                }
+            },
+        );
+        println!();
+
+        println!("{}", stats);
+        println!("Search took {:.2}s", start.elapsed().as_secs_f64());
+
+        for (i, result) in results.iter().enumerate() {
+            println!("#{}: score {}", i + 1, result.score);
+            for (c, pos) in &result.key_positions {
+                print!("{}@{} ", c, pos);
+            }
+            println!();
+        }
+
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         let new = Self::with_config(&self.config_path)?;
 
@@ -296,6 +348,7 @@ impl Repl {
             OxeylyzerCmd::Trigrams(t) => self.trigrams(&t.name)?,
             OxeylyzerCmd::Similarity(s) => self.similarity(&s.name)?,
             OxeylyzerCmd::R(_) => self.reload()?,
+            OxeylyzerCmd::Bb(b) => self.branch_bound(&b.name, b.depth, b.top)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

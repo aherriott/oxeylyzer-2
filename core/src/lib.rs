@@ -3,6 +3,7 @@ use thiserror::Error;
 
 pub mod analyze;
 pub mod analyzer_data;
+pub mod branch_bound;
 pub mod cached_layout;
 pub mod char_mapping;
 pub mod corpus_cleaner;

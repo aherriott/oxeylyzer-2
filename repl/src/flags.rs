@@ -40,6 +40,15 @@ xflags::xflags! {
         }
         /// Reload the analyzer config file
         cmd r reload refresh {}
+        /// Branch and bound search from a base layout
+        cmd bb branchbound {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// Max depth to search. Defaults to all positions.
+            optional -d, --depth depth: usize
+            /// Number of top layouts to keep. Defaults to 5.
+            optional -k, --top top_k: usize
+        }
         /// Quit the analyzer
         cmd q quit {}
     }
