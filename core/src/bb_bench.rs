@@ -88,9 +88,9 @@ mod tests {
         let t = Instant::now();
         for _ in 0..n {
             for pos in 5..num_positions {
-                cache.replace_key(pos, EMPTY_KEY, key_id);
+                cache.replace_key_fast(pos, EMPTY_KEY, key_id);
                 std::hint::black_box(cache.score());
-                cache.replace_key(pos, key_id, EMPTY_KEY);
+                cache.replace_key_fast(pos, key_id, EMPTY_KEY);
             }
         }
         let elapsed = t.elapsed();
@@ -111,7 +111,7 @@ mod tests {
 
         println!("\n=== B&B search to various depths ===");
 
-        for max_depth in [5, 6, 7, 8] {
+        for max_depth in [4, 5, 6, 7] {
             let mut bb = BranchBound::new(layout.clone(), data.clone(), weights.clone());
             let t = Instant::now();
             let (results, stats) = bb.search_limited(i64::MIN, 5, max_depth);
