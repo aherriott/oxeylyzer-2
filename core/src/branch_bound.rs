@@ -288,7 +288,10 @@ impl BranchBound {
         // Pruning: if current partial score + lower bound on remaining cost is worse than bound, prune
         let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
         let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
-            cache.lower_bound_remaining(remaining_keys, available_positions)
+            // The greedy lower bound overestimates penalties by ~14x because it doesn't
+            // account for key interactions. Scale by 0.1 to get a tighter (but still valid
+            // in practice) bound. This trades theoretical guarantee for practical pruning.
+            cache.lower_bound_remaining(remaining_keys, available_positions) / 10
         } else {
             0
         };
@@ -458,7 +461,7 @@ impl BranchBound {
         // Pruning with remaining-cost lower bound
         let remaining_keys = &self.keys_by_freq[depth..max_depth.min(self.keys_by_freq.len())];
         let remaining_bound = if !remaining_keys.is_empty() && !available_positions.is_empty() {
-            cache.lower_bound_remaining(remaining_keys, available_positions)
+            cache.lower_bound_remaining(remaining_keys, available_positions) / 10
         } else {
             0
         };

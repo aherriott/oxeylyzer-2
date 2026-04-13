@@ -233,4 +233,44 @@ mod tests {
         println!("  {:?}/call ({n} iterations)", per_call);
         println!("  lower bound value: {}", lb);
     }
+
+    #[test]
+    fn test_lower_bound_by_lookahead() {
+        let (bb, _) = setup();
+        let data = Data::load("../data/english.json").expect("data");
+        let weights = dummy_weights();
+        let layout = Layout::load("../layouts/qwerty.dof").expect("layout");
+
+        let mut bb = BranchBound::new(layout, data, weights);
+        let mut cache = bb.create_empty_cache();
+
+        // Place first 5 keys
+        for depth in 0..5 {
+            let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
+            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+        }
+
+        let score_after_5 = cache.score();
+        let all_remaining: Vec<usize> = (5..bb.num_positions())
+            .map(|d| cache.char_mapping().get_u(bb.chars_by_frequency()[d]))
+            .collect();
+        let available: Vec<usize> = (5..bb.num_positions()).collect();
+
+        println!("\n=== Lower bound by lookahead depth (5 keys placed) ===");
+        println!("  Current score: {}", score_after_5);
+
+        for lookahead in [1, 2, 3, 5, 8, 10, 15, 20, all_remaining.len()] {
+            let keys_to_check = &all_remaining[..lookahead.min(all_remaining.len())];
+            let lb = cache.lower_bound_remaining(keys_to_check, &available);
+            println!("  lookahead {:2}: bound = {:>20}, projected = {:>20}",
+                lookahead, lb, score_after_5 + lb);
+        }
+
+        // Also compute the actual final score for reference
+        let mut cache2 = cache.clone();
+        for (i, &key_id) in all_remaining.iter().enumerate() {
+            cache2.replace_key_fast(5 + i, EMPTY_KEY, key_id);
+        }
+        println!("  actual final score: {}", cache2.score());
+    }
 }
