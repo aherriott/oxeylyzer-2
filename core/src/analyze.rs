@@ -112,7 +112,7 @@ impl Analyzer {
         best
     }
 
-    /// Speculative score for a neighbor. O(1) for KeySwap (precomputed table).
+    /// Speculative score for a neighbor. Computes on-the-fly for KeySwap.
     pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
         self.cache
             .as_ref()
