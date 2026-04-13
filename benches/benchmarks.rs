@@ -134,14 +134,14 @@ mod bench {
         })
     }
 
-    /// Full test_neighbor (apply + score + revert + copy_from)
+    /// Full score_neighbor (O(1) table lookup for KeySwap)
     fn test_neighbor_full(bencher: Bencher, neighbor: Neighbor) {
         let (mut analyzer, layout) = util::analyzer_layout("english", "qwerty");
         analyzer.use_layout(&layout, &[]);
 
         bencher.bench(|| {
             for _ in 0..N {
-                black_box(analyzer.test_neighbor(black_box(neighbor)));
+                black_box(analyzer.score_neighbor(black_box(neighbor)));
             }
         })
     }
@@ -175,15 +175,14 @@ mod bench {
         })
     }
 
-    /// Apply, score, revert, copy_from (full test_neighbor equivalent)
+    /// Apply, score, revert, copy_from (full score_neighbor equivalent)
     fn apply_score_revert_copy(bencher: Bencher, neighbor: Neighbor) {
         let (mut analyzer, layout) = util::analyzer_layout("english", "qwerty");
         analyzer.use_layout(&layout, &[]);
 
-        // Note: This is what test_neighbor does internally
         bencher.bench(|| {
             for _ in 0..N {
-                black_box(analyzer.test_neighbor(black_box(neighbor)));
+                black_box(analyzer.score_neighbor(black_box(neighbor)));
             }
         })
     }

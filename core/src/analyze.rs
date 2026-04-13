@@ -120,19 +120,6 @@ impl Analyzer {
             .score_neighbor(neighbor)
     }
 
-    /// Speculative score for a neighbor (mutable version for MagicRule).
-    pub fn score_neighbor_mut(&mut self, neighbor: Neighbor) -> i64 {
-        self.cache
-            .as_mut()
-            .expect("Analyzer has no Layout set")
-            .score_neighbor_mut(neighbor)
-    }
-
-    /// Test a neighbor without applying it. Returns the score.
-    pub fn test_neighbor(&mut self, neighbor: Neighbor) -> i64 {
-        self.score_neighbor_mut(neighbor)
-    }
-
     /// Apply a neighbor (fast path, no weighted_score update).
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         self.cache

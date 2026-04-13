@@ -533,39 +533,9 @@ impl CachedLayout {
         }
     }
 
-    /// Speculative score for a neighbor (mutable version).
-    /// Handles both KeySwap and MagicRule neighbors.
-    /// For KeySwap: no actual mutation occurs.
-    /// For MagicRule: uses apply=false path which doesn't mutate.
-    pub fn score_neighbor_mut(&mut self, neighbor: Neighbor) -> i64 {
-        match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => self.score_swap(a, b),
-            Neighbor::MagicRule(rule) => {
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
-            }
-        }
-    }
-
     /// Rebuild trigram weighted_score arrays from current state.
-    /// Call after one or more apply_neighbor() calls when you need score_neighbor() again.
     pub fn update_scores(&mut self) {
         self.trigram.init_weighted_scores(&self.keys, self.magic.tg_freq());
-    }
-
-    /// Speculative swap score. No mutation.
-    fn score_swap(&self, pos_a: CachePos, pos_b: CachePos) -> i64 {
-        let key_a = self.keys[pos_a];
-        let key_b = self.keys[pos_b];
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq_flat = self.magic.tg_freq_flat();
-
-        let sfb = self.sfb.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        let stretch = self.stretch.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
-        let scissors = self.scissors.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-        let trigram = self.trigram.score_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_freq_flat);
-
-        sfb + stretch + scissors + trigram
     }
 
     // ==================== Mutation ====================
@@ -630,8 +600,9 @@ impl CachedLayout {
     pub fn swap_keys_and_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
         self.swap_keys(pos_a, pos_b);
 
-        // Recompute neighbor scores for affected positions
-        self.recompute_neighbor_scores_for_positions(pos_a, pos_b);
+        // Must recompute ALL neighbor scores because trigram combos for any neighbor
+        // may reference the swapped positions as third-party positions.
+        self.precompute_neighbor_scores();
     }
 
 
@@ -2622,7 +2593,7 @@ mod pbt_total_score_preservation {
                 // Get speculative score
                 let speculative_score = match op {
                     Operation::KeySwap(pos_a, pos_b) => {
-                        cache.score_neighbor_mut(Neighbor::KeySwap(PosPair(*pos_a, *pos_b)))
+                        cache.score_neighbor(Neighbor::KeySwap(PosPair(*pos_a, *pos_b)))
                     }
                     Operation::MagicRule(leader_idx, output_idx, magic_key_idx) => {
                         let leader = regular_keys[*leader_idx % regular_keys.len()];

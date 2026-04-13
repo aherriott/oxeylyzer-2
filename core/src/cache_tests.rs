@@ -105,7 +105,7 @@ mod tests {
         let mut found_different = false;
 
         for &neighbor in neighbors.iter().take(100) {
-            let test_score = analyzer.test_neighbor(neighbor);
+            let test_score = analyzer.score_neighbor(neighbor);
             if test_score != original_score {
                 found_different = true;
                 break;
@@ -124,7 +124,7 @@ mod tests {
 
         let neighbors = analyzer.neighbors();
         for &neighbor in neighbors.iter().take(10) {
-            let _test_score = analyzer.test_neighbor(neighbor);
+            let _test_score = analyzer.score_neighbor(neighbor);
         }
 
         // Score and layout should be unchanged
@@ -144,7 +144,7 @@ mod tests {
             // Reset to original layout
             analyzer.use_layout(&layout, &[]);
 
-            let test_score = analyzer.test_neighbor(neighbor);
+            let test_score = analyzer.score_neighbor(neighbor);
 
             analyzer.apply_neighbor(neighbor);
             let apply_score = analyzer.score();
@@ -242,7 +242,7 @@ mod tests {
 
         // Apply a swap
         let swap = Neighbor::KeySwap(PosPair(5, 10));
-        let swapped_score = analyzer.test_neighbor(swap);
+        let swapped_score = analyzer.score_neighbor(swap);
 
         // After test_neighbor, score should still be original
         assert_eq!(original_score, analyzer.score(), "test_neighbor should restore state via copy_from");

@@ -13,11 +13,11 @@ impl Analyzer {
             let mut best_loop_score = i64::MIN;
 
             for &neighbor in &neighbors {
-                let score = self.test_neighbor(neighbor);
+                let score = self.score_neighbor(neighbor);
 
                 if score > best_score {
                     best_loop_score = score;
-                    self.apply_neighbor(neighbor);
+                    self.apply_neighbor_and_update(neighbor);
                     break;
                 }
             }
@@ -61,7 +61,7 @@ impl Analyzer {
             }
 
             best_score = score;
-            self.apply_neighbor(neighbor);
+            self.apply_neighbor_and_update(neighbor);
         }
 
         (self.layout(), best_score)
