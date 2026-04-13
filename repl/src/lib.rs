@@ -288,10 +288,10 @@ impl Repl {
             if greedy_score > best_bound {
                 best_bound = greedy_score;
             }
-            print!("\r  bound pass {}/{}: {}", i + 1, num_passes, best_bound);
+            print!("\r  bound pass {}/{}: {}", i + 1, num_passes, fmt_num(best_bound as f64));
             std::io::Write::flush(&mut std::io::stdout()).ok();
         }
-        println!("\nInitial bound: {} (found in {:.1}s)", best_bound, bound_start.elapsed().as_secs_f64());
+        println!("\nInitial bound: {} (found in {:.1}s)", fmt_num(best_bound as f64), bound_start.elapsed().as_secs_f64());
 
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
@@ -328,7 +328,7 @@ impl Repl {
                         fmt_num(progress.nodes_visited as f64),
                         fmt_num(progress.nodes_pruned),
                         fmt_num(progress.solutions_found),
-                        progress.best_score.map_or("none".to_string(), |s| s.to_string()),
+                        progress.best_score.map_or("none".to_string(), |s| fmt_num(s as f64)),
                         avg_prune_depth,
                         fmt_num(nodes_per_sec),
                         pct,
@@ -344,7 +344,7 @@ impl Repl {
         println!("Search took {:.2}s", start.elapsed().as_secs_f64());
 
         for (i, result) in results.iter().enumerate() {
-            println!("#{}: score {}", i + 1, result.score);
+            println!("#{}: score {}", i + 1, fmt_num(result.score as f64));
             for (c, pos) in &result.key_positions {
                 print!("{}@{} ", c, pos);
             }
