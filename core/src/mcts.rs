@@ -105,6 +105,7 @@ impl MctsSearch {
 
     /// Run MCTS for a given number of iterations with SA rollouts + optional greedy polish.
     /// `max_tree_depth`: how many keys MCTS decides via tree (rest go to SA). 0 = full depth.
+    /// Progress callback returns true to request early stop.
     pub fn search(
         &mut self,
         iterations: u64,
@@ -112,7 +113,7 @@ impl MctsSearch {
         sa_iterations: usize,
         greedy_depth: usize,
         max_tree_depth: usize,
-        mut progress: impl FnMut(u64, u64, i64, f64),
+        mut progress: impl FnMut(u64, u64, i64, f64) -> bool,
     ) {
         let mut cache = CachedLayout::new(&self.layout, self.data.clone(), &self.weights);
 
@@ -295,7 +296,9 @@ impl MctsSearch {
             if (iter + 1) % 10 == 0 {
                 let best = self.best_layouts.first().map(|(s, _)| *s).unwrap_or(i64::MIN);
                 let avg = root.avg_score();
-                progress(iter + 1, self.total_rollouts, best, avg);
+                if progress(iter + 1, self.total_rollouts, best, avg) {
+                    break;
+                }
             }
         }
     }

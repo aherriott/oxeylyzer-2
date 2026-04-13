@@ -538,18 +538,30 @@ impl Repl {
 
     fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>, greedy_depth: Option<usize>, tree_depth: Option<usize>) -> Result<()> {
         use oxeylyzer_core::mcts::MctsSearch;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
 
         let layout = self.layout(name)?.clone();
-        let iterations = iterations.unwrap_or(1_000) as u64;
+        let iterations = iterations.map(|i| i as u64).unwrap_or(u64::MAX);
         let explore = explore.unwrap_or(1.41);
         let sa_iters = sa_iters.unwrap_or(1_000);
         let greedy_depth = greedy_depth.unwrap_or(0);
-        let tree_depth = tree_depth.unwrap_or(0); // 0 = full depth
+        let tree_depth = tree_depth.unwrap_or(0);
         let num_pos = layout.keyboard.len();
 
         let td_display = if tree_depth == 0 { format!("all {}", num_pos) } else { format!("{}", tree_depth) };
+        let iter_display = if iterations == u64::MAX { "∞".to_string() } else { format!("{}", iterations) };
         println!("MCTS: {} positions, {} rollouts, exploration={:.2}, SA={}/rollout, tree depth={}, greedy={}",
-            num_pos, iterations, explore, sa_iters, td_display, greedy_depth);
+            num_pos, iter_display, explore, sa_iters, td_display, greedy_depth);
+        if iterations == u64::MAX {
+            println!("  (Ctrl+C to stop)");
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_handler = stop.clone();
+        ctrlc::set_handler(move || {
+            stop_handler.store(true, Ordering::SeqCst);
+        }).ok();
 
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
@@ -570,11 +582,13 @@ impl Repl {
                 );
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
+            stop.load(Ordering::SeqCst)
         });
         println!();
 
         let elapsed = start.elapsed();
-        println!("MCTS completed in {:.2}s ({} rollouts)", elapsed.as_secs_f64(), iterations);
+        println!("MCTS completed in {:.2}s ({} rollouts)", elapsed.as_secs_f64(),
+            fmt_num(search.total_rollouts() as f64));
 
         let results = search.results();
         for (i, result) in results.iter().enumerate().take(10) {
