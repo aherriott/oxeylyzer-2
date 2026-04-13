@@ -425,7 +425,12 @@ fn readline() -> std::io::Result<String> {
 
 fn fmt_num(n: f64) -> String {
     let abs = n.abs();
-    if abs >= 1e18 { format!("{:.1}Qi", n / 1e18) }
+    if abs >= 1e33 { format!("{:.1}D", n / 1e33) }
+    else if abs >= 1e30 { format!("{:.1}N", n / 1e30) }
+    else if abs >= 1e27 { format!("{:.1}Oc", n / 1e27) }
+    else if abs >= 1e24 { format!("{:.1}Sp", n / 1e24) }
+    else if abs >= 1e21 { format!("{:.1}Sx", n / 1e21) }
+    else if abs >= 1e18 { format!("{:.1}Qi", n / 1e18) }
     else if abs >= 1e15 { format!("{:.1}Qa", n / 1e15) }
     else if abs >= 1e12 { format!("{:.1}T", n / 1e12) }
     else if abs >= 1e9 { format!("{:.1}B", n / 1e9) }
