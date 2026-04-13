@@ -63,6 +63,13 @@ xflags::xflags! {
             /// Number of top layouts to keep. Defaults to 5.
             optional -k, --top top_k: usize
         }
+        /// Beam search
+        cmd beam {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// Beam width (number of candidates kept per depth). Defaults to 1000.
+            optional -w, --width width: usize
+        }
         /// Quit the analyzer
         cmd q quit {}
     }

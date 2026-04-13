@@ -604,6 +604,107 @@ impl BranchBound {
         self.num_positions
     }
 
+    // ==================== Beam Search ====================
+
+    /// Beam search: at each depth, keep the top-K partial layouts.
+    /// Places keys in frequency order (most frequent first).
+    /// Uses a single CachedLayout, reconstructing state incrementally.
+    pub fn beam_search(&mut self, beam_width: usize) -> Vec<ScoredLayout> {
+        use crate::cached_layout::EMPTY_KEY;
+
+        let mut cache = self.create_empty_cache();
+        let num_keys = self.keys_by_freq.len().min(self.num_positions);
+
+        // Beam entry: Vec<usize> of length `depth` — position chosen for each key
+        let mut beam: Vec<Vec<usize>> = vec![vec![]]; // start with one empty layout
+
+        for depth in 0..num_keys {
+            let key = self.keys_by_freq[depth];
+
+            let mut candidates: Vec<(i64, Vec<usize>)> = Vec::with_capacity(beam.len() * (self.num_positions - depth));
+
+            // Sort beam entries so we can share prefixes efficiently
+            beam.sort();
+
+            let mut prev_positions: Vec<usize> = Vec::new();
+
+            for positions in &beam {
+                // Incrementally update cache: find where this entry diverges from previous
+                let shared = prev_positions.iter().zip(positions.iter())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+
+                // Unplace keys from shared+1 onward in previous
+                for d in (shared..prev_positions.len()).rev() {
+                    let prev_key = self.keys_by_freq[d];
+                    let prev_pos = prev_positions[d];
+                    cache.replace_key_fast(prev_pos, prev_key, EMPTY_KEY);
+                }
+
+                // Place keys from shared onward in current
+                for d in shared..positions.len() {
+                    let cur_key = self.keys_by_freq[d];
+                    let cur_pos = positions[d];
+                    cache.replace_key_fast(cur_pos, EMPTY_KEY, cur_key);
+                }
+
+                prev_positions = positions.clone();
+
+                // Collect occupied positions
+                let occupied: Vec<bool> = {
+                    let mut occ = vec![false; self.num_positions];
+                    for &p in positions { occ[p] = true; }
+                    occ
+                };
+
+                // Try placing the next key at each available position
+                for pos in 0..self.num_positions {
+                    if occupied[pos] { continue; }
+
+                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    let score = cache.score();
+                    cache.replace_key_fast(pos, key, EMPTY_KEY);
+
+                    let mut new_positions = positions.clone();
+                    new_positions.push(pos);
+                    candidates.push((score, new_positions));
+                }
+            }
+
+            // Unplace all keys from the last beam entry
+            for d in (0..prev_positions.len()).rev() {
+                let k = self.keys_by_freq[d];
+                let p = prev_positions[d];
+                cache.replace_key_fast(p, k, EMPTY_KEY);
+            }
+
+            // Keep top beam_width candidates (highest score = least negative)
+            candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            candidates.truncate(beam_width);
+            beam = candidates.into_iter().map(|(_, positions)| positions).collect();
+
+            if beam.is_empty() { break; }
+        }
+
+        // Convert to ScoredLayout
+        beam.into_iter().map(|positions| {
+            // Reconstruct score
+            for (d, &pos) in positions.iter().enumerate() {
+                cache.replace_key_fast(pos, EMPTY_KEY, self.keys_by_freq[d]);
+            }
+            let score = cache.score();
+            for (d, &pos) in positions.iter().enumerate().rev() {
+                cache.replace_key_fast(pos, self.keys_by_freq[d], EMPTY_KEY);
+            }
+
+            let assignment: Vec<(char, usize)> = positions.iter().enumerate()
+                .map(|(d, &pos)| (self.chars_by_freq[d], pos))
+                .collect();
+
+            ScoredLayout { score, key_positions: assignment }
+        }).collect()
+    }
+
     // ==================== BB3: Hybrid key-freq + finger-fill ====================
 
     /// Search by placing the most frequent key first (at any position),
