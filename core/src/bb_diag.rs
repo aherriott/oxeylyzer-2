@@ -7,42 +7,50 @@ mod tests {
     use crate::weights::dummy_weights;
 
     #[test]
-    fn diagnose_pruning() {
+    fn diagnose_pruning_with_known_good_bound() {
         let data = Data::load("../data/english.json").expect("data");
         let weights = dummy_weights();
-        let layout = Layout::load("../layouts/qwerty.dof").expect("layout");
+        let layout = Layout::load("../layouts/nrts-oxey.dof").expect("layout");
 
         let mut bb = BranchBound::new(layout, data, weights);
         let mut cache = bb.create_empty_cache();
 
         let num_pos = bb.num_positions();
-        let keys_by_freq = bb.chars_by_frequency();
-        let all_keys: Vec<usize> = keys_by_freq.iter()
+        let all_keys: Vec<usize> = bb.chars_by_frequency().iter()
             .map(|&c| cache.char_mapping().get_u(c))
             .collect();
-        let mut available: Vec<usize> = (0..num_pos).collect();
 
-        println!("\n=== Lower bound breakdown at each depth ===");
+        // nrts-oxey actual score
+        let known_good_bound: i64 = -143_714_244_130;
 
-        for depth in 0..std::cmp::min(8, num_pos) {
-            let remaining = &all_keys[depth..];
-            let lb = cache.lower_bound_remaining(remaining, &available);
+        println!("\n=== When does greedy placement exceed the known-good bound? ===");
+        println!("Known-good bound (nrts-oxey score): {}", known_good_bound);
+        println!("Positions: {}", num_pos);
+
+        for depth in 0..num_pos {
             let score = cache.score();
+            let prune = score < known_good_bound;
 
-            println!("depth {:2}: score={:>15}, lb={:>20}, projected={:>20}, remaining_keys={}",
-                depth, score, lb, score + lb, remaining.len());
+            println!("  depth {:2}: score={:>15} {}", depth, score,
+                if prune { "<-- PRUNE" } else { "" });
+
+            if prune {
+                println!("\n  First prune at depth {depth}. This means B&B with a perfect bound");
+                println!("  would prune at depth {depth} on this greedy path.");
+                break;
+            }
 
             if depth < all_keys.len() {
                 cache.replace_key_fast(depth, EMPTY_KEY, all_keys[depth]);
-                available.retain(|&p| p != depth);
             }
         }
 
-        // Full score
-        let mut full = bb.create_empty_cache();
-        for (i, &k) in all_keys.iter().enumerate().take(num_pos) {
-            full.replace_key_fast(i, EMPTY_KEY, k);
-        }
-        println!("full score: {}", full.score());
+        // Also check: what score does greedy completion give from depth 0?
+        let mut cache2 = bb.create_empty_cache();
+        let all_avail: Vec<usize> = (0..num_pos).collect();
+        let greedy_score = cache2.greedy_completion_score(&all_keys[..num_pos], &all_avail);
+        println!("\n  Greedy completion score from empty: {}", greedy_score);
+        println!("  Known-good (nrts-oxey): {}", known_good_bound);
+        println!("  Gap: greedy is {:.1}x worse", greedy_score as f64 / known_good_bound as f64);
     }
 }
