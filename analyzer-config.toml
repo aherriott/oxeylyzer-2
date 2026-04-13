@@ -13,6 +13,10 @@ redirect = 1
 onehandin = 1
 onehandout = 0
 thumb = 0
+full_scissors = -5
+half_scissors = -3
+full_scissors_skip = -2
+half_scissors_skip = -1
 
 [weights.fingers]
 lp = 77
