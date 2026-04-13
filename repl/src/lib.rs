@@ -425,18 +425,19 @@ fn readline() -> std::io::Result<String> {
 
 fn fmt_num(n: f64) -> String {
     let abs = n.abs();
-    if abs >= 1e33 { format!("{:.1}D", n / 1e33) }
-    else if abs >= 1e30 { format!("{:.1}N", n / 1e30) }
-    else if abs >= 1e27 { format!("{:.1}Oc", n / 1e27) }
-    else if abs >= 1e24 { format!("{:.1}Sp", n / 1e24) }
-    else if abs >= 1e21 { format!("{:.1}Sx", n / 1e21) }
-    else if abs >= 1e18 { format!("{:.1}Qi", n / 1e18) }
-    else if abs >= 1e15 { format!("{:.1}Qa", n / 1e15) }
-    else if abs >= 1e12 { format!("{:.1}T", n / 1e12) }
-    else if abs >= 1e9 { format!("{:.1}B", n / 1e9) }
-    else if abs >= 1e6 { format!("{:.1}M", n / 1e6) }
-    else if abs >= 1e3 { format!("{:.1}K", n / 1e3) }
-    else { format!("{:.0}", n) }
+    let suffixes = [
+        (1e63, "Vg"), (1e60, "Nv"), (1e57, "Ov"), (1e54, "Sv"), (1e51, "Sxd"),
+        (1e48, "Qid"), (1e45, "Qad"), (1e42, "Td"), (1e39, "Dd"),
+        (1e36, "Ud"), (1e33, "D"), (1e30, "N"), (1e27, "Oc"), (1e24, "Sp"),
+        (1e21, "Sx"), (1e18, "Qi"), (1e15, "Qa"), (1e12, "T"),
+        (1e9, "B"), (1e6, "M"), (1e3, "K"),
+    ];
+    for &(threshold, suffix) in &suffixes {
+        if abs >= threshold {
+            return format!("{:.1}{}", n / threshold, suffix);
+        }
+    }
+    format!("{:.0}", n)
 }
 
 fn fmt_duration(secs: f64) -> String {
