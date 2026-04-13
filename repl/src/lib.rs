@@ -354,6 +354,88 @@ impl Repl {
         Ok(())
     }
 
+    fn branch_bound_position_first(&mut self, name: &str, top_k: Option<usize>) -> Result<()> {
+        use oxeylyzer_core::branch_bound::BranchBound;
+
+        let layout = self.layout(name)?.clone();
+        let top_k = top_k.unwrap_or(5);
+
+        println!("B&B position-first: {} positions, top-{}", layout.keyboard.len(), top_k);
+
+        // Get initial bound from SA + greedy
+        let bound_start = std::time::Instant::now();
+        let mut best_bound = i64::MIN;
+        let num_passes = 10;
+        for i in 0..num_passes {
+            let random = layout.random();
+            self.a.use_layout(&random, &[]);
+            let (sa_layout, _) = self.a.annealing_improve(random.clone(), &[], 1.0, 1E-4, 1_000_000);
+            let (_, greedy_score) = self.a.greedy_improve(&sa_layout, &[]);
+            if greedy_score > best_bound {
+                best_bound = greedy_score;
+            }
+            print!("\r  bound pass {}/{}: {}", i + 1, num_passes, fmt_num(best_bound as f64));
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        println!("\nInitial bound: {} (found in {:.1}s)", fmt_num(best_bound as f64), bound_start.elapsed().as_secs_f64());
+
+        let start = std::time::Instant::now();
+        let mut last_print = std::time::Instant::now();
+
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+
+        // Print finger order
+        println!("Position order (finger-first): {:?}", bb.positions_by_finger());
+
+        let (results, stats) = bb.search_position_first(
+            best_bound,
+            top_k,
+            |progress: &oxeylyzer_core::branch_bound::BranchBoundProgress| {
+                if progress.nodes_visited % 100_000 == 0 && last_print.elapsed().as_millis() > 500 {
+                    last_print = std::time::Instant::now();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let nodes_per_sec = progress.nodes_visited as f64 / elapsed;
+                    let total_nodes = progress.nodes_visited as f64 + progress.nodes_pruned;
+                    let avg_prune_depth = if progress.prune_count > 0 {
+                        progress.prune_depth_sum as f64 / progress.prune_count as f64
+                    } else { 0.0 };
+                    let pct = if progress.estimated_total_nodes > 0.0 {
+                        total_nodes / progress.estimated_total_nodes * 100.0
+                    } else { 0.0 };
+                    let est_remaining = if pct > 0.01 {
+                        elapsed / (pct / 100.0) - elapsed
+                    } else { f64::INFINITY };
+
+                    print!("\r  {} visited | {} pruned | {} solutions | best: {} | avg prune depth: {:.1} | {} nodes/s | {:.1}% done | ~{} left   ",
+                        fmt_num(progress.nodes_visited as f64),
+                        fmt_num(progress.nodes_pruned),
+                        fmt_num(progress.solutions_found),
+                        progress.best_score.map_or("none".to_string(), |s| fmt_num(s as f64)),
+                        avg_prune_depth,
+                        fmt_num(nodes_per_sec),
+                        pct,
+                        fmt_duration(est_remaining),
+                    );
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                }
+            },
+        );
+        println!();
+
+        println!("{}", stats);
+        println!("Search took {:.2}s", start.elapsed().as_secs_f64());
+
+        for (i, result) in results.iter().enumerate() {
+            println!("#{}: score {}", i + 1, fmt_num(result.score as f64));
+            for (c, pos) in &result.key_positions {
+                print!("{}@{} ", c, pos);
+            }
+            println!();
+        }
+
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         let new = Self::with_config(&self.config_path)?;
 
@@ -384,6 +466,7 @@ impl Repl {
             OxeylyzerCmd::Similarity(s) => self.similarity(&s.name)?,
             OxeylyzerCmd::R(_) => self.reload()?,
             OxeylyzerCmd::Bb(b) => self.branch_bound(&b.name, b.depth, b.top)?,
+            OxeylyzerCmd::Bb2(b) => self.branch_bound_position_first(&b.name, b.top)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

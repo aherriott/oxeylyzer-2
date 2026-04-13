@@ -170,6 +170,12 @@ pub struct BranchBound {
     /// CacheKeys for chars_by_freq
     keys_by_freq: Vec<CacheKey>,
     num_positions: usize,
+    /// Positions ordered by finger (fill one finger before the next, adjacent fingers next)
+    positions_by_finger: Vec<usize>,
+    /// All available keys sorted by frequency (for position-first search)
+    all_keys_by_freq: Vec<CacheKey>,
+    /// All available chars sorted by frequency
+    all_chars_by_freq: Vec<char>,
 }
 
 
@@ -189,14 +195,43 @@ impl BranchBound {
             .map(|(c, _)| c)
             .collect();
 
-        // We'll compute keys_by_freq after creating the cache
+        // Compute positions ordered by finger.
+        // Strategy: start from the center (index fingers), work outward.
+        // Within each finger, order by row (home row first).
+        // Adjacent fingers are next to maximize early interactions.
+        //
+        // Finger order (center-out): LI, RI, LM, RM, LR, RR, LP, RP, LT, RT
+        use libdof::dofinitions::Finger::*;
+        let finger_order = [LI, RI, LM, RM, LR, RR, LP, RP, LT, RT];
+
+        let mut positions_by_finger = Vec::with_capacity(num_positions);
+        for &finger in &finger_order {
+            let mut finger_positions: Vec<(usize, f64)> = base_layout.fingers.iter()
+                .enumerate()
+                .filter(|(_, &f)| f == finger)
+                .map(|(pos, _)| {
+                    // Sort within finger: home row (row 1) first, then row 0, then row 2
+                    let row = base_layout.keyboard[pos].y();
+                    let row_priority = if (row - 1.0).abs() < 0.5 { 0.0 } // home row
+                        else if row < 1.0 { 1.0 } // top row
+                        else { 2.0 }; // bottom row
+                    (pos, row_priority)
+                })
+                .collect();
+            finger_positions.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            positions_by_finger.extend(finger_positions.iter().map(|(pos, _)| *pos));
+        }
+
         Self {
             base_layout,
             data,
             weights,
-            chars_by_freq,
+            chars_by_freq: chars_by_freq.clone(),
             keys_by_freq: Vec::new(),
             num_positions,
+            positions_by_finger,
+            all_keys_by_freq: Vec::new(),
+            all_chars_by_freq: chars_by_freq,
         }
     }
 
@@ -209,6 +244,13 @@ impl BranchBound {
         // Initialize keys_by_freq from the cache's char mapping
         if self.keys_by_freq.is_empty() {
             self.keys_by_freq = self.chars_by_freq.iter()
+                .map(|&c| cache.char_mapping().get_u(c))
+                .collect();
+        }
+
+        // Initialize all_keys_by_freq (same keys, for position-first search)
+        if self.all_keys_by_freq.is_empty() {
+            self.all_keys_by_freq = self.all_chars_by_freq.iter()
                 .map(|&c| cache.char_mapping().get_u(c))
                 .collect();
         }
@@ -560,6 +602,152 @@ impl BranchBound {
     /// Get the number of positions in the layout
     pub fn num_positions(&self) -> usize {
         self.num_positions
+    }
+
+    /// Get the finger-ordered positions
+    pub fn positions_by_finger(&self) -> &[usize] {
+        &self.positions_by_finger
+    }
+
+    // ==================== Position-First Search ====================
+
+    /// Search by filling positions in finger order, trying all available keys at each position.
+    /// This realizes SFB/stretch/scissor penalties earlier, enabling deeper pruning.
+    pub fn search_position_first(
+        &mut self,
+        bound: i64,
+        top_k: usize,
+        progress_callback: impl FnMut(&BranchBoundProgress),
+    ) -> (Vec<ScoredLayout>, BranchBoundStats) {
+        let mut cache = self.create_empty_cache();
+        let mut top_layouts = TopKHeap::new(top_k);
+        let mut stats = BranchBoundStats::default();
+        let mut assignment: Vec<(char, usize)> = Vec::with_capacity(self.num_positions);
+
+        // Available keys (all keys initially)
+        let mut available_keys: Vec<(CacheKey, char)> = self.all_keys_by_freq.iter()
+            .zip(self.all_chars_by_freq.iter())
+            .map(|(&k, &c)| (k, c))
+            .collect();
+
+        let max_depth = self.positions_by_finger.len();
+        let estimated_total_layouts = Self::estimate_leaf_nodes_f64(self.num_positions, max_depth);
+        let estimated_total_nodes = Self::estimate_total_nodes_f64(self.num_positions, max_depth);
+
+        let mut progress_callback = progress_callback;
+
+        self.search_position_first_recursive(
+            &mut cache,
+            0,
+            &mut available_keys,
+            &mut assignment,
+            bound,
+            &mut top_layouts,
+            &mut stats,
+            estimated_total_layouts,
+            estimated_total_nodes,
+            &mut progress_callback,
+        );
+
+        (top_layouts.into_sorted_vec(), stats)
+    }
+
+    fn search_position_first_recursive(
+        &self,
+        cache: &mut CachedLayout,
+        depth: usize,
+        available_keys: &mut Vec<(CacheKey, char)>,
+        assignment: &mut Vec<(char, usize)>,
+        bound: i64,
+        top_layouts: &mut TopKHeap,
+        stats: &mut BranchBoundStats,
+        estimated_total_layouts: f64,
+        estimated_total_nodes: f64,
+        progress_callback: &mut impl FnMut(&BranchBoundProgress),
+    ) {
+        use crate::cached_layout::EMPTY_KEY;
+
+        stats.max_depth_reached = stats.max_depth_reached.max(depth);
+        stats.nodes_visited += 1;
+
+        let current_score = cache.score();
+
+        // Pruning: if current score is already worse than bound, prune
+        if current_score < bound {
+            let remaining_levels = self.positions_by_finger.len().saturating_sub(depth);
+            let leaves_pruned = Self::estimate_leaf_nodes_f64(available_keys.len(), remaining_levels);
+            let nodes_pruned = Self::count_subtree_nodes_f64(available_keys.len(), remaining_levels);
+            stats.layouts_pruned += leaves_pruned;
+            stats.nodes_pruned += nodes_pruned;
+            stats.prune_depth_sum += depth as u64;
+            stats.prune_count += 1;
+            stats.weighted_prune_depth_sum += depth as f64 * leaves_pruned;
+
+            if stats.nodes_visited % 100_000 == 0 {
+                let progress = BranchBoundProgress {
+                    nodes_visited: stats.nodes_visited,
+                    nodes_pruned: stats.nodes_pruned,
+                    layouts_evaluated: stats.layouts_evaluated,
+                    layouts_pruned: stats.layouts_pruned,
+                    estimated_total_layouts,
+                    estimated_total_nodes,
+                    prune_count: stats.prune_count,
+                    prune_depth_sum: stats.prune_depth_sum,
+                    weighted_prune_depth_sum: stats.weighted_prune_depth_sum,
+                    current_depth: depth,
+                    max_depth: self.positions_by_finger.len(),
+                    best_score: top_layouts.best_score(),
+                    solutions_found: stats.solutions_found,
+                };
+                progress_callback(&progress);
+            }
+            return;
+        }
+
+        // Base case: all positions filled
+        if depth >= self.positions_by_finger.len() || available_keys.is_empty() {
+            stats.layouts_evaluated += 1.0;
+            stats.solutions_found += 1.0;
+            let solution = ScoredLayout {
+                score: current_score,
+                key_positions: assignment.clone(),
+            };
+            top_layouts.try_insert(solution);
+            return;
+        }
+
+        // The position to fill at this depth
+        let pos = self.positions_by_finger[depth];
+        let num_available = available_keys.len();
+
+        // Try each available key at this position
+        for i in 0..num_available {
+            let (key, c) = available_keys[i];
+
+            cache.replace_key_fast(pos, EMPTY_KEY, key);
+            assignment.push((c, pos));
+            available_keys.swap_remove(i);
+
+            let effective_bound = if top_layouts.len() >= top_layouts.capacity {
+                top_layouts.worst_score().unwrap_or(bound).max(bound)
+            } else {
+                bound
+            };
+
+            self.search_position_first_recursive(
+                cache, depth + 1, available_keys, assignment,
+                effective_bound, top_layouts, stats,
+                estimated_total_layouts, estimated_total_nodes, progress_callback,
+            );
+
+            // Backtrack
+            available_keys.push((key, c));
+            let last = available_keys.len() - 1;
+            available_keys.swap(i, last);
+
+            assignment.pop();
+            cache.replace_key_fast(pos, key, EMPTY_KEY);
+        }
     }
 }
 

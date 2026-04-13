@@ -1,115 +1,153 @@
 #[cfg(test)]
 mod tests {
-    use crate::branch_bound::BranchBound;
-    use crate::cached_layout::EMPTY_KEY;
     use crate::data::Data;
     use crate::layout::Layout;
     use crate::weights::dummy_weights;
+    use crate::analyze::Analyzer;
+    use std::collections::HashMap;
 
     #[test]
-    fn diagnose_greedy_remaining_table() {
+    fn decomposition_feasibility() {
         let data = Data::load("../data/english.json").expect("data");
         let weights = dummy_weights();
-        let layout = Layout::load("../layouts/nrts-oxey.dof").expect("layout");
 
-        let mut bb = BranchBound::new(layout, data, weights);
-        let cache = bb.create_empty_cache();
+        // Test with multiple layouts to see different finger structures
+        for name in ["nrts-oxey", "qwerty"] {
+            let layout = Layout::load(format!("../layouts/{name}.dof")).expect("layout");
 
-        let num_pos = bb.num_positions();
-        let all_keys: Vec<usize> = bb.chars_by_frequency().iter()
-            .map(|&c| cache.char_mapping().get_u(c))
-            .collect();
+            println!("\n=== {} ({:?} board) ===", name, layout.shape);
+            println!("Positions: {}", layout.keyboard.len());
 
-        let bound: i64 = -143_714_244_130;
-
-        // Build greedy remaining cost table:
-        // greedy_score[d] = score after greedily placing first d keys
-        // remaining_cost[d] = greedy_score[num_pos] - greedy_score[d]
-        let all_avail: Vec<usize> = (0..num_pos).collect();
-        let mut greedy_scores: Vec<i64> = Vec::new();
-
-        let mut greedy_cache = cache.clone();
-        greedy_scores.push(greedy_cache.score()); // depth 0
-
-        for depth in 0..num_pos {
-            let key = all_keys[depth];
-            // Find best position for this key
-            let nk = greedy_cache.trigram_num_keys();
-            if key >= nk { continue; }
-
-            let mut best_pos = depth; // fallback
-            let mut best_score = i64::MIN;
-            for pos in 0..num_pos {
-                if greedy_cache.get_key_at(pos) != EMPTY_KEY { continue; }
-                greedy_cache.replace_key_fast(pos, EMPTY_KEY, key);
-                let s = greedy_cache.score();
-                greedy_cache.replace_key_fast(pos, key, EMPTY_KEY);
-                if s > best_score {
-                    best_score = s;
-                    best_pos = pos;
-                }
+            // Group positions by finger
+            let mut finger_groups: HashMap<u8, Vec<usize>> = HashMap::new();
+            for (pos, finger) in layout.fingers.iter().enumerate() {
+                finger_groups.entry(*finger as u8).or_default().push(pos);
             }
-            greedy_cache.replace_key_fast(best_pos, EMPTY_KEY, key);
-            greedy_scores.push(greedy_cache.score());
-        }
 
-        let full_greedy = *greedy_scores.last().unwrap();
+            let mut groups: Vec<(u8, Vec<usize>)> = finger_groups.into_iter().collect();
+            groups.sort_by_key(|(f, _)| *f);
 
-        println!("\n=== Greedy remaining cost table ===");
-        println!("Full greedy score: {}", full_greedy);
-        println!("Bound (nrts-oxey): {}", bound);
-
-        // Now simulate B&B with this table
-        // At each depth, remaining_cost = full_greedy - greedy_score[depth]
-        // This is how much MORE penalty the greedy placement adds from this depth.
-        // It's an upper bound on the optimal remaining cost (greedy is suboptimal).
-        // So: projected = current_score + remaining_cost is an UPPER bound.
-        // For pruning we need: if projected < bound, prune.
-        // But projected is an upper bound, so if even the upper bound is < bound, prune.
-        // Wait - that's wrong. If the upper bound is < bound, it means even the BEST
-        // completion from this point is worse than bound. That IS valid for pruning!
-        //
-        // Actually no. remaining_cost from greedy is the greedy's remaining penalty.
-        // The optimal remaining penalty is LESS negative (better). So:
-        //   optimal_remaining >= greedy_remaining (less negative)
-        //   current + optimal_remaining >= current + greedy_remaining
-        // If current + greedy_remaining >= bound, we can't prune.
-        // If current + greedy_remaining < bound, the greedy completion is worse than bound,
-        // but the optimal might still be better. So we CAN'T prune based on this.
-        //
-        // The greedy remaining cost is an UPPER bound on remaining penalty (less negative).
-        // For pruning we need a LOWER bound (more negative). Greedy gives the wrong direction.
-
-        // BUT: we can use the greedy table differently.
-        // The greedy remaining cost tells us: "from this depth, the greedy adds X penalty."
-        // The ACTUAL remaining cost is somewhere between X (greedy) and the optimal.
-        // We can't use this for pruning directly.
-        //
-        // However, we CAN use it to estimate: if the current path is WORSE than the greedy
-        // path at this depth, it's unlikely to lead to a good solution.
-        // greedy_score[depth] is the score of the greedy partial layout at depth d.
-        // If current_score < greedy_score[depth] - margin, prune.
-        // This is heuristic, not exact.
-
-        let mut test_cache = cache.clone();
-        for depth in 0..12 {
-            let score = test_cache.score();
-            let greedy_at_d = greedy_scores[depth];
-            let greedy_remaining = full_greedy - greedy_at_d;
-
-            // Heuristic: if current score + greedy remaining < bound, prune
-            // This is valid IF greedy remaining is a lower bound on actual remaining.
-            // Greedy remaining is an UPPER bound (less negative), so this is NOT valid.
-            // But let's see the numbers anyway.
-            let projected = score + greedy_remaining;
-
-            println!("  depth {:2}: score={:>15}, greedy_at_d={:>15}, greedy_remaining={:>15}, projected={:>15} {}",
-                depth, score, greedy_at_d, greedy_remaining, projected,
-                if projected < bound { "<-- would prune (heuristic)" } else { "" });
-
-            if depth < all_keys.len() {
-                test_cache.replace_key_fast(depth, EMPTY_KEY, all_keys[depth]);
+            println!("\nFinger groups:");
+            let mut total_within = 1u128;
+            for (finger, positions) in &groups {
+                let n = positions.len();
+                let factorial: u128 = (1..=n as u128).product();
+                total_within *= factorial;
+                let keys: Vec<char> = positions.iter().map(|&p| layout.keys[p]).collect();
+                println!("  finger {:2}: {} positions {:?} -> {:?} ({}! = {} orderings)",
+                    finger, n, positions, keys, n, factorial);
             }
+
+            let num_fingers = groups.len();
+            let finger_sizes: Vec<usize> = groups.iter().map(|(_, p)| p.len()).collect();
+            let total_positions: usize = finger_sizes.iter().sum();
+            let num_keys = total_positions; // assume 1 key per position
+
+            println!("\nSearch space analysis:");
+            println!("  Fingers: {}", num_fingers);
+            println!("  Finger sizes: {:?}", finger_sizes);
+            println!("  Total positions: {}", total_positions);
+
+            // Full search space
+            let full_factorial: f64 = (1..=total_positions).map(|i| i as f64).product();
+            println!("  Full search ({}!): {:.2e}", total_positions, full_factorial);
+
+            // Within-finger permutations only
+            println!("  Within-finger perms: {:.2e}", total_within as f64);
+
+            // Key-to-finger assignment (multinomial)
+            let assignment_space = full_factorial / finger_sizes.iter()
+                .map(|&s| (1..=s).map(|i| i as f64).product::<f64>())
+                .product::<f64>();
+            println!("  Key-to-finger assignments: {:.2e}", assignment_space);
+
+            // Phase 1: Hand assignment (left vs right)
+            let left_fingers: Vec<&(u8, Vec<usize>)> = groups.iter()
+                .filter(|(f, _)| (*f as usize) < 5) // LP=0..LT=4
+                .collect();
+            let right_fingers: Vec<&(u8, Vec<usize>)> = groups.iter()
+                .filter(|(f, _)| (*f as usize) >= 5) // RT=5..RP=9
+                .collect();
+            let left_size: usize = left_fingers.iter().map(|(_, p)| p.len()).sum();
+            let right_size: usize = right_fingers.iter().map(|(_, p)| p.len()).sum();
+
+            println!("\n  Hand split: left={} positions, right={} positions", left_size, right_size);
+
+            // C(n, left_size) ways to assign keys to hands
+            let hand_assignments = n_choose_k(num_keys, left_size);
+            println!("  Hand assignments C({},{}): {:.2e}", num_keys, left_size, hand_assignments);
+
+            // Phase 2: Within-hand finger assignment
+            // Left hand: partition left_size keys into finger groups
+            let left_sizes: Vec<usize> = left_fingers.iter().map(|(_, p)| p.len()).collect();
+            let right_sizes: Vec<usize> = right_fingers.iter().map(|(_, p)| p.len()).collect();
+
+            let left_finger_assignments = multinomial_count(left_size, &left_sizes);
+            let right_finger_assignments = multinomial_count(right_size, &right_sizes);
+
+            println!("  Left finger assignments: {:.2e} (sizes {:?})", left_finger_assignments, left_sizes);
+            println!("  Right finger assignments: {:.2e} (sizes {:?})", right_finger_assignments, right_sizes);
+
+            // Phase 3: Within-finger ordering
+            let left_within: f64 = left_sizes.iter()
+                .map(|&s| (1..=s).map(|i| i as f64).product::<f64>())
+                .product();
+            let right_within: f64 = right_sizes.iter()
+                .map(|&s| (1..=s).map(|i| i as f64).product::<f64>())
+                .product();
+
+            println!("  Left within-finger orderings: {:.2e}", left_within);
+            println!("  Right within-finger orderings: {:.2e}", right_within);
+
+            // Total decomposed
+            let total_decomposed = hand_assignments * left_finger_assignments * right_finger_assignments
+                * left_within * right_within;
+            println!("\n  Total decomposed: {:.2e} (should equal {:.2e})", total_decomposed, full_factorial);
+
+            // Feasibility of each phase
+            println!("\n  FEASIBILITY:");
+            println!("  Phase 1 (hand assignment): {:.2e} - {}",
+                hand_assignments,
+                if hand_assignments < 1e9 { "FEASIBLE with pruning" } else { "needs beam search" });
+            println!("  Phase 2a (left finger assignment): {:.2e} - {}",
+                left_finger_assignments,
+                if left_finger_assignments < 1e9 { "FEASIBLE" } else { "needs beam search" });
+            println!("  Phase 2b (right finger assignment): {:.2e} - {}",
+                right_finger_assignments,
+                if right_finger_assignments < 1e9 { "FEASIBLE" } else { "needs beam search" });
+            println!("  Phase 3 (within-finger): {:.2e} - {}",
+                left_within * right_within,
+                if left_within * right_within < 1e9 { "FEASIBLE (independent per finger)" } else { "needs pruning" });
+
+            // Alternative: beam search at each phase
+            let beam_k = 10000;
+            let beam_phase1 = (hand_assignments as f64).min(beam_k as f64) * left_size as f64;
+            let beam_phase2 = beam_k as f64 * (left_finger_assignments + right_finger_assignments);
+            let beam_phase3 = beam_k as f64 * (left_within + right_within);
+            println!("\n  With beam search (K={}):", beam_k);
+            println!("    Phase 1 evaluations: {:.2e}", beam_phase1);
+            println!("    Phase 2 evaluations: {:.2e}", beam_phase2);
+            println!("    Phase 3 evaluations: {:.2e}", beam_phase3);
+            println!("    Total evaluations: {:.2e}", beam_phase1 + beam_phase2 + beam_phase3);
+            println!("    At 5µs/eval: {:.1}s", (beam_phase1 + beam_phase2 + beam_phase3) * 5e-6);
         }
+    }
+
+    fn n_choose_k(n: usize, k: usize) -> f64 {
+        if k > n { return 0.0; }
+        let k = k.min(n - k);
+        let mut result = 1.0f64;
+        for i in 0..k {
+            result *= (n - i) as f64 / (i + 1) as f64;
+        }
+        result
+    }
+
+    fn multinomial_count(n: usize, groups: &[usize]) -> f64 {
+        let numerator: f64 = (1..=n).map(|i| i as f64).product();
+        let denominator: f64 = groups.iter()
+            .map(|&s| (1..=s).map(|i| i as f64).product::<f64>())
+            .product();
+        numerator / denominator
     }
 }
