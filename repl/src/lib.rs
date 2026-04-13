@@ -512,17 +512,18 @@ impl Repl {
         Ok(())
     }
 
-    fn beam_search_cmd(&mut self, name: &str, width: Option<usize>) -> Result<()> {
+    fn beam_search_cmd(&mut self, name: &str, width: Option<usize>, interval: Option<usize>) -> Result<()> {
         use oxeylyzer_core::branch_bound::BranchBound;
 
         let layout = self.layout(name)?.clone();
         let width = width.unwrap_or(1000);
+        let interval = interval.unwrap_or(1);
 
-        println!("Beam search: {} positions, beam width {}", layout.keyboard.len(), width);
+        println!("Beam search: {} positions, beam width {}, prune every {} depths", layout.keyboard.len(), width, interval);
 
         let start = std::time::Instant::now();
         let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
-        let results = bb.beam_search(width);
+        let results = bb.beam_search_with_interval(width, interval);
         let elapsed = start.elapsed();
 
         println!("Beam search completed in {:.2}s", elapsed.as_secs_f64());
@@ -567,7 +568,7 @@ impl Repl {
             OxeylyzerCmd::Bb(b) => self.branch_bound(&b.name, b.depth, b.top)?,
             OxeylyzerCmd::Bb2(b) => self.branch_bound_position_first(&b.name, b.top)?,
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
-            OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width)?,
+            OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

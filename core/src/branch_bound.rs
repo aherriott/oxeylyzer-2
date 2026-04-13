@@ -610,54 +610,45 @@ impl BranchBound {
     /// Places keys in frequency order (most frequent first).
     /// Uses a single CachedLayout, reconstructing state incrementally.
     pub fn beam_search(&mut self, beam_width: usize) -> Vec<ScoredLayout> {
+        self.beam_search_with_interval(beam_width, 1)
+    }
+
+    /// Beam search with configurable prune interval.
+    /// Prunes to beam_width every `prune_interval` depths.
+    /// Between prunes, the beam grows freely (more diversity).
+    pub fn beam_search_with_interval(&mut self, beam_width: usize, prune_interval: usize) -> Vec<ScoredLayout> {
         use crate::cached_layout::EMPTY_KEY;
 
         let mut cache = self.create_empty_cache();
         let num_keys = self.keys_by_freq.len().min(self.num_positions);
+        let prune_interval = prune_interval.max(1);
 
-        // Beam entry: Vec<usize> of length `depth` — position chosen for each key
-        let mut beam: Vec<Vec<usize>> = vec![vec![]]; // start with one empty layout
+        let mut beam: Vec<Vec<usize>> = vec![vec![]];
 
         for depth in 0..num_keys {
             let key = self.keys_by_freq[depth];
 
             let mut candidates: Vec<(i64, Vec<usize>)> = Vec::with_capacity(beam.len() * (self.num_positions - depth));
 
-            // Sort beam entries so we can share prefixes efficiently
             beam.sort();
-
             let mut prev_positions: Vec<usize> = Vec::new();
 
             for positions in &beam {
-                // Incrementally update cache: find where this entry diverges from previous
                 let shared = prev_positions.iter().zip(positions.iter())
                     .take_while(|(a, b)| a == b)
                     .count();
 
-                // Unplace keys from shared+1 onward in previous
                 for d in (shared..prev_positions.len()).rev() {
-                    let prev_key = self.keys_by_freq[d];
-                    let prev_pos = prev_positions[d];
-                    cache.replace_key_fast(prev_pos, prev_key, EMPTY_KEY);
+                    cache.replace_key_fast(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
                 }
-
-                // Place keys from shared onward in current
                 for d in shared..positions.len() {
-                    let cur_key = self.keys_by_freq[d];
-                    let cur_pos = positions[d];
-                    cache.replace_key_fast(cur_pos, EMPTY_KEY, cur_key);
+                    cache.replace_key_fast(positions[d], EMPTY_KEY, self.keys_by_freq[d]);
                 }
-
                 prev_positions = positions.clone();
 
-                // Collect occupied positions
-                let occupied: Vec<bool> = {
-                    let mut occ = vec![false; self.num_positions];
-                    for &p in positions { occ[p] = true; }
-                    occ
-                };
+                let mut occupied = vec![false; self.num_positions];
+                for &p in positions { occupied[p] = true; }
 
-                // Try placing the next key at each available position
                 for pos in 0..self.num_positions {
                     if occupied[pos] { continue; }
 
@@ -671,30 +662,27 @@ impl BranchBound {
                 }
             }
 
-            // Unplace all keys from the last beam entry
             for d in (0..prev_positions.len()).rev() {
-                let k = self.keys_by_freq[d];
-                let p = prev_positions[d];
-                cache.replace_key_fast(p, k, EMPTY_KEY);
+                cache.replace_key_fast(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
 
-            // Keep top beam_width candidates (highest score = least negative)
-            candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-            candidates.truncate(beam_width);
-            beam = candidates.into_iter().map(|(_, positions)| positions).collect();
+            // Prune at interval or at last depth
+            if (depth + 1) % prune_interval == 0 || depth == num_keys - 1 {
+                candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+                candidates.truncate(beam_width);
+            }
 
+            beam = candidates.into_iter().map(|(_, positions)| positions).collect();
             if beam.is_empty() { break; }
         }
 
-        // Convert to ScoredLayout
         beam.into_iter().map(|positions| {
-            // Reconstruct score
             for (d, &pos) in positions.iter().enumerate() {
                 cache.replace_key_fast(pos, EMPTY_KEY, self.keys_by_freq[d]);
             }
             let score = cache.score();
-            for (d, &pos) in positions.iter().enumerate().rev() {
-                cache.replace_key_fast(pos, self.keys_by_freq[d], EMPTY_KEY);
+            for d in (0..positions.len()).rev() {
+                cache.replace_key_fast(positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
 
             let assignment: Vec<(char, usize)> = positions.iter().enumerate()

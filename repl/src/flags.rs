@@ -67,8 +67,10 @@ xflags::xflags! {
         cmd beam {
             /// Name of the layout to use as a basis.
             required name: String
-            /// Beam width (number of candidates kept per depth). Defaults to 1000.
+            /// Beam width (number of candidates kept per prune). Defaults to 1000.
             optional -w, --width width: usize
+            /// Prune interval (prune every N depths). Defaults to 1.
+            optional -n, --interval interval: usize
         }
         /// Quit the analyzer
         cmd q quit {}
