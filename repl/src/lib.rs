@@ -158,6 +158,8 @@ impl Repl {
     fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>, time_secs: Option<usize>) -> Result<()> {
         use oxeylyzer_core::dual_annealing::{DualAnnealing, DualAnnealingConfig};
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+        use rayon::prelude::*;
+        use std::sync::atomic::AtomicUsize;
 
         let layout = self.layout(name)?.clone();
         let count = count.unwrap_or(10);
@@ -181,27 +183,39 @@ impl Repl {
 
         self.stop.store(false, Ordering::SeqCst);
         let stop = self.stop.clone();
+        let completed = Arc::new(AtomicUsize::new(0));
 
-        println!("Generating {} variants, {}s each, from {}", count, time_per.as_secs(), name);
+        let ncpus = rayon::current_num_threads();
+        println!("Generating {} variants, {}s each, {} threads, from {}",
+            count, time_per.as_secs(), ncpus, name);
 
         let start = std::time::Instant::now();
-        let mut results: Vec<(Layout, i64)> = Vec::with_capacity(count);
+        let data = self.a.data().clone();
+        let weights = self.a.weights().clone();
 
-        for i in 0..count {
-            let variant_start = std::time::Instant::now();
-            let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone());
-            let result = da.search(&layout, &pins, &config, &policy, u64::MAX, |_iter, _restarts, _current, _best| {
-                stop.load(Ordering::SeqCst) || variant_start.elapsed() >= time_per
-            });
+        let mut results: Vec<(Layout, i64)> = (0..count)
+            .into_par_iter()
+            .map(|_| {
+                if stop.load(Ordering::Relaxed) {
+                    return (layout.clone(), i64::MIN);
+                }
+                let variant_start = std::time::Instant::now();
+                let da = DualAnnealing::new(data.clone(), weights.clone());
+                let result = da.search(&layout, &pins, &config, &policy, u64::MAX, |_iter, _restarts, _current, _best| {
+                    stop.load(Ordering::Relaxed) || variant_start.elapsed() >= time_per
+                });
 
-            results.push((result.best_layout, result.best_score));
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                eprint!("\r  {}/{} completed   ", done, count);
 
-            print!("\r  {}/{} | best so far: {}   ", i + 1, count, fmt_num(result.best_score as f64));
-            stdout().flush().unwrap();
+                (result.best_layout, result.best_score)
+            })
+            .collect();
 
-            if stop.load(Ordering::SeqCst) { break; }
-        }
         println!();
+
+        // Filter out any skipped results
+        results.retain(|(_, s)| *s != i64::MIN);
 
         // Sort by score (higher = better)
         results.sort_by(|(_, s1), (_, s2)| s2.cmp(s1));
