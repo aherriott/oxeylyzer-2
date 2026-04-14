@@ -106,14 +106,14 @@ impl Default for FingerWeights {
 
 pub fn dummy_weights() -> Weights {
     Weights {
-        sfbs: -7,
-        sfs: -1,
-        stretches: -3,
-        sft: -12,
+        sfbs: 7,
+        sfs: 1,
+        stretches: 3,
+        sft: 12,
         inroll: 5,
         outroll: 4,
         alternate: 4,
-        redirect: -1,
+        redirect: 1,
         onehandin: 1,
         onehandout: 0,
         thumb: 0,
