@@ -462,7 +462,8 @@ impl CachedLayout {
                 regular += 1;
             }
         }
-        regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty
+        // Penalties are negated — positive weight = worse score
+        -(regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty)
     }
 
     /// Populate stats from the caches.
@@ -889,8 +890,7 @@ impl CachedLayout {
             self.score()
         } else {
             // Compute penalty delta for the speculative rule change
-            let old_penalty = self.magic_penalty();
-            // Temporarily compute what the penalty would be
+            // magic_penalty() negates weights, so adding a rule subtracts penalty
             let penalty_delta = {
                 let old_is_repeat = old_output.map_or(false, |o| o == leader && o != EMPTY_KEY);
                 let new_is_repeat = new_output == leader && new_output != EMPTY_KEY;
@@ -898,15 +898,15 @@ impl CachedLayout {
                 let new_is_active = new_output != EMPTY_KEY;
 
                 let mut delta = 0i64;
-                // Remove old rule's penalty
+                // Removing old rule removes its penalty (positive delta)
                 if old_is_active {
-                    if old_is_repeat { delta -= self.magic_repeat_penalty; }
-                    else { delta -= self.magic_rule_penalty; }
-                }
-                // Add new rule's penalty
-                if new_is_active {
-                    if new_is_repeat { delta += self.magic_repeat_penalty; }
+                    if old_is_repeat { delta += self.magic_repeat_penalty; }
                     else { delta += self.magic_rule_penalty; }
+                }
+                // Adding new rule adds its penalty (negative delta)
+                if new_is_active {
+                    if new_is_repeat { delta -= self.magic_repeat_penalty; }
+                    else { delta -= self.magic_rule_penalty; }
                 }
                 delta
             };

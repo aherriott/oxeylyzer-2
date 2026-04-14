@@ -461,10 +461,11 @@ impl ScissorsCache {
     /// - Requirement 3.4: Store pre-computed weight multipliers for each scissor type
     /// - Requirement 7.2: Use weights to compute the weighted score
     pub fn set_weights(&mut self, weights: &crate::weights::Weights) {
-        self.full_scissors_weight = weights.full_scissors;
-        self.full_scissors_skip_weight = weights.full_scissors_skip;
-        self.half_scissors_weight = weights.half_scissors;
-        self.half_scissors_skip_weight = weights.half_scissors_skip;
+        // Scissors are penalties — negate so positive weight = worse score
+        self.full_scissors_weight = -weights.full_scissors;
+        self.full_scissors_skip_weight = -weights.full_scissors_skip;
+        self.half_scissors_weight = -weights.half_scissors;
+        self.half_scissors_skip_weight = -weights.half_scissors_skip;
     }
 
     #[inline]

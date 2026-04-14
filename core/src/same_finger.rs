@@ -103,8 +103,9 @@ impl SFCache {
         for f in Finger::FINGERS {
             let fi = f as usize;
             let finger_weight = weights.fingers.get(f);
-            self.sfb_finger_weights[fi] = finger_weight * weights.sfbs;
-            self.sfs_finger_weights[fi] = finger_weight * weights.sfs;
+            // SFBs and SFS are penalties — negate so positive weight = worse score
+            self.sfb_finger_weights[fi] = -(finger_weight * weights.sfbs);
+            self.sfs_finger_weights[fi] = -(finger_weight * weights.sfs);
         }
         self.recompute_total_score();
     }

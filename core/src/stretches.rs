@@ -84,7 +84,8 @@ impl StretchCache {
     }
 
     pub fn set_weights(&mut self, weights: &Weights) {
-        self.stretch_weight = weights.stretches;
+        // Stretches are a penalty — negate so positive weight = worse score
+        self.stretch_weight = -weights.stretches;
     }
 
     fn compute_stretch(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> i64 {

@@ -284,12 +284,14 @@ impl TrigramCache {
     ///
     /// Requirements: 3.1, 3.2
     pub fn set_weights(&mut self, weights: &Weights) {
+        // Inroll, outroll, alternate, onehandin, onehandout are rewards (positive)
         self.inroll_weight = weights.inroll;
         self.outroll_weight = weights.outroll;
         self.alternate_weight = weights.alternate;
-        self.redirect_weight = weights.redirect;
         self.onehandin_weight = weights.onehandin;
         self.onehandout_weight = weights.onehandout;
+        // Redirect is a penalty — negate so positive weight = worse score
+        self.redirect_weight = -weights.redirect;
 
         self.max_trigram_weight = *[
             self.inroll_weight, self.outroll_weight, self.alternate_weight,
