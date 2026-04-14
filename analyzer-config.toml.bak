@@ -3,16 +3,16 @@ layouts = ["./core/test-layouts", "./layouts"]
 
 [weights]
 sfbs = 7
-sfs = 2
-stretches = 1
+sfs = 1
+stretches = 3
 inroll = 5
-outroll = 5
-alternate = 5
-redirect = 2
+outroll = 4
+alternate = 4
+redirect = 1
 onehandin = 1
-onehandout = 1
+onehandout = 0
 full_scissors = 5
-half_scissors = 1
+half_scissors = 3
 sft = 12
 thumb = 0
 full_scissors_skip = 2
