@@ -75,7 +75,7 @@ def write_config(weights_vec):
 def score_layouts(weights_vec):
     write_config(weights_vec)
 
-    cmds = "\n".join([f"r\na {layout}" for layout in LAYOUTS]) + "\nq\n"
+    cmds = "r\n" + "\n".join([f"a {layout}" for layout in LAYOUTS]) + "\nq\n"
     result = subprocess.run(
         [BINARY],
         input=cmds,
@@ -84,18 +84,17 @@ def score_layouts(weights_vec):
         timeout=120,
     )
 
-    scores = {}
-    current_layout = None
+    # Extract scores in order — one per "score:" line
+    score_values = []
     for line in result.stdout.split("\n"):
-        # Detect which layout we're analyzing from the command echo
-        for layout in LAYOUTS:
-            if line.strip().startswith(f"> a {layout}") or line.strip() == f"a {layout}":
-                current_layout = layout
-
         m = re.match(r"score:\s+(-?\d+)", line)
-        if m and current_layout:
-            scores[current_layout] = int(m.group(1))
-            current_layout = None
+        if m:
+            score_values.append(int(m.group(1)))
+
+    scores = {}
+    for i, layout in enumerate(LAYOUTS):
+        if i < len(score_values):
+            scores[layout] = score_values[i]
 
     return scores
 
@@ -122,7 +121,7 @@ def objective(weights_vec):
 
     # Primary: maximize gap (target beats others)
     # Secondary: prefer smaller weights (regularization)
-    reg = 0.001 * np.sum(weights_vec ** 2)
+    reg = 0.0001 * np.sum(weights_vec ** 2)
     obj = -gap + reg
 
     if obj < best_obj:
@@ -151,23 +150,40 @@ def main():
 
     # First eval with initial weights
     print("=== Initial evaluation ===")
+    write_config(INITIAL)
     scores = score_layouts(INITIAL)
+    if not scores:
+        print("ERROR: no scores parsed!")
+        shutil.copy(CONFIG_BAK, CONFIG)
+        os.remove(CONFIG_BAK)
+        return
     rank = sorted(scores.items(), key=lambda x: -x[1])
     for name, score in rank:
         marker = " <-- TARGET" if name == TARGET else ""
         print(f"  {name:<15} {score:>20,}{marker}")
+    target_rank = [n for n, _ in rank].index(TARGET) + 1
+    print(f"\n  {TARGET} is ranked #{target_rank}")
     print()
 
     print("=== Optimizing (Nelder-Mead) ===")
+    # Build initial simplex with meaningful perturbations
+    n = len(INITIAL)
+    simplex = np.zeros((n + 1, n))
+    simplex[0] = INITIAL
+    for i in range(n):
+        simplex[i + 1] = INITIAL.copy()
+        simplex[i + 1][i] += max(2.0, INITIAL[i] * 0.5)  # perturb by 50% or at least 2
+
     result = minimize(
         objective,
         INITIAL,
         method="Nelder-Mead",
         options={
             "maxiter": 500,
-            "xatol": 0.5,
-            "fatol": 1e6,
+            "xatol": 0.3,
+            "fatol": 1e5,
             "adaptive": True,
+            "initial_simplex": simplex,
         },
     )
 
@@ -188,8 +204,9 @@ def main():
         print(f"  {name:<15} {score:>20,}{marker}")
 
     # Restore config
-    shutil.copy(CONFIG_BAK, CONFIG)
-    os.remove(CONFIG_BAK)
+    if os.path.exists(CONFIG_BAK):
+        shutil.copy(CONFIG_BAK, CONFIG)
+        os.remove(CONFIG_BAK)
 
     print()
     print("Config to use:")
