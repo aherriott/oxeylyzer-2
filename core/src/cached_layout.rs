@@ -202,6 +202,8 @@ pub struct CachedLayout {
     trigram: TrigramCache,
     magic: MagicCache,
     fingers: Vec<Finger>,
+    magic_rule_penalty: i64,
+    magic_repeat_penalty: i64,
 }
 
 impl Default for CachedLayout {
@@ -223,6 +225,8 @@ impl Default for CachedLayout {
             trigram: TrigramCache::default(),
             magic: MagicCache::default(),
             fingers: Vec::new(),
+            magic_rule_penalty: 0,
+            magic_repeat_penalty: 0,
         }
     }
 }
@@ -315,6 +319,8 @@ impl CachedLayout {
             trigram,
             magic,
             fingers: fingers.to_vec(),
+            magic_rule_penalty: weights.magic_rule_penalty,
+            magic_repeat_penalty: weights.magic_repeat_penalty,
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -340,7 +346,7 @@ impl CachedLayout {
         // Auto-compute trigram scale: measure raw magnitudes, then rescale
         // trigram weights so they produce the same magnitude as bigram-based scores.
         {
-            let (sfb_s, stretch_s, scissors_s, trigram_s) = cache.score_breakdown();
+            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p) = cache.score_breakdown();
             let mut bigram_sum = 0i64;
             let mut bigram_count = 0;
             for &s in &[sfb_s, stretch_s, scissors_s] {
@@ -433,11 +439,30 @@ impl CachedLayout {
 
     pub fn score(&self) -> i64 {
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
+            + self.magic_penalty()
     }
 
-    /// Returns (sfb_score, stretch_score, scissors_score, trigram_score)
-    pub fn score_breakdown(&self) -> (i64, i64, i64, i64) {
-        (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score())
+    /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty)
+    pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64) {
+        (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(), self.magic_penalty())
+    }
+
+    /// Penalty for active magic rules. Repeat rules (leader→same key) penalized separately.
+    fn magic_penalty(&self) -> i64 {
+        if self.magic_rule_penalty == 0 && self.magic_repeat_penalty == 0 {
+            return 0;
+        }
+        let mut regular = 0i64;
+        let mut repeats = 0i64;
+        for (&(_magic_key, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY { continue; }
+            if output == leader {
+                repeats += 1;
+            } else {
+                regular += 1;
+            }
+        }
+        regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty
     }
 
     /// Populate stats from the caches.
@@ -863,7 +888,29 @@ impl CachedLayout {
         if apply {
             self.score()
         } else {
-            self.score() + total_delta
+            // Compute penalty delta for the speculative rule change
+            let old_penalty = self.magic_penalty();
+            // Temporarily compute what the penalty would be
+            let penalty_delta = {
+                let old_is_repeat = old_output.map_or(false, |o| o == leader && o != EMPTY_KEY);
+                let new_is_repeat = new_output == leader && new_output != EMPTY_KEY;
+                let old_is_active = old_output.map_or(false, |o| o != EMPTY_KEY);
+                let new_is_active = new_output != EMPTY_KEY;
+
+                let mut delta = 0i64;
+                // Remove old rule's penalty
+                if old_is_active {
+                    if old_is_repeat { delta -= self.magic_repeat_penalty; }
+                    else { delta -= self.magic_rule_penalty; }
+                }
+                // Add new rule's penalty
+                if new_is_active {
+                    if new_is_repeat { delta += self.magic_repeat_penalty; }
+                    else { delta += self.magic_rule_penalty; }
+                }
+                delta
+            };
+            self.score() + total_delta + penalty_delta
         }
     }
 

@@ -17,6 +17,8 @@ full_scissors = -5
 half_scissors = -3
 full_scissors_skip = -2
 half_scissors_skip = -1
+magic_rule_penalty = 0
+magic_repeat_penalty = 0
 
 [weights.fingers]
 lp = 77
