@@ -18,11 +18,6 @@ pub struct Weights {
     pub half_scissors: i64,
     pub full_scissors_skip: i64,
     pub half_scissors_skip: i64,
-    /// Scale factor for trigram weights to normalize against bigram magnitudes.
-    /// Default: 0 (auto-compute from corpus data at init time).
-    /// Set to a specific value to override.
-    #[serde(default)]
-    pub trigram_scale: i64,
     pub fingers: FingerWeights,
 }
 
@@ -122,7 +117,6 @@ pub fn dummy_weights() -> Weights {
         half_scissors: 0,
         full_scissors_skip: 0,
         half_scissors_skip: 0,
-        trigram_scale: 0, // auto-compute
         fingers: FingerWeights {
             lp: 77,
             lr: 32,

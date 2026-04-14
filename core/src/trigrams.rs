@@ -284,13 +284,12 @@ impl TrigramCache {
     ///
     /// Requirements: 3.1, 3.2
     pub fn set_weights(&mut self, weights: &Weights) {
-        let s = weights.trigram_scale;
-        self.inroll_weight = weights.inroll * s;
-        self.outroll_weight = weights.outroll * s;
-        self.alternate_weight = weights.alternate * s;
-        self.redirect_weight = weights.redirect * s;
-        self.onehandin_weight = weights.onehandin * s;
-        self.onehandout_weight = weights.onehandout * s;
+        self.inroll_weight = weights.inroll;
+        self.outroll_weight = weights.outroll;
+        self.alternate_weight = weights.alternate;
+        self.redirect_weight = weights.redirect;
+        self.onehandin_weight = weights.onehandin;
+        self.onehandout_weight = weights.onehandout;
 
         self.max_trigram_weight = *[
             self.inroll_weight, self.outroll_weight, self.alternate_weight,
@@ -298,6 +297,29 @@ impl TrigramCache {
         ].iter().max().unwrap_or(&0);
 
         // Update pre-computed weights on all combos
+        self.update_combo_weights();
+        self.weighted_scores_initialized = false;
+    }
+
+    /// Multiply all trigram weights by a scale factor (for normalization).
+    pub fn apply_scale(&mut self, scale: i64) {
+        self.inroll_weight *= scale;
+        self.outroll_weight *= scale;
+        self.alternate_weight *= scale;
+        self.redirect_weight *= scale;
+        self.onehandin_weight *= scale;
+        self.onehandout_weight *= scale;
+
+        self.max_trigram_weight = *[
+            self.inroll_weight, self.outroll_weight, self.alternate_weight,
+            self.redirect_weight, self.onehandin_weight, self.onehandout_weight,
+        ].iter().max().unwrap_or(&0);
+
+        self.update_combo_weights();
+        self.weighted_scores_initialized = false;
+    }
+
+    fn update_combo_weights(&mut self) {
         let get_w = |tt: TrigramType| -> i64 {
             match tt {
                 TrigramType::Inroll => self.inroll_weight,
@@ -324,8 +346,6 @@ impl TrigramCache {
                 combo.weight = get_w(combo.trigram_type);
             }
         }
-
-        self.weighted_scores_initialized = false;
     }
 
     /// Get the weight for a trigram type

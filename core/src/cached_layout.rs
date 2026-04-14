@@ -247,23 +247,13 @@ impl CachedLayout {
 
         let dist = DistCache::new(keyboard, fingers);
         let mut sfb = SFCache::new(fingers, keyboard, dist.distances(), num_keys);
-        let auto_scale_trigrams = weights.trigram_scale == 0;
-        // For auto-scale: initially set trigram_scale=1 so we can measure raw trigram magnitude
-        let init_weights = if auto_scale_trigrams {
-            let mut w = weights.clone();
-            w.trigram_scale = 1;
-            w
-        } else {
-            weights.clone()
-        };
-
-        sfb.set_weights(&init_weights);
+        sfb.set_weights(weights);
         let mut stretch = StretchCache::new(keyboard, fingers, num_keys);
-        stretch.set_weights(&init_weights);
+        stretch.set_weights(weights);
         let mut scissors = ScissorsCache::new(keyboard, fingers, num_keys);
-        scissors.set_weights(&init_weights);
+        scissors.set_weights(weights);
         let mut trigram = TrigramCache::new(fingers, num_keys);
-        trigram.set_weights(&init_weights);
+        trigram.set_weights(weights);
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -347,10 +337,10 @@ impl CachedLayout {
             cache.apply_magic_rule(magic_key, leader, output, true);
         }
 
-        // Auto-compute trigram_scale from corpus data if set to 0
-        if auto_scale_trigrams {
+        // Auto-compute trigram scale: measure raw magnitudes, then rescale
+        // trigram weights so they produce the same magnitude as bigram-based scores.
+        {
             let (sfb_s, stretch_s, scissors_s, trigram_s) = cache.score_breakdown();
-            // Only count non-zero components in the average
             let mut bigram_sum = 0i64;
             let mut bigram_count = 0;
             for &s in &[sfb_s, stretch_s, scissors_s] {
@@ -360,10 +350,10 @@ impl CachedLayout {
             let tg_mag = trigram_s.abs().max(1);
             let auto_scale = (bigram_mag / tg_mag).max(1);
 
-            let mut scaled_weights = weights.clone();
-            scaled_weights.trigram_scale = auto_scale;
-            cache.trigram.set_weights(&scaled_weights);
-            cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
+            if auto_scale > 1 {
+                cache.trigram.apply_scale(auto_scale);
+                cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
+            }
         }
 
         cache
