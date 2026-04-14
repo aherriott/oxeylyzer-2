@@ -118,12 +118,23 @@ impl CachedLayout {
             let idx = rng.generate_range(0..neighbors.len());
             let neighbor = neighbors[idx];
 
-            // Score speculatively: KeySwap uses score_neighbor,
-            // MagicRule uses apply_magic_rule(apply=false) which returns total score
             let new_score = match neighbor {
                 Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
                 Neighbor::MagicRule(rule) => {
-                    self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
+                    // Apply, read score, then revert if rejected.
+                    // Speculative magic scoring uses stale pre-computed deltas
+                    // that drift as keys move, so we apply for ground truth.
+                    let revert = self.get_revert_neighbor(neighbor);
+                    self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
+                    let s = self.score();
+                    // Revert immediately — we'll re-apply below if accepted
+                    match revert {
+                        Neighbor::MagicRule(rev) => {
+                            self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
+                        }
+                        _ => unreachable!(),
+                    }
+                    s
                 }
             };
 
@@ -159,7 +170,16 @@ impl CachedLayout {
                 let score = match neighbor {
                     Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
                     Neighbor::MagicRule(rule) => {
-                        self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
+                        let revert = self.get_revert_neighbor(neighbor);
+                        self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
+                        let s = self.score();
+                        match revert {
+                            Neighbor::MagicRule(rev) => {
+                                self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
+                            }
+                            _ => unreachable!(),
+                        }
+                        s
                     }
                 };
                 if score > best_score {
