@@ -8,6 +8,10 @@ use std::{
     fs,
     io::{stdout, Write as _},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use thiserror::Error;
 
@@ -45,6 +49,7 @@ pub struct Repl {
     a: Analyzer,
     layouts: HashMap<String, Layout>,
     config_path: PathBuf,
+    stop: Arc<AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,10 +72,17 @@ impl Repl {
             .flat_map(|h| h.into_iter())
             .collect();
 
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_handler = stop.clone();
+        ctrlc::set_handler(move || {
+            stop_handler.store(true, Ordering::SeqCst);
+        }).ok();
+
         Ok(Self {
             a,
             layouts,
             config_path,
+            stop,
         })
     }
 
@@ -553,8 +565,6 @@ impl Repl {
     fn mcts_cmd(&mut self, name: &str, iterations: Option<usize>, explore: Option<f64>, sa_iters: Option<usize>, greedy_depth: Option<usize>, tree_depth: Option<usize>, time_secs: Option<usize>) -> Result<()> {
         use oxeylyzer_core::mcts::MctsSearch;
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
 
         let layout = self.layout(name)?.clone();
         let iterations = iterations.map(|i| i as u64).unwrap_or(u64::MAX);
@@ -598,11 +608,9 @@ impl Repl {
             println!("  (Ctrl+C to stop)");
         }
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_handler = stop.clone();
-        ctrlc::set_handler(move || {
-            stop_handler.store(true, Ordering::SeqCst);
-        }).ok();
+        // Reset stop flag before starting
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
 
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
@@ -623,7 +631,6 @@ impl Repl {
                 );
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
-            // Stop on Ctrl+C or time limit
             if stop.load(Ordering::SeqCst) { return true; }
             if let Some(limit) = time_limit {
                 if start.elapsed() >= limit { return true; }
@@ -657,8 +664,6 @@ impl Repl {
     ) -> Result<()> {
         use oxeylyzer_core::dual_annealing::{DualAnnealing, DualAnnealingConfig};
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
 
         let layout = self.layout(name)?.clone();
         let sa_iters = sa_iters.unwrap_or(10_000);
@@ -706,11 +711,9 @@ impl Repl {
             println!("  (Ctrl+C to stop)");
         }
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_handler = stop.clone();
-        ctrlc::set_handler(move || {
-            stop_handler.store(true, Ordering::SeqCst);
-        }).ok();
+        // Reset stop flag before starting
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
 
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();

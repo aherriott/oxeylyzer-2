@@ -102,7 +102,6 @@ impl CachedLayout {
     }
 
     /// Simulated annealing directly on the cache. Pins are excluded from swaps.
-    /// Running totals remain valid throughout (uses score_neighbor + apply_neighbor_and_update).
     fn run_sa(&mut self, pins: &[usize], initial_temp: f64, final_temp: f64, iterations: usize) {
         if iterations == 0 { return; }
 
