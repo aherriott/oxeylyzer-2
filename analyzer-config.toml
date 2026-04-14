@@ -1,20 +1,20 @@
 corpus = "./data/english.json"
-layouts = ["./core/test-layouts", "./layouts"]
+layouts = ["./core/test-layouts", "./layouts"] # can be an array of folders
 
 [weights]
 sfbs = 7
 sfs = 2
 stretches = 1
+sft = 12
 inroll = 5
 outroll = 5
-alternate = 5
+alternate = 4
 redirect = 2
 onehandin = 1
 onehandout = 1
+thumb = 0
 full_scissors = 5
 half_scissors = 1
-sft = 12
-thumb = 0
 full_scissors_skip = 2
 half_scissors_skip = 1
 magic_rule_penalty = 0
