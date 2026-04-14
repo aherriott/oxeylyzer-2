@@ -7,14 +7,16 @@ xflags::xflags! {
         }
         /// Rank all layouts for the currently specified language. A higher score is better.
         cmd rank {}
-        /// Generate layouts by randomizing a base layout.
+        /// Generate layouts by optimizing a base layout with dual annealing.
         cmd gen g generate {
             /// Name of the layout to use as a basis.
             required name: String
-            /// Name of iterations to do. 10 by default.
+            /// Number of variants to generate. 10 by default.
             optional count: usize
             /// Characters to pin. Setting pins speeds up generation.
             optional -p, --pins pins: String
+            /// Time limit per variant in seconds. Default: 30.
+            optional -t, --time time_secs: usize
         }
         /// Shows the top n sfbs on a layout.
         cmd sfbs {

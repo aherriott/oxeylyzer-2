@@ -155,11 +155,13 @@ impl Repl {
         }
     }
 
-    fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>) -> Result<()> {
+    fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>, time_secs: Option<usize>) -> Result<()> {
+        use oxeylyzer_core::dual_annealing::{DualAnnealing, DualAnnealingConfig};
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
 
         let layout = self.layout(name)?.clone();
         let count = count.unwrap_or(10);
+        let time_per = std::time::Duration::from_secs(time_secs.unwrap_or(30) as u64);
         let pins = match pin_chars {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
@@ -170,30 +172,34 @@ impl Repl {
                 OptStep::SA {
                     initial_temp: 10.0,
                     final_temp: 1E-5,
-                    iterations: 1_000_000,
+                    iterations: 10_000,
                 },
                 OptStep::Greedy,
             ],
         };
+        let config = DualAnnealingConfig::default();
+
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
+
+        println!("Generating {} variants, {}s each, from {}", count, time_per.as_secs(), name);
 
         let start = std::time::Instant::now();
-
         let mut results: Vec<(Layout, i64)> = Vec::with_capacity(count);
 
         for i in 0..count {
-            let random_layout = layout.random_with_pins(&pins);
+            let variant_start = std::time::Instant::now();
+            let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone());
+            let result = da.search(&layout, &pins, &config, &policy, u64::MAX, |_iter, _restarts, _current, _best| {
+                stop.load(Ordering::SeqCst) || variant_start.elapsed() >= time_per
+            });
 
-            // Initialize cache and run policy
-            let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
-                &random_layout, self.a.data().clone(), self.a.weights(),
-            );
-            let final_score = cache.optimize(&policy, &pins);
-            let final_layout = cache.to_layout();
+            results.push((result.best_layout, result.best_score));
 
-            results.push((final_layout, final_score));
-
-            print!("\rgenerated {}/{}", i + 1, count);
+            print!("\r  {}/{} | best so far: {}   ", i + 1, count, fmt_num(result.best_score as f64));
             stdout().flush().unwrap();
+
+            if stop.load(Ordering::SeqCst) { break; }
         }
         println!();
 
@@ -202,11 +208,11 @@ impl Repl {
 
         for (i, (mut layout, score)) in results.into_iter().enumerate().take(10) {
             layout.name = "".into();
-            println!("#{}, score: {}{}", i + 1, score, layout);
+            println!("#{}, score: {}{}", i + 1, fmt_num(score as f64), layout);
         }
 
         println!(
-            "generating {} variants took {:.2} seconds.",
+            "generated {} variants in {:.1}s",
             count,
             start.elapsed().as_secs_f64()
         );
@@ -781,7 +787,7 @@ impl Repl {
         match flags.subcommand {
             OxeylyzerCmd::Analyze(a) => self.analyze(&a.name)?,
             OxeylyzerCmd::Rank(_) => self.rank(),
-            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.count, g.pins)?,
+            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.count, g.pins, g.time)?,
             OxeylyzerCmd::Sfbs(s) => self.sfbs(&s.name, s.count)?,
             OxeylyzerCmd::Stretches(s) => self.stretches(&s.name, s.count)?,
             OxeylyzerCmd::Trigrams(t) => self.trigrams(&t.name)?,
