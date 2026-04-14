@@ -97,6 +97,9 @@ impl Repl {
         self.a.use_layout(&layout, &[]);
         let stats = self.a.stats();
 
+        // Print layout from cache (has reconstructed magic rules)
+        let display_layout = self.a.layout();
+
         let finger_use: String = stats.finger_use
             .iter()
             .map(|f| format!("{:.2}", f * 100.0))
@@ -108,7 +111,7 @@ impl Repl {
             .collect::<Vec<_>>()
             .join(", ");
 
-        print!("{}", layout);
+        print!("{}", display_layout);
 
         println!(
             concat!(

@@ -102,9 +102,42 @@ impl Layout {
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let s = std::fs::read_to_string(path)?;
 
-        serde_json::from_str::<Dof>(&s)
-            .map(Into::into)
-            .map_err(Into::into)
+        // Parse magic rules from raw JSON (libdof doesn't expose them)
+        let raw_magic = Self::parse_magic_from_json(&s);
+
+        let mut layout: Layout = serde_json::from_str::<Dof>(&s)
+            .map(Into::into)?;
+
+        // Populate magic rules that From<Dof> couldn't access
+        for (magic_char, magic_key) in &mut layout.magic {
+            if let Some(rules) = raw_magic.get(&magic_key.label().to_string()) {
+                for (leader, output) in rules {
+                    magic_key.add_rule(leader, output);
+                }
+            }
+        }
+
+        Ok(layout)
+    }
+
+    /// Extract magic rules from raw JSON since libdof doesn't expose them.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_magic_from_json(json_str: &str) -> HashMap<String, Vec<(String, String)>> {
+        let mut result = HashMap::default();
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) else { return result };
+        let Some(magic_obj) = val.get("magic").and_then(|m| m.as_object()) else { return result };
+
+        for (label, rules_val) in magic_obj {
+            let Some(rules_obj) = rules_val.as_object() else { continue };
+            let mut rules = Vec::new();
+            for (leader, output) in rules_obj {
+                if let Some(output_str) = output.as_str() {
+                    rules.push((leader.clone(), output_str.to_string()));
+                }
+            }
+            result.insert(label.clone(), rules);
+        }
+        result
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -207,6 +240,20 @@ impl std::fmt::Display for Layout {
         }
 
         //TODO: add magic keys
+        if !self.magic.is_empty() {
+            writeln!(f)?;
+            let mut rules: Vec<(char, String, String)> = Vec::new();
+            for (magic_char, magic_key) in &self.magic {
+                for (leader, output) in magic_key.rules() {
+                    rules.push((*magic_char, leader.to_string(), output.to_string()));
+                }
+            }
+            rules.sort_by(|a, b| a.1.cmp(&b.1));
+            writeln!(f, "Magic rules:")?;
+            for (magic_char, leader, output) in &rules {
+                writeln!(f, "  {leader} {magic_char} → {output}")?;
+            }
+        }
 
         Ok(())
     }

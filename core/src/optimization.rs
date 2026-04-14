@@ -1,6 +1,6 @@
 use crate::analyze::Neighbor;
 use crate::cached_layout::CachedLayout;
-use crate::layout::PosPair;
+use crate::layout::{MagicRule, PosPair};
 use nanorand::{RandomGen, Rng, WyRand};
 
 /// Describes a sequence of optimization steps to apply to a layout.
@@ -117,7 +117,16 @@ impl CachedLayout {
         for _ in 0..iterations {
             let idx = rng.generate_range(0..neighbors.len());
             let neighbor = neighbors[idx];
-            let new_score = self.score_neighbor(neighbor);
+
+            // Score speculatively: KeySwap uses score_neighbor,
+            // MagicRule uses apply_magic_rule(apply=false)
+            let new_score = match neighbor {
+                Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
+                Neighbor::MagicRule(rule) => {
+                    let delta = self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false);
+                    current_score + delta
+                }
+            };
 
             if new_score < worst_score {
                 worst_score = new_score;
@@ -148,7 +157,13 @@ impl CachedLayout {
         loop {
             let mut improved = false;
             for &neighbor in &neighbors {
-                let score = self.score_neighbor(neighbor);
+                let score = match neighbor {
+                    Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
+                    Neighbor::MagicRule(rule) => {
+                        let delta = self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false);
+                        best_score + delta
+                    }
+                };
                 if score > best_score {
                     best_score = score;
                     self.apply_neighbor_and_update(neighbor);
