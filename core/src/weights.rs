@@ -18,8 +18,15 @@ pub struct Weights {
     pub half_scissors: i64,
     pub full_scissors_skip: i64,
     pub half_scissors_skip: i64,
+    /// Scale factor for trigram weights to normalize against bigram magnitudes.
+    /// Default: 100. With this, weight=1 for trigrams produces roughly the same
+    /// score contribution as weight=1 for bigrams.
+    #[serde(default = "default_trigram_scale")]
+    pub trigram_scale: i64,
     pub fingers: FingerWeights,
 }
+
+fn default_trigram_scale() -> i64 { 100 }
 
 impl Weights {
     pub const fn has_bigram_weights(&self) -> bool {
@@ -117,6 +124,7 @@ pub fn dummy_weights() -> Weights {
         half_scissors: 0,
         full_scissors_skip: 0,
         half_scissors_skip: 0,
+        trigram_scale: 100,
         fingers: FingerWeights {
             lp: 77,
             lr: 32,

@@ -416,6 +416,11 @@ impl CachedLayout {
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
     }
 
+    /// Returns (sfb_score, stretch_score, scissors_score, trigram_score)
+    pub fn score_breakdown(&self) -> (i64, i64, i64, i64) {
+        (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score())
+    }
+
     /// Populate stats from the caches.
     pub fn stats(&self, stats: &mut Stats) {
         let char_total = self.data.char_total;

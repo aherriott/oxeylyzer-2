@@ -284,12 +284,13 @@ impl TrigramCache {
     ///
     /// Requirements: 3.1, 3.2
     pub fn set_weights(&mut self, weights: &Weights) {
-        self.inroll_weight = weights.inroll;
-        self.outroll_weight = weights.outroll;
-        self.alternate_weight = weights.alternate;
-        self.redirect_weight = weights.redirect;
-        self.onehandin_weight = weights.onehandin;
-        self.onehandout_weight = weights.onehandout;
+        let s = weights.trigram_scale;
+        self.inroll_weight = weights.inroll * s;
+        self.outroll_weight = weights.outroll * s;
+        self.alternate_weight = weights.alternate * s;
+        self.redirect_weight = weights.redirect * s;
+        self.onehandin_weight = weights.onehandin * s;
+        self.onehandout_weight = weights.onehandout * s;
 
         self.max_trigram_weight = *[
             self.inroll_weight, self.outroll_weight, self.alternate_weight,
