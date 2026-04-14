@@ -1216,6 +1216,11 @@ impl ScissorsCache {
 
         net_delta
     }
+
+    pub fn reset_magic_deltas(&mut self) {
+        self.active_rules.clear();
+        self.magic_rule_score_delta = 0;
+    }
 }
 
 #[cfg(test)]

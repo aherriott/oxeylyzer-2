@@ -725,6 +725,33 @@ impl CachedLayout {
     #[inline]
     pub fn swap_keys_and_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
         self.swap_keys(pos_a, pos_b);
+        // After key swap, magic rule deltas are stale — recompute from scratch
+        if !self.current_magic_rules.is_empty() {
+            self.recompute_magic_deltas();
+        }
+    }
+
+    /// Recompute all magic rule score deltas from scratch using current key positions.
+    /// This fixes drift that accumulates when keys move between magic rule changes.
+    fn recompute_magic_deltas(&mut self) {
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+
+        // Reset magic deltas on all sub-caches
+        self.sfb.reset_magic_deltas();
+        self.stretch.reset_magic_deltas();
+        self.scissors.reset_magic_deltas();
+        self.trigram.reset_magic_deltas();
+
+        // Reapply all active rules with fresh deltas
+        for (&(magic_key, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY { continue; }
+            self.sfb.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
+            self.stretch.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, tg_freq, true);
+            self.scissors.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
+            self.trigram.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, tg_freq, true);
+        }
     }
 
 

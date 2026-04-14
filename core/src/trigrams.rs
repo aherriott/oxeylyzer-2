@@ -633,6 +633,11 @@ impl TrigramCache {
         net_delta
     }
 
+    pub fn reset_magic_deltas(&mut self) {
+        self.active_rules.clear();
+        self.magic_rule_score_delta = 0;
+    }
+
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
     ///
     /// For each position and hypothetical key, computes the total weighted score

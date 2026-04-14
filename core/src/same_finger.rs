@@ -540,4 +540,10 @@ impl SFCache {
 
         net_delta
     }
+
+    /// Reset all magic rule tracking. Called before recomputing from scratch.
+    pub fn reset_magic_deltas(&mut self) {
+        self.active_rules.clear();
+        self.magic_rule_score_delta = 0;
+    }
 }
