@@ -7,7 +7,7 @@ set -e
 
 BINARY="./target/release/main"
 LAYOUT="nrts-oxey"
-TIME=300  # 5 minutes per run
+TIME=120  # 5 minutes per run
 RUNS=5
 CSV="mcts_bench_results.csv"
 

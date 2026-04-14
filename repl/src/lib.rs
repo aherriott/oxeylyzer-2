@@ -644,6 +644,109 @@ impl Repl {
         Ok(())
     }
 
+    fn dual_annealing_cmd(
+        &mut self,
+        name: &str,
+        sa_iters: Option<usize>,
+        greedy_depth: Option<usize>,
+        iterations: Option<usize>,
+        time_secs: Option<usize>,
+        qv: Option<f64>,
+        max_swaps: Option<usize>,
+        pin_chars: Option<String>,
+    ) -> Result<()> {
+        use oxeylyzer_core::dual_annealing::{DualAnnealing, DualAnnealingConfig};
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let layout = self.layout(name)?.clone();
+        let sa_iters = sa_iters.unwrap_or(10_000);
+        let greedy_depth = greedy_depth.unwrap_or(1);
+        let max_iter = iterations.map(|i| i as u64).unwrap_or(u64::MAX);
+        let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
+        let pins = match pin_chars {
+            Some(chars) => pin_positions(&layout, chars),
+            None => vec![],
+        };
+
+        // Build local search policy
+        let mut steps = Vec::new();
+        if sa_iters > 0 {
+            steps.push(OptStep::SA {
+                initial_temp: 10.0,
+                final_temp: 1E-5,
+                iterations: sa_iters,
+            });
+        }
+        match greedy_depth {
+            0 => {}
+            1 => steps.push(OptStep::Greedy),
+            n => steps.push(OptStep::GreedyDepthN(n)),
+        }
+        if steps.is_empty() {
+            steps.push(OptStep::Greedy);
+        }
+        let policy = RolloutPolicy { steps };
+
+        let mut config = DualAnnealingConfig::default();
+        if let Some(v) = qv { config.visit = v; }
+        if let Some(s) = max_swaps { config.max_perturb_swaps = s; }
+
+        let iter_display = if time_limit.is_some() {
+            format!("{}s", time_secs.unwrap())
+        } else if max_iter == u64::MAX {
+            "∞".to_string()
+        } else {
+            format!("{}", max_iter)
+        };
+        println!("Dual annealing: {} positions, {} iters, qv={:.2}, max_swaps={}, local={:?}",
+            layout.keyboard.len(), iter_display, config.visit, config.max_perturb_swaps, policy.steps);
+        if max_iter == u64::MAX && time_limit.is_none() {
+            println!("  (Ctrl+C to stop)");
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_handler = stop.clone();
+        ctrlc::set_handler(move || {
+            stop_handler.store(true, Ordering::SeqCst);
+        }).ok();
+
+        let start = std::time::Instant::now();
+        let mut last_print = std::time::Instant::now();
+
+        let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone());
+        let result = da.search(&layout, &pins, &config, &policy, max_iter, |iter, restarts, current, best| {
+            if last_print.elapsed().as_millis() > 500 {
+                last_print = std::time::Instant::now();
+                let elapsed = start.elapsed().as_secs_f64();
+                let rate = iter as f64 / elapsed;
+                print!("\r  iter {} | restarts: {} | current: {} | best: {} | {:.1}/s | {:.1}s   ",
+                    fmt_num(iter as f64),
+                    restarts,
+                    fmt_num(current as f64),
+                    fmt_num(best as f64),
+                    rate,
+                    elapsed,
+                );
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+            }
+            if stop.load(Ordering::SeqCst) { return true; }
+            if let Some(limit) = time_limit {
+                if start.elapsed() >= limit { return true; }
+            }
+            false
+        });
+        println!();
+
+        let elapsed = start.elapsed();
+        println!("Dual annealing completed in {:.2}s ({} restarts)", elapsed.as_secs_f64(), result.restarts);
+        println!("Best score: {}", fmt_num(result.best_score as f64));
+        println!("{}", result.best_layout);
+
+        Ok(())
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         let new = Self::with_config(&self.config_path)?;
 
@@ -678,6 +781,7 @@ impl Repl {
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
+            OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.greedy, d.iterations, d.time, d.qv, d.swaps, d.pins)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

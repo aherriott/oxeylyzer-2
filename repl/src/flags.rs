@@ -89,6 +89,25 @@ xflags::xflags! {
             /// Time limit in seconds. Overrides -i.
             optional -t, --time time_secs: usize
         }
+        /// Dual annealing (global + local search)
+        cmd da {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// SA iterations for local search. Defaults to 10000.
+            optional -s, --sa sa_iters: usize
+            /// Greedy polish after local SA. 0=off, 1=hill-climb. Defaults to 1.
+            optional -g, --greedy greedy_depth: usize
+            /// Max global iterations. Defaults to unlimited.
+            optional -i, --iterations iterations: usize
+            /// Time limit in seconds.
+            optional -t, --time time_secs: usize
+            /// Visiting parameter qv (1,3]. Higher = bigger jumps. Defaults to 2.62.
+            optional --qv qv: f64
+            /// Max swaps per perturbation. Defaults to 8.
+            optional --swaps max_swaps: usize
+            /// Characters to pin.
+            optional -p, --pins pins: String
+        }
         /// Quit the analyzer
         cmd q quit {}
     }
