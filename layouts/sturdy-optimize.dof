@@ -3,9 +3,9 @@
     "board": "iso",
     "layers": {
         "main": [
-            " ; u a ' . q j d y z  ",
-            " e i o h p r n t s c g",
-            "? , - b f k l x m v w"
+            " ; u o j q k b m y g  ",
+            " e i a r - f d t s c w",
+            "? , . n l x p h v z '"
         ]
     },
     "fingering": "angle"
