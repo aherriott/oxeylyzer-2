@@ -1,6 +1,6 @@
 use crate::analyze::Neighbor;
 use crate::cached_layout::CachedLayout;
-use crate::layout::{MagicRule, PosPair};
+use crate::layout::PosPair;
 use nanorand::{RandomGen, Rng, WyRand};
 
 /// Describes a sequence of optimization steps to apply to a layout.
@@ -117,26 +117,7 @@ impl CachedLayout {
         for _ in 0..iterations {
             let idx = rng.generate_range(0..neighbors.len());
             let neighbor = neighbors[idx];
-
-            let new_score = match neighbor {
-                Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
-                Neighbor::MagicRule(rule) => {
-                    // Apply, read score, then revert if rejected.
-                    // Speculative magic scoring uses stale pre-computed deltas
-                    // that drift as keys move, so we apply for ground truth.
-                    let revert = self.get_revert_neighbor(neighbor);
-                    self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
-                    let s = self.score();
-                    // Revert immediately — we'll re-apply below if accepted
-                    match revert {
-                        Neighbor::MagicRule(rev) => {
-                            self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
-                        }
-                        _ => unreachable!(),
-                    }
-                    s
-                }
-            };
+            let new_score = self.score_neighbor(neighbor);
 
             if new_score < worst_score {
                 worst_score = new_score;
@@ -167,21 +148,7 @@ impl CachedLayout {
         loop {
             let mut improved = false;
             for &neighbor in &neighbors {
-                let score = match neighbor {
-                    Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
-                    Neighbor::MagicRule(rule) => {
-                        let revert = self.get_revert_neighbor(neighbor);
-                        self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
-                        let s = self.score();
-                        match revert {
-                            Neighbor::MagicRule(rev) => {
-                                self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
-                            }
-                            _ => unreachable!(),
-                        }
-                        s
-                    }
-                };
+                let score = self.score_neighbor(neighbor);
                 if score > best_score {
                     best_score = score;
                     self.apply_neighbor_and_update(neighbor);

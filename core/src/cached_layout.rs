@@ -439,8 +439,8 @@ impl CachedLayout {
 
     // ==================== New API ====================
 
-    /// Speculative score for a neighbor. Computes on-the-fly for KeySwap.
-    pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
+    /// Speculative score for a neighbor. Does not modify state.
+    pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
                 let key_a = self.keys[a];
@@ -460,8 +460,8 @@ impl CachedLayout {
 
                 sfb + stretch + scissors + trigram
             }
-            Neighbor::MagicRule(_) => {
-                panic!("Use apply_magic_rule with apply=false for MagicRule neighbors")
+            Neighbor::MagicRule(rule) => {
+                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
             }
         }
     }

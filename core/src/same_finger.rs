@@ -514,19 +514,16 @@ impl SFCache {
     ) -> i64 {
         let rule_key = (magic_key, leader);
 
-        let old_delta = if let Some(&(old_output, old_delta)) = self.active_rules.get(&rule_key) {
+        // Always recompute old_delta fresh — stored deltas go stale as keys move
+        let old_delta = if let Some(&(old_output, _stored_delta)) = self.active_rules.get(&rule_key) {
             if old_output == output { return 0; }
-            old_delta
+            self.compute_rule_delta(leader, old_output, magic_key, keys, key_positions, bg_freq, sg_freq, tg_freq)
         } else {
             0
         };
 
         let new_delta = if output != crate::cached_layout::EMPTY_KEY {
-            if !apply && !self.rule_delta.is_empty() {
-                self.rule_delta.get(&(leader, output, magic_key)).copied().unwrap_or(0) as i64
-            } else {
-                self.compute_rule_delta(leader, output, magic_key, keys, key_positions, bg_freq, sg_freq, tg_freq)
-            }
+            self.compute_rule_delta(leader, output, magic_key, keys, key_positions, bg_freq, sg_freq, tg_freq)
         } else {
             0
         };

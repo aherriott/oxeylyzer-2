@@ -98,7 +98,7 @@ impl Analyzer {
         neighbors[rng.generate_range(0..neighbors.len())]
     }
 
-    pub fn best_neighbor(&self, neighbors: &[Neighbor]) -> Option<(Neighbor, i64)> {
+    pub fn best_neighbor(&mut self, neighbors: &[Neighbor]) -> Option<(Neighbor, i64)> {
         let mut best_score = self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
@@ -115,10 +115,10 @@ impl Analyzer {
         best
     }
 
-    /// Speculative score for a neighbor. Computes on-the-fly for KeySwap.
-    pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
+    /// Speculative score for a neighbor. Does not modify state.
+    pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         self.cache
-            .as_ref()
+            .as_mut()
             .expect("Analyzer has no Layout set")
             .score_neighbor(neighbor)
     }
