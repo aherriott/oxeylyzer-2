@@ -1,0 +1,12 @@
+{
+    "name": "Sturdy-optimize",
+    "board": "iso",
+    "layers": {
+        "main": [
+            " ; u a ' . q j d y z  ",
+            " e i o h p r n t s c g",
+            "? , - b f k l x m v w"
+        ]
+    },
+    "fingering": "angle"
+}
