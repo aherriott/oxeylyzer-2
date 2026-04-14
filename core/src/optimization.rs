@@ -119,12 +119,11 @@ impl CachedLayout {
             let neighbor = neighbors[idx];
 
             // Score speculatively: KeySwap uses score_neighbor,
-            // MagicRule uses apply_magic_rule(apply=false)
+            // MagicRule uses apply_magic_rule(apply=false) which returns total score
             let new_score = match neighbor {
                 Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
                 Neighbor::MagicRule(rule) => {
-                    let delta = self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false);
-                    current_score + delta
+                    self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
                 }
             };
 
@@ -160,8 +159,7 @@ impl CachedLayout {
                 let score = match neighbor {
                     Neighbor::KeySwap(_) => self.score_neighbor(neighbor),
                     Neighbor::MagicRule(rule) => {
-                        let delta = self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false);
-                        best_score + delta
+                        self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
                     }
                 };
                 if score > best_score {

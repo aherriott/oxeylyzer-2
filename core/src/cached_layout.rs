@@ -273,27 +273,28 @@ impl CachedLayout {
         for (&magic_char, magic_key_def) in layout.magic.iter() {
             let magic_key = analyzer_data.char_mapping().get_u(magic_char);
 
-            // Collect all possible outputs for this magic key
-            let mut all_outputs: Vec<CacheKey> = Vec::new();
-
+            // Record initial rules
             for (leading_str, output_str) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
                 let output = analyzer_data.char_mapping().get_u(output_str.chars().next().unwrap_or(' '));
                 current_magic_rules.insert((magic_key, leader), output);
-                if !all_outputs.contains(&output) {
-                    all_outputs.push(output);
-                }
             }
 
-            // Add EMPTY_KEY as a possible output (to clear rules)
-            all_outputs.push(EMPTY_KEY);
+            // All keys on the layout are potential leaders and outputs
+            let all_keys: Vec<CacheKey> = layout.keys.iter()
+                .map(|&c| analyzer_data.char_mapping().get_u(c))
+                .filter(|&k| k != EMPTY_KEY && k != magic_key)
+                .collect();
 
-            // For each leader that has a rule, create neighbors for all possible outputs
-            for (leading_str, _) in magic_key_def.rules().iter() {
-                let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
-                for &output in &all_outputs {
-                    neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)));
+            // For every possible leader, create neighbors for every possible output + EMPTY
+            for &leader in &all_keys {
+                for &output in &all_keys {
+                    if output != leader {
+                        neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)));
+                    }
                 }
+                // Also allow clearing the rule
+                neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, EMPTY_KEY)));
             }
         }
 
