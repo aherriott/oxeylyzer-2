@@ -113,8 +113,10 @@ impl Repl {
 
         print!("{}", display_layout);
 
-        let (sfb_s, stretch_s, scissors_s, trigram_s, magic_p) = self.a.score_breakdown();
-        let magic_str = if magic_p != 0 { format!(", magic: {}", fmt_num(magic_p as f64)) } else { String::new() };
+        let (sfb_s, stretch_s, scissors_s, trigram_s, magic_p, fu_s) = self.a.score_breakdown();
+        let mut extras = String::new();
+        if magic_p != 0 { extras += &format!(", magic: {}", fmt_num(magic_p as f64)); }
+        if fu_s != 0 { extras += &format!(", finger: {}", fmt_num(fu_s as f64)); }
         println!(
             concat!(
                 "score:     {} (sfb: {}, stretch: {}, scissors: {}, trigram: {}{})\n\n",
@@ -127,7 +129,7 @@ impl Repl {
             stats.score,
             fmt_num(sfb_s as f64), fmt_num(stretch_s as f64),
             fmt_num(scissors_s as f64), fmt_num(trigram_s as f64),
-            magic_str,
+            extras,
             stats.sfbs * 100.0,
             stats.sfs * 100.0,
             stats.stretches,

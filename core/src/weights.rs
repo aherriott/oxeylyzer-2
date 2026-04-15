@@ -18,6 +18,8 @@ pub struct Weights {
     pub half_scissors: i64,
     pub full_scissors_skip: i64,
     pub half_scissors_skip: i64,
+    /// Penalty for finger usage imbalance. Higher = penalize load on weak fingers more.
+    pub finger_usage: i64,
     /// Penalty per active magic rule (negative = penalize). Applied per non-repeat rule.
     pub magic_rule_penalty: i64,
     /// Penalty per active repeat magic rule (leader → same key). Typically less harsh.
@@ -121,6 +123,7 @@ pub fn dummy_weights() -> Weights {
         half_scissors: 1,
         full_scissors_skip: 2,
         half_scissors_skip: 1,
+        finger_usage: 0,
         magic_rule_penalty: 0,
         magic_repeat_penalty: 0,
         fingers: FingerWeights {

@@ -204,6 +204,9 @@ pub struct CachedLayout {
     fingers: Vec<Finger>,
     magic_rule_penalty: i64,
     magic_repeat_penalty: i64,
+    finger_usage_weight: i64,
+    finger_usage_weights: [i64; 10], // per-finger weight from config
+    finger_usage_score: i64,         // running total: -Σ char_freq[key] × finger_weight
 }
 
 impl Default for CachedLayout {
@@ -227,6 +230,9 @@ impl Default for CachedLayout {
             fingers: Vec::new(),
             magic_rule_penalty: 0,
             magic_repeat_penalty: 0,
+            finger_usage_weight: 0,
+            finger_usage_weights: [0; 10],
+            finger_usage_score: 0,
         }
     }
 }
@@ -321,6 +327,15 @@ impl CachedLayout {
             fingers: fingers.to_vec(),
             magic_rule_penalty: weights.magic_rule_penalty,
             magic_repeat_penalty: weights.magic_repeat_penalty,
+            finger_usage_weight: weights.finger_usage,
+            finger_usage_weights: {
+                let mut fw = [0i64; 10];
+                for f in Finger::FINGERS {
+                    fw[f as usize] = weights.fingers.get(f);
+                }
+                fw
+            },
+            finger_usage_score: 0,
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -346,7 +361,7 @@ impl CachedLayout {
         // Auto-compute trigram scale: measure raw magnitudes, then rescale
         // trigram weights so they produce the same magnitude as bigram-based scores.
         {
-            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p) = cache.score_breakdown();
+            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p, _fu_s) = cache.score_breakdown();
             let mut bigram_sum = 0i64;
             let mut bigram_count = 0;
             for &s in &[sfb_s, stretch_s, scissors_s] {
@@ -439,12 +454,13 @@ impl CachedLayout {
 
     pub fn score(&self) -> i64 {
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
-            + self.magic_penalty()
+            + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight
     }
 
-    /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty)
-    pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64) {
-        (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(), self.magic_penalty())
+    /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty, finger_usage)
+    pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64, i64) {
+        (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(),
+         self.magic_penalty(), self.finger_usage_score * self.finger_usage_weight)
     }
 
     /// Penalty for active magic rules. Repeat rules (leader→same key) penalized separately.
@@ -508,7 +524,20 @@ impl CachedLayout {
                 let tg_both = self.trigram.compute_swap_both_delta_flat(a, b, key_a, key_b, &self.keys, tg_flat);
                 let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
 
-                sfb + stretch + scissors + trigram
+                // Finger usage delta for swap
+                let fu_delta = if self.finger_usage_weight != 0 {
+                    let fi_a = self.fingers[a] as usize;
+                    let fi_b = self.fingers[b] as usize;
+                    if fi_a != fi_b {
+                        let fw_a = self.finger_usage_weights[fi_a];
+                        let fw_b = self.finger_usage_weights[fi_b];
+                        let freq_a = if key_a < self.data.chars.len() { self.data.chars[key_a] } else { 0 };
+                        let freq_b = if key_b < self.data.chars.len() { self.data.chars[key_b] } else { 0 };
+                        (freq_a * fw_a - freq_a * fw_b + freq_b * fw_b - freq_b * fw_a) * self.finger_usage_weight
+                    } else { 0 }
+                } else { 0 };
+
+                sfb + stretch + scissors + trigram + self.magic_penalty() + (self.finger_usage_score * self.finger_usage_weight) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
                 self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
@@ -637,7 +666,20 @@ impl CachedLayout {
         // Apply the offset: subtract max_weight * total_freq so all trigram contributions are ≤ 0
         trigram_score -= self.trigram.max_weight() * total_tg_freq;
 
-        sfb_score + stretch_score + scissors_score + trigram_score
+        // Finger usage
+        let mut fu_score: i64 = 0;
+        if self.finger_usage_weight != 0 {
+            for pos in 0..self.num_positions {
+                let key = self.keys[pos];
+                if key != EMPTY_KEY && key < self.data.chars.len() {
+                    let fi = self.fingers[pos] as usize;
+                    fu_score -= self.data.chars[key] * self.finger_usage_weights[fi];
+                }
+            }
+            fu_score *= self.finger_usage_weight;
+        }
+
+        sfb_score + stretch_score + scissors_score + trigram_score + fu_score
     }
 
     // ==================== Lower Bound ====================
@@ -707,6 +749,18 @@ impl CachedLayout {
         self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
         self.trigram.replace_key(pos, old_key, new_key, &self.keys, None, tg_freq);
 
+        // Update finger usage score
+        if self.finger_usage_weight != 0 {
+            let fi = self.fingers[pos] as usize;
+            let fw = self.finger_usage_weights[fi];
+            if old_key != EMPTY_KEY && old_key < self.data.chars.len() {
+                self.finger_usage_score += self.data.chars[old_key] * fw;
+            }
+            if new_key != EMPTY_KEY && new_key < self.data.chars.len() {
+                self.finger_usage_score -= self.data.chars[new_key] * fw;
+            }
+        }
+
         self.keys[pos] = new_key;
         if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
             self.key_positions[old_key] = None;
@@ -730,6 +784,18 @@ impl CachedLayout {
         self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq);
         self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
         self.trigram.replace_key_fast(pos, old_key, new_key, &self.keys, tg_flat);
+
+        // Update finger usage score
+        if self.finger_usage_weight != 0 {
+            let fi = self.fingers[pos] as usize;
+            let fw = self.finger_usage_weights[fi];
+            if old_key != EMPTY_KEY && old_key < self.data.chars.len() {
+                self.finger_usage_score += self.data.chars[old_key] * fw; // remove old penalty
+            }
+            if new_key != EMPTY_KEY && new_key < self.data.chars.len() {
+                self.finger_usage_score -= self.data.chars[new_key] * fw; // add new penalty
+            }
+        }
 
         self.keys[pos] = new_key;
         if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
@@ -759,6 +825,22 @@ impl CachedLayout {
         self.stretch.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq);
         self.scissors.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, bg_freq, sg_freq);
         self.trigram.key_swap(pos_a, pos_b, key_a, key_b, &self.keys, tg_flat);
+
+        // Update finger usage: keys swap fingers
+        if self.finger_usage_weight != 0 {
+            let fi_a = self.fingers[pos_a] as usize;
+            let fi_b = self.fingers[pos_b] as usize;
+            if fi_a != fi_b {
+                let fw_a = self.finger_usage_weights[fi_a];
+                let fw_b = self.finger_usage_weights[fi_b];
+                let freq_a = if key_a < self.data.chars.len() { self.data.chars[key_a] } else { 0 };
+                let freq_b = if key_b < self.data.chars.len() { self.data.chars[key_b] } else { 0 };
+                // Remove old: key_a was at pos_a (fi_a), key_b was at pos_b (fi_b)
+                // Add new: key_a moves to pos_b (fi_b), key_b moves to pos_a (fi_a)
+                self.finger_usage_score += freq_a * fw_a - freq_a * fw_b
+                                         + freq_b * fw_b - freq_b * fw_a;
+            }
+        }
 
         self.keys[pos_a] = key_b;
         self.keys[pos_b] = key_a;

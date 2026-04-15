@@ -71,7 +71,7 @@ impl Analyzer {
             .score()
     }
 
-    pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64) {
+    pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64, i64) {
         self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
