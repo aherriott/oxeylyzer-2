@@ -23,6 +23,9 @@ pub enum OptStep {
     Greedy,
     /// Greedy depth-N search (try all N-swap combos).
     GreedyDepthN(usize),
+    /// Progressive deepening: depth-1 until stuck, then depth-2, then depth-3.
+    /// Any improvement at deeper depth restarts from depth-1.
+    ProgressiveGreedy { max_depth: usize },
 }
 
 impl RolloutPolicy {
@@ -96,6 +99,9 @@ impl CachedLayout {
                 OptStep::GreedyDepthN(depth) => {
                     self.greedy_improve_depth_n(pins, *depth);
                 }
+                OptStep::ProgressiveGreedy { max_depth } => {
+                    self.run_progressive_greedy(pins, *max_depth);
+                }
             }
         }
         self.score()
@@ -158,6 +164,82 @@ impl CachedLayout {
             }
             if !improved { break; }
         }
+    }
+
+    /// Progressive deepening greedy: depth-1 until stuck, then depth-2, then depth-3, etc.
+    /// Any improvement at a deeper depth restarts from depth-1.
+    fn run_progressive_greedy(&mut self, pins: &[usize], max_depth: usize) {
+        let max_depth = max_depth.max(1);
+        let mut current_depth = 1;
+
+        loop {
+            if current_depth == 1 {
+                let improved = self.run_greedy_one_pass(pins);
+                if improved {
+                    continue;
+                }
+            } else {
+                // Try one depth-N improvement, then restart at depth 1
+                let score_before = self.score();
+                self.greedy_depth_n_one_improvement(pins, current_depth);
+                if self.score() > score_before {
+                    current_depth = 1;
+                    continue;
+                }
+            }
+
+            current_depth += 1;
+            if current_depth > max_depth {
+                break;
+            }
+        }
+    }
+
+    /// Try to find one improvement at depth N. Applies it and returns if found.
+    fn greedy_depth_n_one_improvement(&mut self, pins: &[usize], depth: usize) {
+        use crate::analyze::Neighbor;
+
+        let pin_set: fxhash::FxHashSet<usize> = pins.iter().copied().collect();
+        let neighbors: Vec<Neighbor> = self.neighbors()
+            .into_iter()
+            .filter(|n| match n {
+                Neighbor::KeySwap(PosPair(a, b)) => !pin_set.contains(a) && !pin_set.contains(b),
+                Neighbor::MagicRule(_) => false, // skip magic for depth-N
+            })
+            .collect();
+
+        let mut diffs = vec![Neighbor::default(); depth];
+        let mut cur_best = self.score();
+
+        if Self::best_neighbor_recursive(self, &neighbors, depth, &mut diffs, &mut cur_best) {
+            for &neighbor in &diffs {
+                self.apply_neighbor(neighbor);
+            }
+        }
+    }
+
+    /// Run one full pass of greedy depth-1. Returns true if any improvement was found.
+    fn run_greedy_one_pass(&mut self, pins: &[usize]) -> bool {
+        let neighbors = self.build_unpinned_neighbors(pins);
+        if neighbors.is_empty() { return false; }
+
+        let mut best_score = self.score();
+        let mut any_improved = false;
+        loop {
+            let mut improved = false;
+            for &neighbor in &neighbors {
+                let score = self.score_neighbor(neighbor);
+                if score > best_score {
+                    best_score = score;
+                    self.apply_neighbor_and_update(neighbor);
+                    improved = true;
+                    any_improved = true;
+                    break;
+                }
+            }
+            if !improved { break; }
+        }
+        any_improved
     }
 
     /// Build the list of KeySwap neighbors excluding pinned positions.

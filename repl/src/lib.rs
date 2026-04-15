@@ -172,7 +172,7 @@ impl Repl {
         };
 
         let policy = RolloutPolicy {
-            steps: vec![OptStep::Greedy],
+            steps: vec![OptStep::ProgressiveGreedy { max_depth: 2 }],
         };
         let config = DualAnnealingConfig::default();
 
@@ -710,10 +710,10 @@ impl Repl {
         match greedy_depth {
             0 => {}
             1 => steps.push(OptStep::Greedy),
-            n => steps.push(OptStep::GreedyDepthN(n)),
+            n => steps.push(OptStep::ProgressiveGreedy { max_depth: n }),
         }
         if steps.is_empty() {
-            steps.push(OptStep::Greedy);
+            steps.push(OptStep::ProgressiveGreedy { max_depth: 2 });
         }
         let policy = RolloutPolicy { steps };
 

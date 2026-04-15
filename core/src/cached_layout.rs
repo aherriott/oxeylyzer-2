@@ -1060,7 +1060,7 @@ impl CachedLayout {
         self.score()
     }
 
-    fn best_neighbor_recursive(
+    pub(crate) fn best_neighbor_recursive(
         cache: &mut CachedLayout,
         neighbors: &[Neighbor],
         depth: usize,
