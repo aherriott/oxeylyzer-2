@@ -13,7 +13,6 @@ pub struct Weights {
     pub redirect: i64,
     pub onehandin: i64,
     pub onehandout: i64,
-    pub thumb: i64,
     pub full_scissors: i64,
     pub half_scissors: i64,
     pub full_scissors_skip: i64,
@@ -40,7 +39,6 @@ impl Weights {
             || self.redirect != 0
             || self.onehandin != 0
             || self.onehandout != 0
-            || self.thumb != 0
     }
 
     pub const fn has_stretch_weights(&self) -> bool {
@@ -118,7 +116,6 @@ pub fn dummy_weights() -> Weights {
         redirect: 4,
         onehandin: 2,
         onehandout: 0,
-        thumb: 0,
         full_scissors: 5,
         half_scissors: 1,
         full_scissors_skip: 2,

@@ -222,7 +222,7 @@ impl TrigramCache {
                                 weight: 0,
                             });
                         }
-                        // Skip untracked types: Sft, Sfb, Thumb, Invalid
+                        // Skip untracked types: Sft, Sfb, Invalid
                         _ => {}
                     }
                 }
@@ -2818,9 +2818,7 @@ pub const fn trigrams() -> [TrigramType; 1000] {
                     DofFinger::FINGERS[k],
                 ]);
 
-                res[i * 100 + j * 10 + k] = if fs.is_thumb() {
-                    Thumb
-                } else if fs.is_sft() {
+                res[i * 100 + j * 10 + k] = if fs.is_sft() {
                     Sft
                 } else if fs.is_sfb() {
                     Sfb
@@ -3046,7 +3044,7 @@ mod tests {
             for combo in combos {
                 // If any combo is stored, it must be a tracked type
                 match combo.trigram_type {
-                    TrigramType::Sft | TrigramType::Sfb | TrigramType::Thumb | TrigramType::Invalid => {
+                    TrigramType::Sft | TrigramType::Sfb | TrigramType::Invalid => {
                         panic!("Found untracked type in combos: {:?}", combo.trigram_type);
                     }
                     _ => {}
