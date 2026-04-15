@@ -1,0 +1,67 @@
+#1, score: -766.0B
+. o u f q j k z l c
+i a e n b m t ␣ r g
+, ; ' h p v d ◊ x w
+y s
+magic: .→, a→k b→o d→v e→' i→v n→f o→a p→h q→u r→l s→y t→m u→e y→s
+
+#1, score: -763.4B
+x l d b k , ; a j w
+s r t h n y i o e g
+v q m p f . u ' ◊ c
+z ␣
+magic: b→o d→m h→n k→n l→y n→k o→u p→h r→l t→y u→i y→, ␣→t
+
+Best score: -763.4B
+my-layout
+, h n g w ; ' z y q
+u l r d f o i ␣ e s
+v m b c p . a ◊ j x
+k t
+magic: a→i b→r c→i d→g e→y h→m i→o j→e l→m o→i r→n s→i t→i u→c v→i y→e
+
+Best score: -759.7B
+my-layout
+c y d k b ; ' z l v
+g s t n f o i ␣ r u
+w q m h p . a ◊ x ,
+j e
+magic: a→i b→j c→i d→m e→c h→n i→o j→e k→n n→f o→i p→h r→l s→y t→i y→s
+
+Best score: -757.5B
+my-layout
+w p d q ; x f l z v
+g t s i o m n r ␣ u
+c k y a . b h j ◊ ,
+' e
+magic: a→i c→i d→y e→' i→o m→b n→f o→i p→t r→l s→y t→i y→s
+
+finger_usage = 7
+sfbs = 7
+sfs = 2
+stretches = 6
+sft = 12
+inroll = 7
+outroll = 4
+alternate = 4
+redirect = 4
+onehandin = 2
+onehandout = 0
+full_scissors = 5
+half_scissors = 1
+full_scissors_skip = 2
+half_scissors_skip = 1
+magic_rule_penalty = 1
+magic_repeat_penalty = 0
+
+Where your layouts dominate:
+
+Trigram flow is massively better — 2-3× the inrolls, outrolls, and alternates of any existing layout. This is the magic key effect: magic rules create virtual bigrams that produce favorable trigram patterns.
+Overall score is 20-25B better than sturdy under the current weights.
+Where existing layouts are better:
+
+SFBs: your layouts are 1.3-1.4% vs sturdy's 0.58%. About 2.5× worse. The magic key helps with trigrams but doesn't reduce same-finger bigrams.
+SFS: similar story, ~4.2% vs 3.7%.
+Stretches: 3.4-5.5 vs sturdy's 2.5. More finger stretching.
+Redirects: 585-831% vs sturdy's 251%. Much higher redirects — the magic key creates trigram patterns that include more direction changes.
+The tradeoff: Your magic layouts trade SFB quality for dramatically better trigram flow. The magic key essentially lets you "cheat" on trigrams by creating virtual key outputs, but the physical key positions still determine SFBs and stretches. If you want to close the SFB gap, you could increase the sfbs weight to push the optimizer harder on that dimension.

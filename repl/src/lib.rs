@@ -916,7 +916,12 @@ fn fmt_num(n: f64) -> String {
     ];
     for &(threshold, suffix) in &suffixes {
         if abs >= threshold {
-            return format!("{:.1}{}", n / threshold, suffix);
+            let scaled = n / threshold;
+            // Use 3 significant figures
+            let decimals = if scaled.abs() >= 100.0 { 0 }
+                else if scaled.abs() >= 10.0 { 1 }
+                else { 2 };
+            return format!("{:.*}{}", decimals, scaled, suffix);
         }
     }
     format!("{:.0}", n)
