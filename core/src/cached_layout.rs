@@ -207,6 +207,7 @@ pub struct CachedLayout {
     finger_usage_weight: i64,
     finger_usage_weights: [i64; 10], // per-finger weight from config
     finger_usage_score: i64,         // running total: -Σ char_freq[key] × finger_weight
+    finger_usage_scale: i64,         // auto-computed normalization factor
 }
 
 impl Default for CachedLayout {
@@ -233,6 +234,7 @@ impl Default for CachedLayout {
             finger_usage_weight: 0,
             finger_usage_weights: [0; 10],
             finger_usage_score: 0,
+            finger_usage_scale: 1,
         }
     }
 }
@@ -336,6 +338,7 @@ impl CachedLayout {
                 fw
             },
             finger_usage_score: 0,
+            finger_usage_scale: 1,
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -361,19 +364,26 @@ impl CachedLayout {
         // Auto-compute trigram scale: measure raw magnitudes, then rescale
         // trigram weights so they produce the same magnitude as bigram-based scores.
         {
-            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p, _fu_s) = cache.score_breakdown();
+            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p, fu_s) = cache.score_breakdown();
             let mut bigram_sum = 0i64;
             let mut bigram_count = 0;
             for &s in &[sfb_s, stretch_s, scissors_s] {
                 if s != 0 { bigram_sum += s.abs(); bigram_count += 1; }
             }
             let bigram_mag = if bigram_count > 0 { bigram_sum / bigram_count } else { 1 };
-            let tg_mag = trigram_s.abs().max(1);
-            let auto_scale = (bigram_mag / tg_mag).max(1);
 
-            if auto_scale > 1 {
-                cache.trigram.apply_scale(auto_scale);
+            // Auto-scale trigrams
+            let tg_mag = trigram_s.abs().max(1);
+            let tg_scale = (bigram_mag / tg_mag).max(1);
+            if tg_scale > 1 {
+                cache.trigram.apply_scale(tg_scale);
                 cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
+            }
+
+            // Auto-scale finger usage to match bigram magnitude
+            if cache.finger_usage_weight != 0 {
+                let fu_mag = fu_s.abs().max(1);
+                cache.finger_usage_scale = (bigram_mag / fu_mag).max(1);
             }
         }
 
@@ -454,13 +464,13 @@ impl CachedLayout {
 
     pub fn score(&self) -> i64 {
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
-            + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight
+            + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
     }
 
     /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty, finger_usage)
     pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64, i64) {
         (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(),
-         self.magic_penalty(), self.finger_usage_score * self.finger_usage_weight)
+         self.magic_penalty(), self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale)
     }
 
     /// Penalty for active magic rules. Repeat rules (leader→same key) penalized separately.
@@ -533,11 +543,11 @@ impl CachedLayout {
                         let fw_b = self.finger_usage_weights[fi_b];
                         let freq_a = if key_a < self.data.chars.len() { self.data.chars[key_a] } else { 0 };
                         let freq_b = if key_b < self.data.chars.len() { self.data.chars[key_b] } else { 0 };
-                        (freq_a * fw_a - freq_a * fw_b + freq_b * fw_b - freq_b * fw_a) * self.finger_usage_weight
+                        (freq_a * fw_a - freq_a * fw_b + freq_b * fw_b - freq_b * fw_a) * self.finger_usage_weight * self.finger_usage_scale
                     } else { 0 }
                 } else { 0 };
 
-                sfb + stretch + scissors + trigram + self.magic_penalty() + (self.finger_usage_score * self.finger_usage_weight) + fu_delta
+                sfb + stretch + scissors + trigram + self.magic_penalty() + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
                 self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
@@ -676,7 +686,7 @@ impl CachedLayout {
                     fu_score -= self.data.chars[key] * self.finger_usage_weights[fi];
                 }
             }
-            fu_score *= self.finger_usage_weight;
+            fu_score *= self.finger_usage_weight * self.finger_usage_scale;
         }
 
         sfb_score + stretch_score + scissors_score + trigram_score + fu_score
