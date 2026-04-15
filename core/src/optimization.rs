@@ -168,30 +168,26 @@ impl CachedLayout {
 
     /// Progressive deepening greedy: depth-1 until stuck, then depth-2, then depth-3, etc.
     /// Any improvement at a deeper depth restarts from depth-1.
+    /// Only advances to the next depth when ALL shallower depths find nothing.
     fn run_progressive_greedy(&mut self, pins: &[usize], max_depth: usize) {
         let max_depth = max_depth.max(1);
-        let mut current_depth = 1;
 
-        loop {
-            if current_depth == 1 {
-                let improved = self.run_greedy_one_pass(pins);
-                if improved {
-                    continue;
-                }
-            } else {
-                // Try one depth-N improvement, then restart at depth 1
+        'outer: loop {
+            // Always start with depth-1 until exhausted
+            while self.run_greedy_one_pass(pins) {}
+
+            // Try each depth 2..=max_depth in order
+            for depth in 2..=max_depth {
                 let score_before = self.score();
-                self.greedy_depth_n_one_improvement(pins, current_depth);
+                self.greedy_depth_n_one_improvement(pins, depth);
                 if self.score() > score_before {
-                    current_depth = 1;
-                    continue;
+                    // Found improvement — restart from depth 1
+                    continue 'outer;
                 }
             }
 
-            current_depth += 1;
-            if current_depth > max_depth {
-                break;
-            }
+            // No improvement at any depth — done
+            break;
         }
     }
 
