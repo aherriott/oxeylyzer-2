@@ -172,14 +172,7 @@ impl Repl {
         };
 
         let policy = RolloutPolicy {
-            steps: vec![
-                OptStep::SA {
-                    initial_temp: 10.0,
-                    final_temp: 1E-5,
-                    iterations: 10_000,
-                },
-                OptStep::Greedy,
-            ],
+            steps: vec![OptStep::Greedy],
         };
         let config = DualAnnealingConfig::default();
 
@@ -696,7 +689,7 @@ impl Repl {
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
 
         let layout = self.layout(name)?.clone();
-        let sa_iters = sa_iters.unwrap_or(10_000);
+        let sa_iters = sa_iters.unwrap_or(0);
         let greedy_depth = greedy_depth.unwrap_or(1);
         let max_iter = iterations.map(|i| i as u64).unwrap_or(u64::MAX);
         let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
