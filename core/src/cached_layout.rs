@@ -208,6 +208,7 @@ pub struct CachedLayout {
     finger_usage_weights: [i64; 10], // per-finger weight from config
     finger_usage_score: i64,         // running total: -Σ char_freq[key] × finger_weight
     finger_usage_scale: i64,         // auto-computed normalization factor
+    magic_penalty_scale: i64,        // auto-computed: penalty=1 costs ~1 rule's worth
 }
 
 impl Default for CachedLayout {
@@ -235,6 +236,7 @@ impl Default for CachedLayout {
             finger_usage_weights: [0; 10],
             finger_usage_score: 0,
             finger_usage_scale: 1,
+            magic_penalty_scale: 1,
         }
     }
 }
@@ -339,6 +341,7 @@ impl CachedLayout {
             },
             finger_usage_score: 0,
             finger_usage_scale: 1,
+            magic_penalty_scale: 1,
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -384,6 +387,13 @@ impl CachedLayout {
             if cache.finger_usage_weight != 0 {
                 let fu_mag = fu_s.abs().max(1);
                 cache.finger_usage_scale = (bigram_mag / fu_mag).max(1);
+            }
+
+            // Auto-scale magic penalty: penalty=1 should cost roughly what one
+            // average magic rule contributes (~1% of total score per rule)
+            if cache.magic_rule_penalty != 0 || cache.magic_repeat_penalty != 0 {
+                let total_mag = (sfb_s.abs() + stretch_s.abs() + scissors_s.abs() + trigram_s.abs()).max(1);
+                cache.magic_penalty_scale = total_mag / (cache.num_positions * cache.num_positions) as i64;
             }
         }
 
@@ -489,7 +499,8 @@ impl CachedLayout {
             }
         }
         // Penalties are negated — positive weight = worse score
-        -(regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty)
+        // Scale so penalty=1 costs roughly one rule's worth of score
+        -(regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty) * self.magic_penalty_scale
     }
 
     /// Populate stats from the caches.
@@ -1000,7 +1011,7 @@ impl CachedLayout {
                     if new_is_repeat { delta -= self.magic_repeat_penalty; }
                     else { delta -= self.magic_rule_penalty; }
                 }
-                delta
+                delta * self.magic_penalty_scale
             };
             self.score() + total_delta + penalty_delta
         }
