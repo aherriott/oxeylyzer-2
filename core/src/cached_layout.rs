@@ -303,9 +303,7 @@ impl CachedLayout {
             // For every possible leader, create neighbors for every possible output + EMPTY
             for &leader in &all_keys {
                 for &output in &all_keys {
-                    if output != leader {
-                        neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)));
-                    }
+                    neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)));
                 }
                 // Also allow clearing the rule
                 neighbors.push(Neighbor::MagicRule(MagicRule::new(magic_key, leader, EMPTY_KEY)));
