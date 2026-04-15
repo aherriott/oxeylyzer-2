@@ -110,6 +110,19 @@ xflags::xflags! {
             /// Characters to pin.
             optional -p, --pins pins: String
         }
+        /// Classic SA: randomize → simulated annealing → greedy polish
+        cmd sa {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// Number of variants to generate. Defaults to 1.
+            optional count: usize
+            /// SA iterations. Defaults to 10000000.
+            optional -s, --sa sa_iters: usize
+            /// Greedy polish depth. 0=off, 1=hill-climb, 2+=progressive. Defaults to 1.
+            optional -g, --greedy greedy_depth: usize
+            /// Characters to pin.
+            optional -p, --pins pins: String
+        }
         /// Quit the analyzer
         cmd q quit {}
     }

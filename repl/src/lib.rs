@@ -674,6 +674,62 @@ impl Repl {
         Ok(())
     }
 
+    fn sa_cmd(&mut self, name: &str, count: Option<usize>, sa_iters: Option<usize>, greedy_depth: Option<usize>, pin_chars: Option<String>) -> Result<()> {
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+
+        let layout = self.layout(name)?.clone();
+        let count = count.unwrap_or(1);
+        let sa_iters = sa_iters.unwrap_or(10_000_000);
+        let greedy_depth = greedy_depth.unwrap_or(1);
+        let pins = match pin_chars {
+            Some(chars) => pin_positions(&layout, chars),
+            None => vec![],
+        };
+
+        let mut steps = vec![
+            OptStep::SA {
+                initial_temp: 10.0,
+                final_temp: 1E-5,
+                iterations: sa_iters,
+            },
+        ];
+        match greedy_depth {
+            0 => {}
+            1 => steps.push(OptStep::Greedy),
+            n => steps.push(OptStep::ProgressiveGreedy { max_depth: n }),
+        }
+        let policy = RolloutPolicy { steps };
+
+        println!("SA: {} variants, {} iters, greedy={}, from {}", count, fmt_num(sa_iters as f64), greedy_depth, name);
+
+        let start = std::time::Instant::now();
+        let mut results: Vec<(Layout, i64)> = Vec::with_capacity(count);
+
+        for i in 0..count {
+            let random_layout = layout.random_with_pins(&pins);
+            let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                &random_layout, self.a.data().clone(), self.a.weights(),
+            );
+            let final_score = cache.optimize(&policy, &pins);
+            let final_layout = cache.to_layout();
+            results.push((final_layout, final_score));
+
+            print!("\r  {}/{} | score: {}   ", i + 1, count, fmt_num(final_score as f64));
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        println!();
+
+        results.sort_by(|(_, s1), (_, s2)| s2.cmp(s1));
+
+        for (i, (mut layout, score)) in results.into_iter().enumerate().take(10) {
+            layout.name = "".into();
+            println!("#{}, score: {}{}", i + 1, fmt_num(score as f64), layout);
+        }
+
+        println!("SA completed in {:.1}s", start.elapsed().as_secs_f64());
+        Ok(())
+    }
+
     fn dual_annealing_cmd(
         &mut self,
         name: &str,
@@ -808,6 +864,7 @@ impl Repl {
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
             OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.greedy, d.iterations, d.time, d.qv, d.swaps, d.pins)?,
+            OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.greedy, s.pins)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 
