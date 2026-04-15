@@ -241,7 +241,6 @@ impl std::fmt::Display for Layout {
 
         //TODO: add magic keys
         if !self.magic.is_empty() {
-            writeln!(f)?;
             let mut rules: Vec<(char, String, String)> = Vec::new();
             for (magic_char, magic_key) in &self.magic {
                 for (leader, output) in magic_key.rules() {
@@ -249,10 +248,10 @@ impl std::fmt::Display for Layout {
                 }
             }
             rules.sort_by(|a, b| a.1.cmp(&b.1));
-            writeln!(f, "Magic rules:")?;
-            for (magic_char, leader, output) in &rules {
-                writeln!(f, "  {leader} {magic_char} → {output}")?;
-            }
+            let rule_strs: Vec<String> = rules.iter()
+                .map(|(_mc, leader, output)| format!("{leader}→{output}"))
+                .collect();
+            writeln!(f, "magic: {}", rule_strs.join(" "))?;
         }
 
         Ok(())
