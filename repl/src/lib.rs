@@ -172,7 +172,7 @@ impl Repl {
         };
 
         let policy = RolloutPolicy {
-            steps: vec![OptStep::ProgressiveGreedy { max_depth: 2 }],
+            steps: vec![OptStep::Greedy],
         };
         let config = DualAnnealingConfig::default();
 
