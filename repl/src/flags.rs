@@ -95,7 +95,7 @@ xflags::xflags! {
         cmd da {
             /// Name of the layout to use as a basis.
             required name: String
-            /// SA iterations for local search. Defaults to 10000.
+            /// SA iterations for local search. Defaults to 0 (off).
             optional -s, --sa sa_iters: usize
             /// Greedy polish after local SA. 0=off, 1=hill-climb. Defaults to 1.
             optional -g, --greedy greedy_depth: usize
@@ -103,8 +103,14 @@ xflags::xflags! {
             optional -i, --iterations iterations: usize
             /// Time limit in seconds.
             optional -t, --time time_secs: usize
+            /// Initial temperature. Higher = wider search. Defaults to 5230.
+            optional --temp temp: f64
             /// Visiting parameter qv (1,3]. Higher = bigger jumps. Defaults to 2.62.
             optional --qv qv: f64
+            /// Acceptance parameter qa. Lower = stricter. Defaults to -5.
+            optional --qa qa: f64
+            /// Restart temp ratio. Defaults to 2e-5.
+            optional --restart restart_ratio: f64
             /// Max swaps per perturbation. Defaults to 8.
             optional --swaps max_swaps: usize
             /// Characters to pin.

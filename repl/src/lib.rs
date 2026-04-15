@@ -737,7 +737,10 @@ impl Repl {
         greedy_depth: Option<usize>,
         iterations: Option<usize>,
         time_secs: Option<usize>,
+        temp: Option<f64>,
         qv: Option<f64>,
+        qa: Option<f64>,
+        restart_ratio: Option<f64>,
         max_swaps: Option<usize>,
         pin_chars: Option<String>,
     ) -> Result<()> {
@@ -774,7 +777,10 @@ impl Repl {
         let policy = RolloutPolicy { steps };
 
         let mut config = DualAnnealingConfig::default();
+        if let Some(t) = temp { config.initial_temp = t; }
         if let Some(v) = qv { config.visit = v; }
+        if let Some(a) = qa { config.accept = a; }
+        if let Some(r) = restart_ratio { config.restart_temp_ratio = r; }
         if let Some(s) = max_swaps { config.max_perturb_swaps = s; }
 
         let iter_display = if time_limit.is_some() {
@@ -863,7 +869,7 @@ impl Repl {
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
-            OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.greedy, d.iterations, d.time, d.qv, d.swaps, d.pins)?,
+            OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.greedy, d.iterations, d.time, d.temp, d.qv, d.qa, d.restart, d.swaps, d.pins)?,
             OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.greedy, s.pins)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
