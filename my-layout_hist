@@ -12,6 +12,22 @@ v q m p f . u ' ◊ c
 z ␣
 magic: b→o d→m h→n k→n l→y n→k o→u p→h r→l t→y u→i y→, ␣→t
 
+Best score: -763.4B
+my-layout
+, h n g w ; ' z y q
+u l r d f o i ␣ e s
+v m b c p . a ◊ j x
+k t
+magic: a→i b→r c→i d→g e→y h→m i→o j→e l→m o→i r→n s→i t→i u→c v→i y→e
+
+Best score: -759.7B
+my-layout
+c y d k b ; ' z l v
+g s t n f o i ␣ r u
+w q m h p . a ◊ x ,
+j e
+magic: a→i b→j c→i d→m e→c h→n i→o j→e k→n n→f o→i p→h r→l s→y t→i y→s
+
 Best score: -757.5B
 my-layout
 w p d q ; x f l z v
