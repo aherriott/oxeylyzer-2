@@ -156,7 +156,7 @@ impl DualAnnealing {
 
                 let pos_a = swappable[a_idx];
                 let pos_b = swappable[b_idx];
-                cache.swap_keys(pos_a, pos_b);
+                cache.swap_keys_and_update(pos_a, pos_b);
                 swapped_pairs.push((pos_a, pos_b));
             }
 
@@ -189,7 +189,7 @@ impl DualAnnealing {
                         let a = rng.generate_range(0..unpinned.len());
                         let mut b = rng.generate_range(0..unpinned.len() - 1);
                         if b >= a { b += 1; }
-                        cache.swap_keys(unpinned[a], unpinned[b]);
+                        cache.swap_keys_and_update(unpinned[a], unpinned[b]);
                     }
                 }
 
