@@ -2,11 +2,11 @@ corpus = "./data/english.json"
 layouts = ["./core/test-layouts", "./layouts"] # can be an array of folders
 
 [weights]
-finger_usage = 20
-sfbs = 20
+finger_usage = 25
+sfbs = 25
 sfs = 3
 stretches = 16
-sft = 20
+sft = 30
 inroll = 3
 outroll = 3
 alternate = 3

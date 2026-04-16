@@ -156,6 +156,8 @@ impl Layout {
     }
 
     pub fn random_with_pins(&self, pins: &[usize]) -> Self {
+        use nanorand::{tls_rng, Rng as _};
+
         let shape = self.shape.clone();
         let fingers = self.fingers.clone();
         let keyboard = self.keyboard.clone();
@@ -163,13 +165,34 @@ impl Layout {
         let mut keys = self.keys.clone();
         shuffle_pins(&mut keys, pins);
 
+        // Randomize magic rules: for each magic key, assign random leader→output pairs
+        let non_magic_keys: Vec<char> = keys.iter()
+            .filter(|&&c| !MAGIC_CHARS.contains(c) && c != REPLACEMENT_CHAR && c != ' ')
+            .copied()
+            .collect();
+
+        let magic = self.magic.iter()
+            .map(|(&c, mk)| {
+                let mut new_mk = MagicKey::new(mk.label());
+                let mut rng = tls_rng();
+                for &leader in &non_magic_keys {
+                    // ~50% chance of having a rule for each leader
+                    if rng.generate_range(0u32..2) == 0 {
+                        let output = non_magic_keys[rng.generate_range(0..non_magic_keys.len())];
+                        new_mk.add_rule(&leader.to_string(), &output.to_string());
+                    }
+                }
+                (c, new_mk)
+            })
+            .collect();
+
         Self {
             name: keys.iter().collect(),
             keys,
             fingers,
             keyboard,
             shape,
-            magic: self.magic.clone(),
+            magic,
         }
     }
 }
