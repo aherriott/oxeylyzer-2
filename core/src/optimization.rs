@@ -137,7 +137,7 @@ impl CachedLayout {
 
             if ap > f64::random(&mut rng) {
                 current_score = new_score;
-                self.apply_neighbor_and_update(neighbor);
+                self.apply_neighbor(neighbor);
             }
 
             temperature *= cooling_rate;
@@ -157,7 +157,7 @@ impl CachedLayout {
                 let score = self.score_neighbor(neighbor);
                 if score > best_score {
                     best_score = score;
-                    self.apply_neighbor_and_update(neighbor);
+                    self.apply_neighbor(neighbor);
                     improved = true;
                     break;
                 }
@@ -227,7 +227,7 @@ impl CachedLayout {
                 let score = self.score_neighbor(neighbor);
                 if score > best_score {
                     best_score = score;
-                    self.apply_neighbor_and_update(neighbor);
+                    self.apply_neighbor(neighbor);
                     improved = true;
                     any_improved = true;
                     break;

@@ -344,26 +344,25 @@ impl CachedLayout {
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
             let key = cache.data.char_mapping().get_u(key_char);
-            cache.replace_key(pos, EMPTY_KEY, key);
+            cache.replace_key_no_update(pos, EMPTY_KEY, key);
         }
+        cache.update();
 
         // Initialize pre-computed weighted scores for O(1) speculative trigram scoring
         cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
 
-        // Apply initial magic rules to the analyzers
-        // The current_magic_rules map was populated from the layout's magic key definitions,
-        // but the analyzers need to be initialized with these rules as well.
+        // Apply initial magic rules to the analyzers.
+        // The current_magic_rules map was populated from the layout's magic key definitions.
+        // Use replace_rule_no_update for each, then a single update() at the end.
         let initial_rules: Vec<_> = cache.current_magic_rules.iter()
             .map(|(&(magic_key, leader), &output)| (magic_key, leader, output))
             .collect();
+        // Clear all rules so replace_rule_no_update doesn't early-return
+        cache.current_magic_rules.clear();
         for (magic_key, leader, output) in initial_rules {
-            // Temporarily remove from current_magic_rules so apply_magic_rule doesn't early-return
-            cache.current_magic_rules.remove(&(magic_key, leader));
-            cache.apply_magic_rule(magic_key, leader, output, true);
+            cache.replace_rule_no_update(magic_key, leader, output);
         }
-
-        // Ensure magic deltas are consistent with final key positions
-        cache.recompute_magic_deltas();
+        cache.update();
 
         // Auto-compute trigram scale: measure raw magnitudes, then rescale
         // trigram weights so they produce the same magnitude as bigram-based scores.
@@ -614,99 +613,6 @@ impl CachedLayout {
         }
     }
 
-    /// Compute the full score from scratch using current keys and frequency tables.
-    /// Does not depend on sub-cache running totals. O(pairs + combos).
-    pub fn compute_score(&self) -> i64 {
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_flat = self.magic.tg_freq_flat();
-        let nk = self.trigram.num_keys();
-        let nk2 = nk * nk;
-
-        let mut sfb_score: i64 = 0;
-        let mut stretch_score: i64 = 0;
-        let mut scissors_score: i64 = 0;
-        let mut trigram_score: i64 = 0;
-
-        // SFB: iterate over all same-finger pairs
-        for pos in 0..self.num_positions {
-            let key = self.keys[pos];
-            if key >= nk { continue; }
-            for sf in self.sfb.pairs_for_pos(pos) {
-                let other_key = self.keys[sf.other_pos];
-                if other_key >= nk { continue; }
-                let bg = bg_freq[key * nk + other_key];
-                let sg = sg_freq[key * nk + other_key];
-                sfb_score += bg * sf.dist * self.sfb.sfb_weight_for_finger(sf.finger)
-                    + sg * sf.dist * self.sfb.sfs_weight_for_finger(sf.finger);
-            }
-        }
-
-        // Stretch: iterate over all stretch pairs
-        for pos in 0..self.num_positions {
-            let key = self.keys[pos];
-            if key >= nk { continue; }
-            for sp in self.stretch.pairs_for_pos(pos) {
-                let other_key = self.keys[sp.other_pos];
-                if other_key >= nk { continue; }
-                let bg = bg_freq[key * nk + other_key];
-                stretch_score += bg * sp.dist;
-            }
-        }
-        stretch_score *= self.stretch.weight();
-
-        // Scissors: iterate over all scissor pairs
-        for pos in 0..self.num_positions {
-            let key = self.keys[pos];
-            if key >= nk { continue; }
-            for sp in self.scissors.get_scissor_pairs(pos) {
-                let other_key = self.keys[sp.other_pos];
-                if other_key >= nk { continue; }
-                let bg = bg_freq[key * nk + other_key];
-                let sg = sg_freq[key * nk + other_key];
-                if sp.is_full {
-                    scissors_score += bg * sp.severity * self.scissors.full_weight()
-                        + sg * sp.severity * self.scissors.full_skip_weight();
-                } else {
-                    scissors_score += bg * sp.severity * self.scissors.half_weight()
-                        + sg * sp.severity * self.scissors.half_skip_weight();
-                }
-            }
-        }
-
-        // Trigrams: iterate over all combos (first position only to avoid triple-counting)
-        let mut total_tg_freq: i64 = 0;
-        for pos in 0..self.num_positions {
-            let key = self.keys[pos];
-            if key >= nk { continue; }
-            for combo in self.trigram.combos_first(pos) {
-                let kb = self.keys[combo.pos_b];
-                let kc = self.keys[combo.pos_c];
-                if kb >= nk || kc >= nk { continue; }
-                let freq = tg_flat[key * nk2 + kb * nk + kc];
-                trigram_score += freq * combo.weight;
-                total_tg_freq += freq;
-            }
-        }
-        // Apply the offset: subtract max_weight * total_freq so all trigram contributions are ≤ 0
-        trigram_score -= self.trigram.max_weight() * total_tg_freq;
-
-        // Finger usage
-        let mut fu_score: i64 = 0;
-        if self.finger_usage_weight != 0 {
-            for pos in 0..self.num_positions {
-                let key = self.keys[pos];
-                if key != EMPTY_KEY && key < self.data.chars.len() {
-                    let fi = self.fingers[pos] as usize;
-                    fu_score -= self.data.chars[key] * self.finger_usage_weights[fi];
-                }
-            }
-            fu_score *= self.finger_usage_weight * self.finger_usage_scale;
-        }
-
-        sfb_score + stretch_score + scissors_score + trigram_score + fu_score + self.magic_penalty()
-    }
-
     // ==================== Lower Bound ====================
 
     /// Compute a lower bound on the remaining cost by greedy completion.
@@ -727,10 +633,6 @@ impl CachedLayout {
         let mut cache = self.clone();
         let mut avail = available_positions.to_vec();
 
-        let bg_freq = cache.magic.bg_freq_flat().to_vec();
-        let sg_freq = cache.magic.sg_freq_flat().to_vec();
-        let tg_flat = cache.magic.tg_freq_flat().to_vec();
-
         for &key in unplaced_keys {
             if avail.is_empty() { break; }
             let nk = cache.trigram.num_keys();
@@ -741,9 +643,11 @@ impl CachedLayout {
             let mut best_score = i64::MIN;
 
             for &pos in &avail {
-                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key);
+                cache.update();
                 let score = cache.score();
-                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key, EMPTY_KEY);
+                cache.update();
                 if score > best_score {
                     best_score = score;
                     best_pos = pos;
@@ -751,7 +655,8 @@ impl CachedLayout {
             }
 
             // Place at best position
-            cache.replace_key_fast(best_pos, EMPTY_KEY, key);
+            cache.replace_key_no_update(best_pos, EMPTY_KEY, key);
+            cache.update();
             avail.retain(|&p| p != best_pos);
         }
 
@@ -759,46 +664,24 @@ impl CachedLayout {
     }
 
     // ==================== Mutation ====================
+    //
+    // Three operations × 2 variants + update:
+    //   replace_key / replace_key_no_update
+    //   swap_key    / swap_key_no_update
+    //   replace_rule / replace_rule_no_update
+    //
+    // Base variants call _no_update + update(). Use _no_update for batching.
 
-    /// Replace key at position. Mutates state. Full update (slow, for init).
+    /// Replace key at position. score() valid after.
     #[inline]
     pub fn replace_key(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
-        debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
-
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
-
-        self.sfb.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
-        self.stretch.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq);
-        self.scissors.replace_key(pos, old_key, new_key, &self.keys, None, bg_freq, sg_freq);
-        self.trigram.replace_key(pos, old_key, new_key, &self.keys, None, tg_freq);
-
-        // Update finger usage score
-        if self.finger_usage_weight != 0 {
-            let fi = self.fingers[pos] as usize;
-            let fw = self.finger_usage_weights[fi];
-            if old_key != EMPTY_KEY && old_key < self.data.chars.len() {
-                self.finger_usage_score += self.data.chars[old_key] * fw;
-            }
-            if new_key != EMPTY_KEY && new_key < self.data.chars.len() {
-                self.finger_usage_score -= self.data.chars[new_key] * fw;
-            }
-        }
-
-        self.keys[pos] = new_key;
-        if old_key != EMPTY_KEY && old_key < self.key_positions.len() {
-            self.key_positions[old_key] = None;
-        }
-        if new_key != EMPTY_KEY && new_key < self.key_positions.len() {
-            self.key_positions[new_key] = Some(pos);
-        }
+        self.replace_key_no_update(pos, old_key, new_key);
+        self.update();
     }
 
-    /// Replace key — fast path. Uses flat arrays, skips weighted_score update.
-    /// score() remains valid. score_neighbor() becomes invalid.
+    /// Replace key — no magic delta recompute. score() INVALID until update().
     #[inline]
-    pub fn replace_key_fast(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
+    pub fn replace_key_no_update(&mut self, pos: CachePos, old_key: CacheKey, new_key: CacheKey) {
         debug_assert!(self.keys[pos] == old_key, "Position {pos} has key {} but expected {old_key}", self.keys[pos]);
 
         let bg_freq = self.magic.bg_freq_flat();
@@ -831,11 +714,16 @@ impl CachedLayout {
         }
     }
 
-    /// Swap keys at two positions. Mutates running totals only.
-    /// Swap keys. Fast path using flat trigram array.
-    /// score() remains valid. score_neighbor() becomes invalid for trigrams.
+    /// Swap keys at two positions. score() valid after.
     #[inline]
-    pub fn swap_keys(&mut self, pos_a: CachePos, pos_b: CachePos) {
+    pub fn swap_key(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        self.swap_key_no_update(pos_a, pos_b);
+        self.update();
+    }
+
+    /// Swap keys — no magic delta recompute. score() INVALID until update().
+    #[inline]
+    pub fn swap_key_no_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
         let key_a = self.keys[pos_a];
         let key_b = self.keys[pos_b];
 
@@ -860,8 +748,6 @@ impl CachedLayout {
                 let fw_b = self.finger_usage_weights[fi_b];
                 let freq_a = if key_a < self.data.chars.len() { self.data.chars[key_a] } else { 0 };
                 let freq_b = if key_b < self.data.chars.len() { self.data.chars[key_b] } else { 0 };
-                // Remove old: key_a was at pos_a (fi_a), key_b was at pos_b (fi_b)
-                // Add new: key_a moves to pos_b (fi_b), key_b moves to pos_a (fi_a)
                 self.finger_usage_score += freq_a * fw_a - freq_a * fw_b
                                          + freq_b * fw_b - freq_b * fw_a;
             }
@@ -877,80 +763,26 @@ impl CachedLayout {
         }
     }
 
-    /// Swap keys and update state.
-    /// score() and score_neighbor() remain valid.
-    #[inline]
-    pub fn swap_keys_and_update(&mut self, pos_a: CachePos, pos_b: CachePos) {
-        self.swap_keys(pos_a, pos_b);
-        // After key swap, magic rule deltas are stale — recompute from scratch
-        if !self.current_magic_rules.is_empty() {
-            self.recompute_magic_deltas();
-        }
+    /// Replace a magic rule. score() valid after.
+    pub fn replace_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
+        self.replace_rule_no_update(magic_key, leader, new_output);
+        self.update();
     }
 
-    /// Recompute all magic rule score deltas from scratch using current key positions.
-    /// This fixes drift that accumulates when keys move between magic rule changes.
-    pub(crate) fn recompute_magic_deltas(&mut self) {
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
-
-        // Reset magic deltas on all sub-caches
-        self.sfb.reset_magic_deltas();
-        self.stretch.reset_magic_deltas();
-        self.scissors.reset_magic_deltas();
-        self.trigram.reset_magic_deltas();
-
-        // Reapply all active rules with fresh deltas
-        for (&(magic_key, leader), &output) in &self.current_magic_rules {
-            if output == EMPTY_KEY { continue; }
-            self.sfb.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
-            self.stretch.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, tg_freq, true);
-            self.scissors.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
-            self.trigram.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, tg_freq, true);
-        }
-    }
-
-
-    /// Apply a magic rule. Returns the new score.
-    /// If `apply` is false, computes the score without mutating state (speculative scoring).
+    /// Replace a magic rule — no magic delta recompute. score() INVALID until update().
     ///
-    /// When a magic rule A→M steals output B:
-    /// - Trigrams Z→A→B become Z→A→M (for all Z)
-    /// - Trigrams A→B→C become A→M→C (for all C)
-    /// - Bigram A→B becomes A→M (full steal)
-    /// - Bigrams B→C partially stolen by M→C based on trigram A→B→C rate
-    /// - Skipgrams Z→B partially stolen by Z→M based on trigram Z→A→B rate
-    ///
-    /// Each analyzer computes its own score delta via `add_rule` methods, using the
-    /// constant frequency arrays from MagicCache.
-    ///
-    /// # Arguments
-    /// * `magic_key` - M: the magic key that steals the output
-    /// * `leader` - A: the key that triggers the magic rule
-    /// * `new_output` - B: the output being stolen (or EMPTY_KEY to clear the rule)
-    /// * `apply` - If true, update internal state; if false, just compute the score
-    ///
-    /// # Returns
-    /// The new total score after applying (or speculatively applying) the rule.
-    pub fn apply_magic_rule(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey, apply: bool) -> i64 {
+    /// Handles conflict resolution: if another magic key already maps (leader → new_output),
+    /// that conflicting rule is cleared first.
+    pub fn replace_rule_no_update(&mut self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) {
         let key = (magic_key, leader);
         let old_output = self.current_magic_rules.get(&key).copied();
 
         // Early return if no change
         if old_output == Some(new_output) || (old_output.is_none() && new_output == EMPTY_KEY) {
-            return self.score();
+            return;
         }
 
-        // Get frequency arrays from MagicCache (read-only)
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
-
-        // Track total delta for speculative scoring
-        let mut total_delta: i64 = 0;
-
-        // Check if another magic key has this (leader, output) and clear it
+        // Clear conflicting rule from another magic key if needed
         if new_output != EMPTY_KEY {
             let mut key_to_clear = None;
             for (&(other_magic, other_leader), &other_output) in &self.current_magic_rules {
@@ -960,64 +792,15 @@ impl CachedLayout {
                 }
             }
             if let Some((other_magic, other_leader)) = key_to_clear {
-                // Clear the conflicting rule by setting its output to EMPTY_KEY
-                // Each analyzer's add_rule will handle removing the old rule
-                total_delta += self.sfb.add_rule(other_leader, EMPTY_KEY, other_magic, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, apply);
-                total_delta += self.stretch.add_rule(other_leader, EMPTY_KEY, other_magic, &self.keys, &self.key_positions, bg_freq, tg_freq, apply);
-                total_delta += self.scissors.add_rule(other_leader, EMPTY_KEY, other_magic, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, apply);
-                total_delta += self.trigram.add_rule(other_leader, EMPTY_KEY, other_magic, &self.keys, &self.key_positions, tg_freq, apply);
-
-                if apply {
-                    self.current_magic_rules.remove(&(other_magic, other_leader));
-                }
+                self.current_magic_rules.remove(&(other_magic, other_leader));
             }
         }
 
-        // Apply the new rule (or clear the existing one if new_output is EMPTY_KEY)
-        // Each analyzer's add_rule will handle:
-        // 1. Removing the old rule for this (magic_key, leader) if it exists
-        // 2. Adding the new rule if new_output is not EMPTY_KEY
-        total_delta += self.sfb.add_rule(leader, new_output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, apply);
-        total_delta += self.stretch.add_rule(leader, new_output, magic_key, &self.keys, &self.key_positions, bg_freq, tg_freq, apply);
-        total_delta += self.scissors.add_rule(leader, new_output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, apply);
-        total_delta += self.trigram.add_rule(leader, new_output, magic_key, &self.keys, &self.key_positions, tg_freq, apply);
-
-        // Update current_magic_rules if applying
-        if apply {
-            if new_output != EMPTY_KEY {
-                self.current_magic_rules.insert(key, new_output);
-            } else {
-                self.current_magic_rules.remove(&key);
-            }
-        }
-
-        // For speculative scoring (apply=false), we need to add the deltas to the current score
-        // For actual application (apply=true), the analyzers have already updated their state
-        if apply {
-            self.score()
+        // Update current_magic_rules
+        if new_output != EMPTY_KEY {
+            self.current_magic_rules.insert(key, new_output);
         } else {
-            // Compute penalty delta for the speculative rule change
-            // magic_penalty() negates weights, so adding a rule subtracts penalty
-            let penalty_delta = {
-                let old_is_repeat = old_output.map_or(false, |o| o == leader && o != EMPTY_KEY);
-                let new_is_repeat = new_output == leader && new_output != EMPTY_KEY;
-                let old_is_active = old_output.map_or(false, |o| o != EMPTY_KEY);
-                let new_is_active = new_output != EMPTY_KEY;
-
-                let mut delta = 0i64;
-                // Removing old rule removes its penalty (positive delta)
-                if old_is_active {
-                    if old_is_repeat { delta += self.magic_repeat_penalty; }
-                    else { delta += self.magic_rule_penalty; }
-                }
-                // Adding new rule adds its penalty (negative delta)
-                if new_is_active {
-                    if new_is_repeat { delta -= self.magic_repeat_penalty; }
-                    else { delta -= self.magic_rule_penalty; }
-                }
-                delta * self.magic_penalty_scale
-            };
-            self.score() + total_delta + penalty_delta
+            self.current_magic_rules.remove(&key);
         }
     }
 
@@ -1074,17 +857,17 @@ impl CachedLayout {
         if depth > 0 {
             let mut return_best = false;
             for &neighbor in neighbors {
-                // Apply swap with full running total update
-                cache.apply_neighbor_and_update(neighbor);
+                // Apply with full update so score() is valid at each level
+                cache.apply_neighbor(neighbor);
 
                 let best = Self::best_neighbor_recursive(cache, neighbors, depth - 1, diffs, cur_best);
 
                 // Revert — KeySwap is self-inverse, MagicRule needs explicit revert
                 match neighbor {
-                    Neighbor::KeySwap(_) => cache.apply_neighbor_and_update(neighbor),
+                    Neighbor::KeySwap(_) => cache.apply_neighbor(neighbor),
                     _ => {
                         let revert = cache.get_revert_neighbor(neighbor);
-                        cache.apply_neighbor_and_update(revert);
+                        cache.apply_neighbor(revert);
                     }
                 }
 
@@ -1331,7 +1114,7 @@ mod magic_rule_integration_tests {
     ///
     /// Note: When CachedLayout is constructed, magic rules are stored in current_magic_rules
     /// but the analyzers are not initialized with these rules. The analyzers only get updated
-    /// when apply_magic_rule is called. This test verifies that:
+    /// when replace_rule is called. This test verifies that:
     /// 1. Clearing a rule and re-applying it produces consistent scores
     /// 2. The score changes when rules are applied/cleared
     #[test]
@@ -1349,13 +1132,13 @@ mod magic_rule_integration_tests {
         let output = cache.char_mapping().get_u('b');
 
         // First, apply the rule to establish a baseline with the rule active
-        let score_with_rule = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let score_with_rule = cache.score();
 
         // Clear the rule
-        let score_without_rule = cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+        cache.replace_rule(magic_key, leader, EMPTY_KEY); let score_without_rule = cache.score();
 
         // Re-apply the rule
-        let score_reapplied = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let score_reapplied = cache.score();
 
         println!("Score with rule: {}", score_with_rule);
         println!("Score without rule: {}", score_without_rule);
@@ -1387,17 +1170,17 @@ mod magic_rule_integration_tests {
         let alt_output = cache.char_mapping().get_u('c');
 
         // First establish a baseline by applying the original rule
-        let baseline_score = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let baseline_score = cache.score();
 
         // Apply a different rule (change output from 'b' to 'c')
-        let score_after_change = cache.apply_magic_rule(magic_key, leader, alt_output, true);
+        cache.replace_rule(magic_key, leader, alt_output); let score_after_change = cache.score();
 
         // Verify the score changed
         println!("Baseline score: {}", baseline_score);
         println!("Score after change to 'c': {}", score_after_change);
 
         // Reverse by applying the original rule
-        let score_after_reverse = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let score_after_reverse = cache.score();
 
         // Score should return to baseline
         assert_eq!(
@@ -1422,15 +1205,15 @@ mod magic_rule_integration_tests {
         let output = cache.char_mapping().get_u('b');
 
         // First establish a baseline by applying the rule
-        let baseline_score = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let baseline_score = cache.score();
 
         // Clear the rule
-        let score_after_clear = cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+        cache.replace_rule(magic_key, leader, EMPTY_KEY); let score_after_clear = cache.score();
         println!("Baseline score: {}", baseline_score);
         println!("Score after clear: {}", score_after_clear);
 
         // Re-apply the rule
-        let score_after_reapply = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let score_after_reapply = cache.score();
         println!("Score after reapply: {}", score_after_reapply);
 
         // Score should return to baseline
@@ -1459,11 +1242,11 @@ mod magic_rule_integration_tests {
         let output_c = cache.char_mapping().get_u('c');
 
         // First establish a baseline by applying a rule
-        cache.apply_magic_rule(magic_key, leader, output_b, true);
+        cache.replace_rule(magic_key, leader, output_b);
         let baseline_score = cache.score();
 
-        // Speculative scoring for a different rule (apply=false)
-        let speculative_score = cache.apply_magic_rule(magic_key, leader, output_c, false);
+        // Speculative scoring for a different rule
+        let speculative_score = cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output_c)));
 
         // Verify state is unchanged
         assert_eq!(
@@ -1473,7 +1256,8 @@ mod magic_rule_integration_tests {
         );
 
         // Now actually apply
-        let actual_score = cache.apply_magic_rule(magic_key, leader, output_c, true);
+        cache.replace_rule(magic_key, leader, output_c);
+        let actual_score = cache.score();
 
         // Speculative and actual should match
         assert_eq!(
@@ -1499,14 +1283,14 @@ mod magic_rule_integration_tests {
         let output_c = cache.char_mapping().get_u('c');
 
         // First establish a baseline by applying a rule
-        cache.apply_magic_rule(magic_key, leader, output_b, true);
+        cache.replace_rule(magic_key, leader, output_b);
         let baseline_score = cache.score();
 
         // Multiple speculative calls
-        let spec1 = cache.apply_magic_rule(magic_key, leader, output_c, false);
-        let spec2 = cache.apply_magic_rule(magic_key, leader, output_c, false);
-        let _spec3 = cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, false);
-        let spec4 = cache.apply_magic_rule(magic_key, leader, output_b, false);
+        let spec1 = cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output_c)));
+        let spec2 = cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output_c)));
+        let _spec3 = cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, EMPTY_KEY)));
+        let spec4 = cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output_b)));
 
         // All speculative calls for the same change should return the same score
         assert_eq!(spec1, spec2, "Repeated speculative calls should return the same score");
@@ -1546,21 +1330,21 @@ mod magic_rule_integration_tests {
         let output_d = cache.char_mapping().get_u('d');
 
         // Apply both rules to establish a baseline
-        cache.apply_magic_rule(magic_key1, leader_a, output_b, true);
-        cache.apply_magic_rule(magic_key2, leader_c, output_d, true);
+        cache.replace_rule(magic_key1, leader_a, output_b);
+        cache.replace_rule(magic_key2, leader_c, output_d);
         let baseline_score = cache.score();
 
         // Clear both rules
-        cache.apply_magic_rule(magic_key1, leader_a, EMPTY_KEY, true);
-        cache.apply_magic_rule(magic_key2, leader_c, EMPTY_KEY, true);
+        cache.replace_rule(magic_key1, leader_a, EMPTY_KEY);
+        cache.replace_rule(magic_key2, leader_c, EMPTY_KEY);
         let score_no_rules = cache.score();
 
         // Apply first rule
-        cache.apply_magic_rule(magic_key1, leader_a, output_b, true);
+        cache.replace_rule(magic_key1, leader_a, output_b);
         let score_one_rule = cache.score();
 
         // Apply second rule
-        cache.apply_magic_rule(magic_key2, leader_c, output_d, true);
+        cache.replace_rule(magic_key2, leader_c, output_d);
         let score_two_rules = cache.score();
 
         println!("Baseline score: {}", baseline_score);
@@ -1618,21 +1402,21 @@ mod magic_rule_integration_tests {
         let output_d = cache.char_mapping().get_u('d');
 
         // Apply both rules to establish a baseline
-        cache.apply_magic_rule(magic_key_id, leader_a, output_b, true);
-        cache.apply_magic_rule(magic_key_id, leader_c, output_d, true);
+        cache.replace_rule(magic_key_id, leader_a, output_b);
+        cache.replace_rule(magic_key_id, leader_c, output_d);
         let baseline_score = cache.score();
 
         // Clear both rules
-        cache.apply_magic_rule(magic_key_id, leader_a, EMPTY_KEY, true);
-        cache.apply_magic_rule(magic_key_id, leader_c, EMPTY_KEY, true);
+        cache.replace_rule(magic_key_id, leader_a, EMPTY_KEY);
+        cache.replace_rule(magic_key_id, leader_c, EMPTY_KEY);
         let score_no_rules = cache.score();
 
         // Apply first rule (a -> b)
-        cache.apply_magic_rule(magic_key_id, leader_a, output_b, true);
+        cache.replace_rule(magic_key_id, leader_a, output_b);
         let score_one_rule = cache.score();
 
         // Apply second rule (c -> d)
-        cache.apply_magic_rule(magic_key_id, leader_c, output_d, true);
+        cache.replace_rule(magic_key_id, leader_c, output_d);
         let score_two_rules = cache.score();
 
         println!("Baseline score: {}", baseline_score);
@@ -1696,16 +1480,16 @@ mod magic_rule_integration_tests {
         let output_b = cache.char_mapping().get_u('b');
 
         // Clear all rules first
-        cache.apply_magic_rule(magic_key1_id, leader_a, EMPTY_KEY, true);
-        cache.apply_magic_rule(magic_key2_id, leader_a, EMPTY_KEY, true);
+        cache.replace_rule(magic_key1_id, leader_a, EMPTY_KEY);
+        cache.replace_rule(magic_key2_id, leader_a, EMPTY_KEY);
 
         // Apply rule on magic_key1: a -> * produces b
-        cache.apply_magic_rule(magic_key1_id, leader_a, output_b, true);
+        cache.replace_rule(magic_key1_id, leader_a, output_b);
         let score_with_key1 = cache.score();
 
         // Now apply conflicting rule on magic_key2: a -> # produces b
         // This should clear the rule from magic_key1
-        cache.apply_magic_rule(magic_key2_id, leader_a, output_b, true);
+        cache.replace_rule(magic_key2_id, leader_a, output_b);
         let score_with_key2 = cache.score();
 
         println!("Score with rule on key1: {}", score_with_key1);
@@ -1716,7 +1500,8 @@ mod magic_rule_integration_tests {
 
         // Verify that magic_key1 no longer has the rule (it was cleared)
         // We can check by trying to apply the same rule to key1 again
-        let score_reapply_key1 = cache.apply_magic_rule(magic_key1_id, leader_a, output_b, true);
+        cache.replace_rule(magic_key1_id, leader_a, output_b);
+        let score_reapply_key1 = cache.score();
 
         // This should clear key2's rule and apply to key1
         println!("Score after reapply to key1: {}", score_reapply_key1);
@@ -1772,20 +1557,20 @@ mod magic_rule_integration_tests {
         let output_b = cache.char_mapping().get_u('b');
 
         // Clear all rules and record baseline
-        cache.apply_magic_rule(magic_key1_id, leader_a, EMPTY_KEY, true);
-        cache.apply_magic_rule(magic_key2_id, leader_a, EMPTY_KEY, true);
+        cache.replace_rule(magic_key1_id, leader_a, EMPTY_KEY);
+        cache.replace_rule(magic_key2_id, leader_a, EMPTY_KEY);
         let baseline_score = cache.score();
 
         // Apply and conflict multiple times
         for _ in 0..5 {
-            cache.apply_magic_rule(magic_key1_id, leader_a, output_b, true);
-            cache.apply_magic_rule(magic_key2_id, leader_a, output_b, true);
-            cache.apply_magic_rule(magic_key1_id, leader_a, output_b, true);
+            cache.replace_rule(magic_key1_id, leader_a, output_b);
+            cache.replace_rule(magic_key2_id, leader_a, output_b);
+            cache.replace_rule(magic_key1_id, leader_a, output_b);
         }
 
         // Clear all rules
-        cache.apply_magic_rule(magic_key1_id, leader_a, EMPTY_KEY, true);
-        cache.apply_magic_rule(magic_key2_id, leader_a, EMPTY_KEY, true);
+        cache.replace_rule(magic_key1_id, leader_a, EMPTY_KEY);
+        cache.replace_rule(magic_key2_id, leader_a, EMPTY_KEY);
         let final_score = cache.score();
 
         // Should return to baseline
@@ -1815,7 +1600,7 @@ mod magic_rule_integration_tests {
         let score_before = cache.score();
 
         // Actually apply the swap
-        cache.swap_keys(0, 1);
+        cache.swap_key(0, 1);
         let actual_score = cache.score();
 
         println!("Speculative score: {}", speculative_score);
@@ -1886,7 +1671,7 @@ mod magic_rule_integration_tests {
             cache.sfb.score(), cache.stretch.score(), cache.scissors.score(), cache.trigram.score());
 
         // Actually apply the swap
-        cache.swap_keys(0, 1);
+        cache.swap_key(0, 1);
         let actual_score = cache.score();
 
         println!("After actual swap:");
@@ -1969,7 +1754,7 @@ mod magic_rule_integration_tests {
         );
 
         // Step 1: Clear (#, a)
-        cache.apply_magic_rule(magic_key_hash, key_a, EMPTY_KEY, true);
+        cache.replace_rule(magic_key_hash, key_a, EMPTY_KEY);
         let score_after_clear_hash = cache.score();
 
         // Verify (*, a)->b is still active
@@ -1980,7 +1765,7 @@ mod magic_rule_integration_tests {
         );
 
         // Step 2: Apply (#, a)->b - this conflicts with (*, a)->b
-        cache.apply_magic_rule(magic_key_hash, key_a, key_b, true);
+        cache.replace_rule(magic_key_hash, key_a, key_b);
 
         // Verify (*, a)->b was cleared due to conflict
         assert_eq!(
@@ -1997,7 +1782,7 @@ mod magic_rule_integration_tests {
         );
 
         // Step 3: Clear (#, a)
-        cache.apply_magic_rule(magic_key_hash, key_a, EMPTY_KEY, true);
+        cache.replace_rule(magic_key_hash, key_a, EMPTY_KEY);
         let score_after_final_clear = cache.score();
 
         // Verify (#, a) is cleared
@@ -2040,10 +1825,10 @@ mod magic_rule_integration_tests {
         let output = cache.char_mapping().get_u('b');
 
         // First apply the rule to establish a baseline
-        let baseline_score = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let baseline_score = cache.score();
 
         // Apply the same rule again (should be no-op)
-        let score_after_reapply = cache.apply_magic_rule(magic_key, leader, output, true);
+        cache.replace_rule(magic_key, leader, output); let score_after_reapply = cache.score();
 
         assert_eq!(
             score_after_reapply, baseline_score,
@@ -2067,10 +1852,10 @@ mod magic_rule_integration_tests {
         let _output = cache.char_mapping().get_u('b');
 
         // Clear the rule (even though analyzers weren't initialized with it)
-        let score_after_clear = cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+        cache.replace_rule(magic_key, leader, EMPTY_KEY); let score_after_clear = cache.score();
 
         // Try to clear again (should be no-op)
-        let score_after_second_clear = cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+        cache.replace_rule(magic_key, leader, EMPTY_KEY); let score_after_second_clear = cache.score();
 
         assert_eq!(
             score_after_second_clear, score_after_clear,
@@ -2095,18 +1880,21 @@ mod magic_rule_integration_tests {
         let output_c = cache.char_mapping().get_u('c');
 
         // First establish a baseline
-        let baseline = cache.apply_magic_rule(magic_key, leader, output_b, true);
+        cache.replace_rule(magic_key, leader, output_b);
+        let baseline = cache.score();
 
         // Perform various operations and verify score consistency
-        let scores: Vec<i64> = vec![
-            cache.score(),
-            cache.apply_magic_rule(magic_key, leader, output_c, true),
-            cache.score(),
-            cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true),
-            cache.score(),
-            cache.apply_magic_rule(magic_key, leader, output_b, true),
-            cache.score(),
-        ];
+        let s0 = cache.score();
+        cache.replace_rule(magic_key, leader, output_c);
+        let s1 = cache.score();
+        let s2 = cache.score();
+        cache.replace_rule(magic_key, leader, EMPTY_KEY);
+        let s3 = cache.score();
+        let s4 = cache.score();
+        cache.replace_rule(magic_key, leader, output_b);
+        let s5 = cache.score();
+        let s6 = cache.score();
+        let scores: Vec<i64> = vec![s0, s1, s2, s3, s4, s5, s6];
 
         // Each pair of (apply result, subsequent score()) should match
         assert_eq!(scores[0], baseline, "Initial score should match baseline");
@@ -2287,7 +2075,7 @@ mod pbt_constant_frequencies {
                 let magic_key = magic_keys[magic_key_idx % magic_keys.len()];
 
                 // Apply the rule (with apply=true to actually mutate state)
-                cache.apply_magic_rule(magic_key, leader, output, true);
+                cache.replace_rule(magic_key, leader, output);
             }
 
             // Verify frequency arrays are unchanged
@@ -2374,8 +2162,8 @@ mod pbt_constant_frequencies {
                     regular_keys[output_idx % regular_keys.len()]
                 };
 
-                // Speculative scoring (apply=false)
-                cache.apply_magic_rule(magic_key_star, leader, output, false);
+                // Speculative scoring
+                cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key_star, leader, output)));
             }
 
             // Verify frequency arrays are unchanged
@@ -2469,7 +2257,7 @@ mod pbt_constant_frequencies {
                     let pos_a = idx1 % num_positions;
                     let pos_b = idx2 % num_positions;
                     if pos_a != pos_b {
-                        cache.swap_keys(pos_a, pos_b);
+                        cache.swap_key(pos_a, pos_b);
                     }
                 } else {
                     // Magic rule operation
@@ -2479,7 +2267,7 @@ mod pbt_constant_frequencies {
                     } else {
                         regular_keys[idx2 % regular_keys.len()]
                     };
-                    cache.apply_magic_rule(magic_key_star, leader, output, true);
+                    cache.replace_rule(magic_key_star, leader, output);
                 }
             }
 
@@ -2639,7 +2427,7 @@ mod pbt_total_score_preservation {
     fn apply_operation(cache: &mut CachedLayout, op: &Operation, regular_keys: &[CacheKey], magic_keys: &[CacheKey]) {
         match op {
             Operation::KeySwap(pos_a, pos_b) => {
-                cache.swap_keys(*pos_a, *pos_b);
+                cache.swap_key(*pos_a, *pos_b);
             }
             Operation::MagicRule(leader_idx, output_idx, magic_key_idx) => {
                 let leader = regular_keys[*leader_idx % regular_keys.len()];
@@ -2649,7 +2437,7 @@ mod pbt_total_score_preservation {
                     regular_keys[*output_idx % regular_keys.len()]
                 };
                 let magic_key = magic_keys[*magic_key_idx % magic_keys.len()];
-                cache.apply_magic_rule(magic_key, leader, output, true);
+                cache.replace_rule(magic_key, leader, output);
             }
         }
     }
@@ -2808,12 +2596,12 @@ mod pbt_total_score_preservation {
 
             // Apply all swaps
             for &(pos_a, pos_b) in &swaps {
-                cache.swap_keys(pos_a, pos_b);
+                cache.swap_key(pos_a, pos_b);
             }
 
             // Reverse all swaps (in reverse order)
             for &(pos_a, pos_b) in swaps.iter().rev() {
-                cache.swap_keys(pos_a, pos_b);
+                cache.swap_key(pos_a, pos_b);
             }
 
             // Score should return to initial
@@ -2867,7 +2655,7 @@ mod pbt_total_score_preservation {
             let magic_key = magic_keys[magic_key_idx % magic_keys.len()];
 
             // First, clear any existing rule for this (magic_key, leader) pair
-            cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+            cache.replace_rule(magic_key, leader, EMPTY_KEY);
 
             // Check if applying this rule would conflict with an existing rule on another magic key.
             // A conflict occurs when another magic key has a rule with the same leader and output.
@@ -2885,10 +2673,10 @@ mod pbt_total_score_preservation {
             let trigram_no_rule = cache.trigram.score();
 
             // Apply the rule
-            cache.apply_magic_rule(magic_key, leader, output, true);
+            cache.replace_rule(magic_key, leader, output);
 
             // Clear the rule
-            cache.apply_magic_rule(magic_key, leader, EMPTY_KEY, true);
+            cache.replace_rule(magic_key, leader, EMPTY_KEY);
 
             // Score should return to the no-rule state ONLY if there was no conflict.
             // If there was a conflict, the conflicting rule was cleared as a side effect,
@@ -2937,12 +2725,12 @@ mod pbt_total_score_preservation {
 
             // Apply key swaps
             for &(pos_a, pos_b) in &swaps {
-                cache.swap_keys(pos_a, pos_b);
+                cache.swap_key(pos_a, pos_b);
             }
 
             // Reverse key swaps (key swap is its own inverse)
             for &(pos_a, pos_b) in swaps.iter().rev() {
-                cache.swap_keys(pos_a, pos_b);
+                cache.swap_key(pos_a, pos_b);
             }
 
             // Score should return to initial
@@ -2997,7 +2785,7 @@ mod pbt_total_score_preservation {
                             regular_keys[*output_idx % regular_keys.len()]
                         };
                         let magic_key = magic_keys[*magic_key_idx % magic_keys.len()];
-                        cache.apply_magic_rule(magic_key, leader, output, false)
+                        cache.score_neighbor(Neighbor::MagicRule(MagicRule::new(magic_key, leader, output)))
                     }
                 };
 

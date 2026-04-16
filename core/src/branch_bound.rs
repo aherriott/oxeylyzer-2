@@ -258,7 +258,7 @@ impl BranchBound {
         // Remove all keys to get empty positions
         for pos in 0..self.num_positions {
             let key = cache.get_key(pos);
-            cache.replace_key_fast(pos, key, EMPTY_KEY);
+            cache.replace_key_no_update(pos, key, EMPTY_KEY);
         }
         cache
     }
@@ -378,7 +378,7 @@ impl BranchBound {
         for i in 0..num_available {
             let pos = available_positions[i];
 
-            cache.replace_key_fast(pos, EMPTY_KEY, key);
+            cache.replace_key_no_update(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
             available_positions.swap_remove(i);
 
@@ -398,7 +398,7 @@ impl BranchBound {
             available_positions.swap(i, last);
 
             assignment.pop();
-            cache.replace_key_fast(pos, key, EMPTY_KEY);
+            cache.replace_key_no_update(pos, key, EMPTY_KEY);
         }
     }
 
@@ -574,7 +574,7 @@ impl BranchBound {
         for i in 0..num_available {
             let pos = available_positions[i];
 
-            cache.replace_key_fast(pos, EMPTY_KEY, key);
+            cache.replace_key_no_update(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
             available_positions.swap_remove(i);
 
@@ -595,7 +595,7 @@ impl BranchBound {
             available_positions.swap(i, last);
 
             assignment.pop();
-            cache.replace_key_fast(pos, key, EMPTY_KEY);
+            cache.replace_key_no_update(pos, key, EMPTY_KEY);
         }
     }
 
@@ -639,10 +639,10 @@ impl BranchBound {
                     .count();
 
                 for d in (shared..prev_positions.len()).rev() {
-                    cache.replace_key_fast(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
+                    cache.replace_key_no_update(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
                 }
                 for d in shared..positions.len() {
-                    cache.replace_key_fast(positions[d], EMPTY_KEY, self.keys_by_freq[d]);
+                    cache.replace_key_no_update(positions[d], EMPTY_KEY, self.keys_by_freq[d]);
                 }
                 prev_positions = positions.clone();
 
@@ -652,9 +652,9 @@ impl BranchBound {
                 for pos in 0..self.num_positions {
                     if occupied[pos] { continue; }
 
-                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    cache.replace_key_no_update(pos, EMPTY_KEY, key);
                     let score = cache.score();
-                    cache.replace_key_fast(pos, key, EMPTY_KEY);
+                    cache.replace_key_no_update(pos, key, EMPTY_KEY);
 
                     let mut new_positions = positions.clone();
                     new_positions.push(pos);
@@ -663,7 +663,7 @@ impl BranchBound {
             }
 
             for d in (0..prev_positions.len()).rev() {
-                cache.replace_key_fast(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
+                cache.replace_key_no_update(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
 
             // Prune at interval or at last depth
@@ -678,11 +678,11 @@ impl BranchBound {
 
         beam.into_iter().map(|positions| {
             for (d, &pos) in positions.iter().enumerate() {
-                cache.replace_key_fast(pos, EMPTY_KEY, self.keys_by_freq[d]);
+                cache.replace_key_no_update(pos, EMPTY_KEY, self.keys_by_freq[d]);
             }
             let score = cache.score();
             for d in (0..positions.len()).rev() {
-                cache.replace_key_fast(positions[d], self.keys_by_freq[d], EMPTY_KEY);
+                cache.replace_key_no_update(positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
 
             let assignment: Vec<(char, usize)> = positions.iter().enumerate()
@@ -823,7 +823,7 @@ impl BranchBound {
             for i in 0..num_keys {
                 let (key, c) = available_keys[i];
 
-                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key);
                 assignment.push((c, pos));
                 available_keys.swap_remove(i);
 
@@ -841,7 +841,7 @@ impl BranchBound {
                 let last = available_keys.len() - 1;
                 available_keys.swap(i, last);
                 assignment.pop();
-                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key, EMPTY_KEY);
             }
 
             // Restore the pending position
@@ -856,7 +856,7 @@ impl BranchBound {
             for i in 0..num_positions {
                 let pos = available_positions[i];
 
-                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key);
                 assignment.push((c, pos));
                 available_positions.swap_remove(i);
 
@@ -895,7 +895,7 @@ impl BranchBound {
                 let last = available_positions.len() - 1;
                 available_positions.swap(i, last);
                 assignment.pop();
-                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key, EMPTY_KEY);
             }
 
             // Restore the key
@@ -1025,7 +1025,7 @@ impl BranchBound {
         for i in 0..num_available {
             let (key, c) = available_keys[i];
 
-            cache.replace_key_fast(pos, EMPTY_KEY, key);
+            cache.replace_key_no_update(pos, EMPTY_KEY, key);
             assignment.push((c, pos));
             available_keys.swap_remove(i);
 
@@ -1047,7 +1047,7 @@ impl BranchBound {
             available_keys.swap(i, last);
 
             assignment.pop();
-            cache.replace_key_fast(pos, key, EMPTY_KEY);
+            cache.replace_key_no_update(pos, key, EMPTY_KEY);
         }
     }
 }

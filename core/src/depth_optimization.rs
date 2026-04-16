@@ -17,7 +17,7 @@ impl Analyzer {
 
                 if score > best_score {
                     best_loop_score = score;
-                    self.apply_neighbor_and_update(neighbor);
+                    self.apply_neighbor(neighbor);
                     break;
                 }
             }
@@ -61,7 +61,7 @@ impl Analyzer {
             }
 
             best_score = score;
-            self.apply_neighbor_and_update(neighbor);
+            self.apply_neighbor(neighbor);
         }
 
         (self.layout(), best_score)

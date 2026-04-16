@@ -143,7 +143,7 @@ impl Analyzer {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .swap_keys_and_update(pos_a, pos_b)
+            .swap_key_no_update(pos_a, pos_b)
     }
 
     /// Get the current score.
@@ -159,7 +159,7 @@ impl Analyzer {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .apply_neighbor_and_update(neighbor)
+            .apply_neighbor(neighbor)
     }
 
     /// Rebuild weighted_score arrays from current state.
@@ -167,7 +167,7 @@ impl Analyzer {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .update_scores()
+            .update()
     }
 
     /*

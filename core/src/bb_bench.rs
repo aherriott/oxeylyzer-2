@@ -21,7 +21,7 @@ mod tests {
         let (bb, mut cache) = setup();
         let num_positions = bb.num_positions();
 
-        println!("\n=== replace_key_fast cost at various depths ===");
+        println!("\n=== replace_key_no_update cost at various depths ===");
 
         for depth in 0..std::cmp::min(15, num_positions) {
             let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
@@ -30,13 +30,13 @@ mod tests {
             let n = 10_000u32;
             let t = Instant::now();
             for _ in 0..n {
-                cache.replace_key_fast(pos, EMPTY_KEY, key_id);
-                cache.replace_key_fast(pos, key_id, EMPTY_KEY);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key_id);
+                cache.replace_key_no_update(pos, key_id, EMPTY_KEY);
             }
             let per_iter = t.elapsed() / n;
-            println!("  depth {depth:2}: {:?}/replace_key_fast (place+remove)", per_iter);
+            println!("  depth {depth:2}: {:?}/replace_key_no_update (place+remove)", per_iter);
 
-            cache.replace_key_fast(pos, EMPTY_KEY, key_id);
+            cache.replace_key_no_update(pos, EMPTY_KEY, key_id);
         }
     }
 
@@ -47,7 +47,7 @@ mod tests {
 
         for depth in 0..5 {
             let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
-            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+            cache.replace_key_no_update(depth, EMPTY_KEY, key_id);
         }
 
         let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[5]);
@@ -59,9 +59,9 @@ mod tests {
         let t = Instant::now();
         for _ in 0..n {
             for pos in 5..num_positions {
-                cache.replace_key_fast(pos, EMPTY_KEY, key_id);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key_id);
                 std::hint::black_box(cache.score());
-                cache.replace_key_fast(pos, key_id, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key_id, EMPTY_KEY);
             }
         }
         let elapsed = t.elapsed();
@@ -100,7 +100,7 @@ mod tests {
         // Place first 5 keys
         for depth in 0..5 {
             let key_id = cache.char_mapping().get_u(bb.chars_by_frequency()[depth]);
-            cache.replace_key_fast(depth, EMPTY_KEY, key_id);
+            cache.replace_key_no_update(depth, EMPTY_KEY, key_id);
         }
 
         let remaining: Vec<usize> = (5..num_positions)

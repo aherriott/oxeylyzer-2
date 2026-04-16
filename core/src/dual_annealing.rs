@@ -156,7 +156,7 @@ impl DualAnnealing {
 
                 let pos_a = swappable[a_idx];
                 let pos_b = swappable[b_idx];
-                cache.swap_keys_and_update(pos_a, pos_b);
+                cache.swap_key(pos_a, pos_b);
                 swapped_pairs.push((pos_a, pos_b));
             }
 
@@ -189,7 +189,7 @@ impl DualAnnealing {
                         let a = rng.generate_range(0..unpinned.len());
                         let mut b = rng.generate_range(0..unpinned.len() - 1);
                         if b >= a { b += 1; }
-                        cache.swap_keys_and_update(unpinned[a], unpinned[b]);
+                        cache.swap_key(unpinned[a], unpinned[b]);
                     }
                 }
 
@@ -276,15 +276,14 @@ fn restore_keys(cache: &mut CachedLayout, saved_keys: &[usize]) {
     for pos in 0..n {
         let k = cache.get_key(pos);
         if k != EMPTY_KEY {
-            cache.replace_key_fast(pos, k, EMPTY_KEY);
+            cache.replace_key_no_update(pos, k, EMPTY_KEY);
         }
     }
     for pos in 0..n {
         let k = saved_keys[pos];
         if k != EMPTY_KEY {
-            cache.replace_key_fast(pos, EMPTY_KEY, k);
+            cache.replace_key_no_update(pos, EMPTY_KEY, k);
         }
     }
-    // Recompute magic deltas — replace_key_fast doesn't maintain them correctly
-    cache.recompute_magic_deltas();
+    cache.update();
 }

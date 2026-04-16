@@ -50,7 +50,7 @@ mod tests {
 
         // Profile full apply_and_update (swap + weighted_score update + neighbor recompute)
         let t = Instant::now();
-        for i in 0..n { let nb = ns[i % ns.len()]; a.apply_neighbor_and_update(nb); a.apply_neighbor_and_update(nb); }
+        for i in 0..n { let nb = ns[i % ns.len()]; a.apply_neighbor(nb); a.apply_neighbor(nb); }
         println!("=== apply_and_update: {n} iters, {:?}/iter ===", t.elapsed() / n as u32);
     }
 
@@ -62,8 +62,8 @@ mod tests {
         let mut c = CachedLayout::new(&l, data, &weights);
         let n = 3u32;
         let t = Instant::now();
-        for _ in 0..n { c.update_scores(); }
-        println!("\n=== update_scores: {n} iters, {:?}/iter ===", t.elapsed() / n);
+        for _ in 0..n { c.update(); }
+        println!("\n=== update: {n} iters, {:?}/iter ===", t.elapsed() / n);
     }
 
     #[test]

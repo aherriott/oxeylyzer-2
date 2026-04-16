@@ -128,7 +128,7 @@ impl MctsSearch {
         for pos in 0..self.num_positions {
             let k = cache.get_key(pos);
             if k != EMPTY_KEY {
-                cache.replace_key_fast(pos, k, EMPTY_KEY);
+                cache.replace_key_no_update(pos, k, EMPTY_KEY);
             }
         }
 
@@ -162,7 +162,7 @@ impl MctsSearch {
                 let child = &node.children[best_child_idx];
                 let pos = child.position;
                 let key = self.keys_by_freq[depth];
-                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key);
                 path.push(pos);
 
                 node = &mut node.children[best_child_idx];
@@ -186,7 +186,7 @@ impl MctsSearch {
                     let child = &node.children[0];
                     let pos = child.position;
                     let key = self.keys_by_freq[depth];
-                    cache.replace_key_fast(pos, EMPTY_KEY, key);
+                    cache.replace_key_no_update(pos, EMPTY_KEY, key);
                     path.push(pos);
                     depth += 1;
                 }
@@ -207,7 +207,7 @@ impl MctsSearch {
 
                 let idx = rng.generate_range(0..avail.len());
                 let pos = avail.swap_remove(idx);
-                cache.replace_key_fast(pos, EMPTY_KEY, key);
+                cache.replace_key_no_update(pos, EMPTY_KEY, key);
                 rollout_positions.push(pos);
             }
 
@@ -231,7 +231,7 @@ impl MctsSearch {
             // rollout positions, so read the actual key at each position.
             for &pos in rollout_positions.iter().rev() {
                 let key = cache.get_key(pos);
-                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key, EMPTY_KEY);
             }
 
             // BACKPROPAGATE: update scores along the path
@@ -244,7 +244,7 @@ impl MctsSearch {
             // Undo the path placements
             for (d, &pos) in path.iter().enumerate().rev() {
                 let key = self.keys_by_freq[d];
-                cache.replace_key_fast(pos, key, EMPTY_KEY);
+                cache.replace_key_no_update(pos, key, EMPTY_KEY);
             }
 
             // Progress callback

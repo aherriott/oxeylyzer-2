@@ -177,8 +177,8 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                cached.swap_keys(pos_a, pos_b);
-                cached.swap_keys(pos_a, pos_b);
+                cached.swap_key_no_update(pos_a, pos_b);
+                cached.swap_key_no_update(pos_a, pos_b);
             }
         })
     }
@@ -203,8 +203,8 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                cached.apply_magic_rule(magic_key, leader_a, output_c, true);
-                cached.apply_magic_rule(magic_key, leader_a, output_b, true);
+                cached.replace_rule(magic_key, leader_a, output_c);
+                cached.replace_rule(magic_key, leader_a, output_b);
             }
         })
     }
@@ -226,7 +226,11 @@ mod bench {
 
         bencher.bench(|| {
             for _ in 0..N {
-                black_box(cached.apply_magic_rule(magic_key, leader_a, output_c, false));
+                // score_neighbor with MagicRule does apply-score-revert internally
+                let neighbor = oxeylyzer_core::prelude::Neighbor::MagicRule(
+                    oxeylyzer_core::layout::MagicRule::new(magic_key, leader_a, output_c)
+                );
+                black_box(cached.score_neighbor(neighbor));
             }
         })
     }
