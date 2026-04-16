@@ -97,6 +97,10 @@ xflags::xflags! {
             required name: String
             /// SA iterations for local search. Defaults to 0 (off).
             optional -s, --sa sa_iters: usize
+            /// SA initial temperature for local search. Defaults to 10.0.
+            optional --sa-temp sa_temp: f64
+            /// SA final temperature for local search. Defaults to 1e-5.
+            optional --sa-final sa_final: f64
             /// Greedy polish after local SA. 0=off, 1=hill-climb. Defaults to 1.
             optional -g, --greedy greedy_depth: usize
             /// Max global iterations. Defaults to unlimited.

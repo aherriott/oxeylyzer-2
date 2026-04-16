@@ -734,6 +734,8 @@ impl Repl {
         &mut self,
         name: &str,
         sa_iters: Option<usize>,
+        sa_temp: Option<f64>,
+        sa_final: Option<f64>,
         greedy_depth: Option<usize>,
         iterations: Option<usize>,
         time_secs: Option<usize>,
@@ -761,8 +763,8 @@ impl Repl {
         let mut steps = Vec::new();
         if sa_iters > 0 {
             steps.push(OptStep::SA {
-                initial_temp: 10.0,
-                final_temp: 1E-5,
+                initial_temp: sa_temp.unwrap_or(10.0),
+                final_temp: sa_final.unwrap_or(1E-5),
                 iterations: sa_iters,
             });
         }
@@ -869,7 +871,7 @@ impl Repl {
             OxeylyzerCmd::Bb3(b) => self.branch_bound_hybrid(&b.name, b.top)?,
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
-            OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.greedy, d.iterations, d.time, d.temp, d.qv, d.qa, d.restart, d.swaps, d.pins)?,
+            OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.sa_temp, d.sa_final, d.greedy, d.iterations, d.time, d.temp, d.qv, d.qa, d.restart, d.swaps, d.pins)?,
             OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.greedy, s.pins)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
