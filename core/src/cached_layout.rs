@@ -391,7 +391,7 @@ impl CachedLayout {
             // average magic rule contributes (~1% of total score per rule)
             if cache.magic_rule_penalty != 0 || cache.magic_repeat_penalty != 0 {
                 let total_mag = (sfb_s.abs() + stretch_s.abs() + scissors_s.abs() + trigram_s.abs()).max(1);
-                cache.magic_penalty_scale = total_mag / (cache.num_positions * cache.num_positions) as i64;
+                cache.magic_penalty_scale = total_mag / (cache.num_positions * cache.num_positions * 10) as i64;
             }
         }
 

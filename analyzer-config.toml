@@ -2,10 +2,10 @@ corpus = "./data/english.json"
 layouts = ["./core/test-layouts", "./layouts"] # can be an array of folders
 
 [weights]
-finger_usage = 15
-sfbs = 15
-sfs = 2
-stretches = 12
+finger_usage = 20
+sfbs = 20
+sfs = 3
+stretches = 16
 sft = 20
 inroll = 4
 outroll = 4
@@ -17,7 +17,7 @@ full_scissors = 5
 half_scissors = 1
 full_scissors_skip = 2
 half_scissors_skip = 1
-magic_rule_penalty = 1
+magic_rule_penalty = 5
 magic_repeat_penalty = 0
 
 [weights.fingers]
