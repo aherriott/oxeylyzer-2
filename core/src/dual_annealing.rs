@@ -285,4 +285,6 @@ fn restore_keys(cache: &mut CachedLayout, saved_keys: &[usize]) {
             cache.replace_key_fast(pos, EMPTY_KEY, k);
         }
     }
+    // Recompute magic deltas — replace_key_fast doesn't maintain them correctly
+    cache.recompute_magic_deltas();
 }

@@ -884,7 +884,7 @@ impl CachedLayout {
 
     /// Recompute all magic rule score deltas from scratch using current key positions.
     /// This fixes drift that accumulates when keys move between magic rule changes.
-    fn recompute_magic_deltas(&mut self) {
+    pub(crate) fn recompute_magic_deltas(&mut self) {
         let bg_freq = self.magic.bg_freq_flat();
         let sg_freq = self.magic.sg_freq_flat();
         let tg_freq = self.magic.tg_freq();
