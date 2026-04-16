@@ -380,7 +380,19 @@ impl CachedLayout {
             let tg_scale = (bigram_mag / tg_mag).max(1);
             if tg_scale > 1 {
                 cache.trigram.apply_scale(tg_scale);
+                // Re-place all keys to recompute running totals with scaled weights
+                let placed_keys: Vec<(usize, usize)> = (0..cache.num_positions)
+                    .map(|pos| (pos, cache.keys[pos]))
+                    .filter(|&(_, k)| k != EMPTY_KEY)
+                    .collect();
+                for &(pos, key) in &placed_keys {
+                    cache.replace_key_no_update(pos, key, EMPTY_KEY);
+                }
+                for &(pos, key) in &placed_keys {
+                    cache.replace_key_no_update(pos, EMPTY_KEY, key);
+                }
                 cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
+                cache.update();
             }
 
             // Auto-scale finger usage to match bigram magnitude
