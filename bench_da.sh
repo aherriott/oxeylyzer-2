@@ -1,13 +1,12 @@
 #!/bin/bash
 # DA parameter sweep benchmark
-# Varies exploration parameters, runs each config 3 times for 2 minutes
-# Tests on my-layout (magic key layout for more interesting dynamics)
+# Varies exploration parameters, 3 parallel runs per config, 30s each
 
 set -e
 
 BINARY="./target/release/main"
 LAYOUT="my-layout"
-TIME=120  # 2 minutes per run
+TIME=30
 RUNS=3
 CSV="da_bench_results.csv"
 
@@ -20,7 +19,6 @@ run_test() {
     local label="$1" temp="$2" qv="$3" qa="$4" restart="$5" swaps="$6" run_num="$7"
 
     local cmd="da $LAYOUT --temp $temp --qv $qv --qa $qa --restart $restart --swaps $swaps -t $TIME"
-    echo -n "  [$run_num/$RUNS] $label: "
 
     local output
     output=$(echo "$cmd
@@ -30,27 +28,21 @@ q" | "$BINARY" 2>/dev/null)
     best=$(echo "$output" | grep "Best score:" | sed -E 's/Best score: (.*)/\1/')
     elapsed=$(echo "$output" | grep "completed in" | sed -E 's/.*in ([0-9.]+)s.*/\1/')
     restarts=$(echo "$output" | grep "completed in" | sed -E 's/.*\(([0-9]+) restarts\).*/\1/')
-
-    # Parse iter count from last progress line
     iters=$(echo "$output" | grep "iter " | tail -1 | sed -E 's/.*iter ([0-9.]+[A-Za-z]*).*/\1/')
     local iters_raw
     iters_raw=$(echo "$iters" | sed -E 's/([0-9.]+)K$/\1e3/; s/([0-9.]+)M$/\1e6/; s/([0-9.]+)B$/\1e9/' | awk '{printf "%.0f", $1}')
-
     local rate
     rate=$(echo "$iters_raw $elapsed" | awk '{if ($2>0) printf "%.1f", $1/$2; else print "0"}')
-
-    # Convert best score
     local best_raw
     best_raw=$(echo "$best" | sed -E 's/([0-9.]+)T$/\1e12/; s/([0-9.]+)B$/\1e9/; s/([0-9.]+)M$/\1e6/; s/([0-9.]+)K$/\1e3/; s/^-//' | awk '{printf "%.0f", $1}')
     best_raw="-$best_raw"
 
     echo "$LAYOUT,$label,$temp,$qv,$qa,$restart,$swaps,$run_num,$elapsed,$best_raw,$iters_raw,$rate,$restarts" >> "$CSV"
-    echo "best=$best iters=$iters rate=${rate}/s restarts=$restarts"
+    echo "  $label [$run_num]: best=$best rate=${rate}/s restarts=$restarts"
 }
 
-# Parameter configs: (label, temp, qv, qa, restart_ratio, max_swaps)
 configs=(
-    # Baseline (scipy defaults)
+    # Baseline
     "baseline,5230,2.62,-5.0,2e-5,8"
 
     # Vary initial temperature
@@ -59,13 +51,13 @@ configs=(
     "temp=10000,10000,2.62,-5.0,2e-5,8"
     "temp=50000,50000,2.62,-5.0,2e-5,8"
 
-    # Vary visiting parameter qv (tail heaviness)
+    # Vary qv
     "qv=1.5,5230,1.5,-5.0,2e-5,8"
     "qv=2.0,5230,2.0,-5.0,2e-5,8"
     "qv=2.8,5230,2.8,-5.0,2e-5,8"
     "qv=2.95,5230,2.95,-5.0,2e-5,8"
 
-    # Vary acceptance parameter qa
+    # Vary qa
     "qa=-5,5230,2.62,-5.0,2e-5,8"
     "qa=-10,5230,2.62,-10.0,2e-5,8"
     "qa=-50,5230,2.62,-50.0,2e-5,8"
@@ -85,19 +77,18 @@ configs=(
 )
 
 total=$((${#configs[@]} * RUNS))
-est_min=$(echo "$total * $TIME / 60" | bc)
-echo "Configs: ${#configs[@]}, Runs: $RUNS, Time/run: ${TIME}s"
-echo "Total: $total runs (~${est_min} minutes)"
+est_min=$(echo "${#configs[@]} * $TIME / 60" | bc)
+echo "Configs: ${#configs[@]}, Runs: $RUNS (parallel), Time/run: ${TIME}s"
+echo "Total: $total runs (~${est_min} min wall clock)"
 echo ""
 
-current=0
 for config_str in "${configs[@]}"; do
     IFS=',' read -r label temp qv qa restart swaps <<< "$config_str"
     echo "Config: $label"
     for run in $(seq 1 $RUNS); do
-        current=$((current + 1))
-        run_test "$label" "$temp" "$qv" "$qa" "$restart" "$swaps" "$run"
+        run_test "$label" "$temp" "$qv" "$qa" "$restart" "$swaps" "$run" &
     done
+    wait
     echo ""
 done
 
