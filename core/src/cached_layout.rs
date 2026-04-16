@@ -525,9 +525,13 @@ impl CachedLayout {
         self.trigram.stats(stats, self.data.trigram_total);
     }
 
-    // ==================== New API ====================
+    // ==================== Mutation API ====================
+    //
+    // Three operations: replace_key, swap_key, replace_rule
+    // Each has base (score() valid after) and _no_update (score() invalid until update()).
+    // score_neighbor: speculative scoring without permanent state change.
 
-    /// Speculative score for a neighbor. Does not modify state.
+    /// Speculative score for a neighbor. No permanent state change.
     pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
@@ -546,7 +550,6 @@ impl CachedLayout {
                 let tg_both = self.trigram.compute_swap_both_delta_flat(a, b, key_a, key_b, &self.keys, tg_flat);
                 let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
 
-                // Finger usage delta for swap
                 let fu_delta = if self.finger_usage_weight != 0 {
                     let fi_a = self.fingers[a] as usize;
                     let fi_b = self.fingers[b] as usize;
@@ -559,65 +562,56 @@ impl CachedLayout {
                     } else { 0 }
                 } else { 0 };
 
-                sfb + stretch + scissors + trigram + self.magic_penalty() + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
+                sfb + stretch + scissors + trigram + self.magic_penalty()
+                    + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
-                // Apply, read score, revert
+                // TODO: speculative magic scoring for better perf.
+                // For now, apply-score-revert is the only reliable approach.
                 let revert = self.get_revert_neighbor(neighbor);
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
+                self.replace_rule(rule.magic_key, rule.leader, rule.output);
                 let s = self.score();
-                match revert {
-                    Neighbor::MagicRule(rev) => {
-                        self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
-                    }
-                    _ => unreachable!(),
+                if let Neighbor::MagicRule(rev) = revert {
+                    self.replace_rule(rev.magic_key, rev.leader, rev.output);
                 }
                 s
             }
         }
     }
 
-    /// Apply a neighbor. Mutates keys + running totals.
-    /// score() remains valid. score_neighbor() becomes invalid for trigrams
-    /// until update_scores() is called.
+    /// Apply a neighbor. score() valid after.
     pub fn apply_neighbor(&mut self, neighbor: Neighbor) {
         match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => self.swap_keys(a, b),
-            Neighbor::MagicRule(rule) => {
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
-            }
+            Neighbor::KeySwap(PosPair(a, b)) => self.swap_key(a, b),
+            Neighbor::MagicRule(rule) => self.replace_rule(rule.magic_key, rule.leader, rule.output),
         }
     }
 
-    /// Apply a neighbor and update weighted_score arrays.
-    /// Both score() and score_neighbor() remain valid after this call.
-    pub fn apply_neighbor_and_update(&mut self, neighbor: Neighbor) {
+    /// Apply a neighbor. score() INVALID until update().
+    pub fn apply_neighbor_no_update(&mut self, neighbor: Neighbor) {
         match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => self.swap_keys_and_update(a, b),
-            Neighbor::MagicRule(rule) => {
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
-            }
+            Neighbor::KeySwap(PosPair(a, b)) => self.swap_key_no_update(a, b),
+            Neighbor::MagicRule(rule) => self.replace_rule_no_update(rule.magic_key, rule.leader, rule.output),
         }
     }
 
-    /// Swap only the keys array entries. O(1). Does NOT update sub-cache running totals.
-    /// Only for internal use where running totals don't matter (e.g., MCTS rollout undo).
-    pub(crate) fn swap_keys_only(&mut self, pos_a: CachePos, pos_b: CachePos) {
-        self.keys.swap(pos_a, pos_b);
-        // Update key_positions
-        let key_a = self.keys[pos_a]; // after swap
-        let key_b = self.keys[pos_b];
-        if key_a < self.key_positions.len() {
-            self.key_positions[key_a] = Some(pos_a);
+    /// Recompute magic deltas. Call after _no_update mutations to make score() valid.
+    pub fn update(&mut self) {
+        if self.current_magic_rules.is_empty() { return; }
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+        self.sfb.reset_magic_deltas();
+        self.stretch.reset_magic_deltas();
+        self.scissors.reset_magic_deltas();
+        self.trigram.reset_magic_deltas();
+        for (&(magic_key, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY { continue; }
+            self.sfb.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
+            self.stretch.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, tg_freq, true);
+            self.scissors.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
+            self.trigram.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, tg_freq, true);
         }
-        if key_b < self.key_positions.len() {
-            self.key_positions[key_b] = Some(pos_b);
-        }
-    }
-
-    /// Rebuild trigram weighted_score arrays from current state.
-    pub fn update_scores(&mut self) {
-        self.trigram.init_weighted_scores(&self.keys, self.magic.tg_freq());
     }
 
     /// Compute the full score from scratch using current keys and frequency tables.
