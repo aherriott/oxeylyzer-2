@@ -65,6 +65,7 @@ pub struct MctsSearch {
     layout: Layout,
     data: Data,
     weights: Weights,
+    scale_factors: crate::weights::ScaleFactors,
     /// Keys sorted by frequency (CacheKey)
     keys_by_freq: Vec<CacheKey>,
     /// Characters sorted by frequency
@@ -78,7 +79,7 @@ pub struct MctsSearch {
 }
 
 impl MctsSearch {
-    pub fn new(layout: Layout, data: Data, weights: Weights, top_k: usize) -> Self {
+    pub fn new(layout: Layout, data: Data, weights: Weights, scale_factors: crate::weights::ScaleFactors, top_k: usize) -> Self {
         let num_positions = layout.keyboard.len();
 
         let mut char_freqs: Vec<(char, f64)> = data.chars.iter()
@@ -95,6 +96,7 @@ impl MctsSearch {
             layout,
             data,
             weights,
+            scale_factors,
             keys_by_freq: Vec::new(), // populated on first use
             chars_by_freq,
             num_positions,
@@ -115,7 +117,7 @@ impl MctsSearch {
         max_tree_depth: usize,
         mut progress: impl FnMut(u64, u64, i64, f64) -> bool,
     ) {
-        let mut cache = CachedLayout::new(&self.layout, self.data.clone(), &self.weights);
+        let mut cache = CachedLayout::new(&self.layout, self.data.clone(), &self.weights, &self.scale_factors);
 
         // Initialize keys_by_freq
         if self.keys_by_freq.is_empty() {

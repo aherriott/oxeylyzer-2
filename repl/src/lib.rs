@@ -187,6 +187,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let data = self.a.data().clone();
         let weights = self.a.weights().clone();
+        let scale_factors = self.a.scale_factors().clone();
         let total = AtomicU64::new(0);
 
         // Shared top-N list protected by mutex
@@ -203,7 +204,7 @@ impl Repl {
 
                 let random_layout = layout.random_with_pins(&pins);
                 let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
-                    &random_layout, data.clone(), &weights,
+                    &random_layout, data.clone(), &weights, &scale_factors,
                 );
                 cache.optimize(&policy, &pins);
                 let score = cache.score();
@@ -371,7 +372,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
-        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
         let (results, stats) = bb.search_limited_with_progress(
             best_bound,
             top_k,
@@ -457,7 +458,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
-        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
 
         // Print finger order
         println!("Position order (finger-first): {:?}", bb.positions_by_finger());
@@ -536,7 +537,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
-        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
 
         let (results, stats) = bb.search_hybrid(
             best_bound,
@@ -597,7 +598,7 @@ impl Repl {
         println!("Beam search: {} positions, beam width {}, prune every {} depths", layout.keyboard.len(), width, interval);
 
         let start = std::time::Instant::now();
-        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone());
+        let mut bb = BranchBound::new(layout, self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
         let results = bb.beam_search_with_interval(width, interval);
         let elapsed = start.elapsed();
 
@@ -664,7 +665,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
-        let mut search = MctsSearch::new(layout, self.a.data().clone(), self.a.weights().clone(), 10);
+        let mut search = MctsSearch::new(layout, self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone(), 10);
 
         search.search(iterations, explore, &policy, tree_depth, |_iter, total, best, avg| {
             if last_print.elapsed().as_millis() > 500 {
@@ -738,7 +739,7 @@ impl Repl {
         for i in 0..count {
             let random_layout = layout.random_with_pins(&pins);
             let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
-                &random_layout, self.a.data().clone(), self.a.weights(),
+                &random_layout, self.a.data().clone(), self.a.weights(), self.a.scale_factors(),
             );
             let final_score = cache.optimize(&policy, &pins);
             let final_layout = cache.to_layout();
@@ -837,7 +838,7 @@ impl Repl {
         let start = std::time::Instant::now();
         let mut last_print = std::time::Instant::now();
 
-        let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone());
+        let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
         let result = da.search(&layout, &pins, &config, &policy, max_iter, |iter, restarts, current, best| {
             if last_print.elapsed().as_millis() > 500 {
                 last_print = std::time::Instant::now();

@@ -165,6 +165,7 @@ pub struct BranchBound {
     base_layout: Layout,
     data: Data,
     weights: Weights,
+    scale_factors: crate::weights::ScaleFactors,
     /// Characters sorted by frequency (highest first)
     chars_by_freq: Vec<char>,
     /// CacheKeys for chars_by_freq
@@ -180,7 +181,7 @@ pub struct BranchBound {
 
 
 impl BranchBound {
-    pub fn new(base_layout: Layout, data: Data, weights: Weights) -> Self {
+    pub fn new(base_layout: Layout, data: Data, weights: Weights, scale_factors: crate::weights::ScaleFactors) -> Self {
         let num_positions = base_layout.keyboard.len();
 
         // Sort characters by frequency (descending)
@@ -226,6 +227,7 @@ impl BranchBound {
             base_layout,
             data,
             weights,
+            scale_factors,
             chars_by_freq: chars_by_freq.clone(),
             keys_by_freq: Vec::new(),
             num_positions,
@@ -239,7 +241,7 @@ impl BranchBound {
     pub fn create_empty_cache(&mut self) -> CachedLayout {
         use crate::cached_layout::EMPTY_KEY;
 
-        let mut cache = CachedLayout::new(&self.base_layout, self.data.clone(), &self.weights);
+        let mut cache = CachedLayout::new(&self.base_layout, self.data.clone(), &self.weights, &self.scale_factors);
 
         // Initialize keys_by_freq from the cache's char mapping
         if self.keys_by_freq.is_empty() {

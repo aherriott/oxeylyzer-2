@@ -7,7 +7,7 @@ use crate::{
     data::Data,
     layout::*,
     stats::Stats,
-    weights::Weights,
+    weights::{Weights, ScaleFactors},
 };
 
 // The difference between two neighboring layouts.
@@ -30,6 +30,7 @@ pub struct Analyzer {
     analyze_bigrams: bool,
     analyze_stretches: bool,
     analyze_trigrams: bool,
+    scale_factors: ScaleFactors,
     cache: Option<CachedLayout>,
 }
 
@@ -38,6 +39,7 @@ impl Analyzer {
         let analyze_bigrams = weights.has_bigram_weights();
         let analyze_stretches = weights.has_stretch_weights();
         let analyze_trigrams = weights.has_trigram_weights();
+        let scale_factors = weights.compute_scale_factors(&data);
 
         Self {
             data,
@@ -45,16 +47,18 @@ impl Analyzer {
             analyze_bigrams,
             analyze_stretches,
             analyze_trigrams,
+            scale_factors,
             cache: None,
         }
     }
 
     pub fn data(&self) -> &Data { &self.data }
     pub fn weights(&self) -> &Weights { &self.weights }
+    pub fn scale_factors(&self) -> &ScaleFactors { &self.scale_factors }
 
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
-        self.cache = Some(CachedLayout::new(layout, self.data.clone(), &self.weights));
+        self.cache = Some(CachedLayout::new(layout, self.data.clone(), &self.weights, &self.scale_factors));
     }
 
     pub fn layout(&self) -> Layout {

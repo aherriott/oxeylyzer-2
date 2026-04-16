@@ -51,6 +51,64 @@ impl Weights {
             || self.full_scissors_skip != 0
             || self.half_scissors_skip != 0
     }
+
+    /// Compute scale factors from corpus data so that weight=1 for each metric
+    /// produces roughly the same score magnitude.
+    pub fn compute_scale_factors(&self, data: &crate::data::Data) -> ScaleFactors {
+        // Bigram-based scores scale with bigram_total × avg_finger_weight
+        // Trigram-based scores scale with trigram_total
+        // The ratio gives us the trigram scale factor.
+        let bg_total = data.bigram_total.max(1) as f64;
+        let tg_total = data.trigram_total.max(1) as f64;
+
+        // Average finger weight (used by SFB scoring)
+        let avg_finger: f64 = {
+            let sum: i64 = libdof::dofinitions::Finger::FINGERS.iter()
+                .map(|&f| self.fingers.get(f))
+                .sum();
+            sum as f64 / 10.0
+        };
+
+        // Bigram magnitude estimate: bg_total * avg_finger_weight * avg_metric_weight
+        let avg_bg_weight = (self.sfbs.abs() + self.sfs.abs()).max(1) as f64 / 2.0;
+        let bg_mag = bg_total * avg_finger * avg_bg_weight;
+
+        // Trigram magnitude estimate: tg_total * avg_trigram_weight
+        let avg_tg_weight = {
+            let weights = [self.inroll, self.outroll, self.alternate, self.redirect,
+                          self.onehandin, self.onehandout];
+            let sum: i64 = weights.iter().map(|w| w.abs()).sum();
+            let count = weights.iter().filter(|&&w| w != 0).count().max(1);
+            sum as f64 / count as f64
+        };
+        let tg_mag = tg_total * avg_tg_weight;
+
+        let trigram_scale = if tg_mag > 0.0 { (bg_mag / tg_mag).max(1.0) as i64 } else { 1 };
+
+        // Magic penalty scale: penalty=10 should cost roughly 1% of total score
+        let total_mag = bg_mag + tg_mag * trigram_scale as f64;
+        let magic_penalty_scale = (total_mag / 300.0).max(1.0) as i64; // ~30 positions × 10 penalty units
+
+        ScaleFactors {
+            trigram_scale,
+            magic_penalty_scale,
+        }
+    }
+}
+
+/// Pre-computed scale factors for normalizing score contributions across metrics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScaleFactors {
+    /// Multiplier for trigram weights to match bigram magnitude.
+    pub trigram_scale: i64,
+    /// Multiplier for magic rule penalty.
+    pub magic_penalty_scale: i64,
+}
+
+impl Default for ScaleFactors {
+    fn default() -> Self {
+        Self { trigram_scale: 1, magic_penalty_scale: 1 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

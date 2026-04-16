@@ -243,7 +243,7 @@ impl Default for CachedLayout {
 
 
 impl CachedLayout {
-    pub fn new(layout: &Layout, data: Data, weights: &Weights) -> Self {
+    pub fn new(layout: &Layout, data: Data, weights: &Weights, scale_factors: &crate::weights::ScaleFactors) -> Self {
         let mut analyzer_data = AnalyzerData::new(data);
 
         // Ensure all layout keys are in the char_mapping for proper roundtrip
@@ -268,6 +268,10 @@ impl CachedLayout {
         scissors.set_weights(weights);
         let mut trigram = TrigramCache::new(fingers, num_keys);
         trigram.set_weights(weights);
+        // Apply trigram scale factor before placing keys
+        if scale_factors.trigram_scale > 1 {
+            trigram.apply_scale(scale_factors.trigram_scale);
+        }
         let mut magic = MagicCache::new(num_keys);
         magic.init_from_data(&analyzer_data.bigrams, &analyzer_data.skipgrams, &analyzer_data.trigrams);
 
@@ -339,7 +343,7 @@ impl CachedLayout {
             },
             finger_usage_score: 0,
             finger_usage_scale: 1,
-            magic_penalty_scale: 1,
+            magic_penalty_scale: scale_factors.magic_penalty_scale,
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -363,51 +367,6 @@ impl CachedLayout {
             cache.replace_rule_no_update(magic_key, leader, output);
         }
         cache.update();
-
-        // Auto-compute trigram scale: measure raw magnitudes, then rescale
-        // trigram weights so they produce the same magnitude as bigram-based scores.
-        {
-            let (sfb_s, stretch_s, scissors_s, trigram_s, _magic_p, fu_s) = cache.score_breakdown();
-            let mut bigram_sum = 0i64;
-            let mut bigram_count = 0;
-            for &s in &[sfb_s, stretch_s, scissors_s] {
-                if s != 0 { bigram_sum += s.abs(); bigram_count += 1; }
-            }
-            let bigram_mag = if bigram_count > 0 { bigram_sum / bigram_count } else { 1 };
-
-            // Auto-scale trigrams
-            let tg_mag = trigram_s.abs().max(1);
-            let tg_scale = (bigram_mag / tg_mag).max(1);
-            if tg_scale > 1 {
-                cache.trigram.apply_scale(tg_scale);
-                // Re-place all keys to recompute running totals with scaled weights
-                let placed_keys: Vec<(usize, usize)> = (0..cache.num_positions)
-                    .map(|pos| (pos, cache.keys[pos]))
-                    .filter(|&(_, k)| k != EMPTY_KEY)
-                    .collect();
-                for &(pos, key) in &placed_keys {
-                    cache.replace_key_no_update(pos, key, EMPTY_KEY);
-                }
-                for &(pos, key) in &placed_keys {
-                    cache.replace_key_no_update(pos, EMPTY_KEY, key);
-                }
-                cache.trigram.init_weighted_scores(&cache.keys, cache.magic.tg_freq());
-                cache.update();
-            }
-
-            // Auto-scale finger usage to match bigram magnitude
-            if cache.finger_usage_weight != 0 {
-                let fu_mag = fu_s.abs().max(1);
-                cache.finger_usage_scale = (bigram_mag / fu_mag).max(1);
-            }
-
-            // Auto-scale magic penalty: penalty=1 should cost roughly what one
-            // average magic rule contributes (~1% of total score per rule)
-            if cache.magic_rule_penalty != 0 || cache.magic_repeat_penalty != 0 {
-                let total_mag = (sfb_s.abs() + stretch_s.abs() + scissors_s.abs() + trigram_s.abs()).max(1);
-                cache.magic_penalty_scale = total_mag / (cache.num_positions * cache.num_positions * 10) as i64;
-            }
-        }
 
         cache
     }

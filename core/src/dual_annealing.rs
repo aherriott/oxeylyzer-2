@@ -56,11 +56,12 @@ pub struct DualAnnealingResult {
 pub struct DualAnnealing {
     data: Data,
     weights: Weights,
+    scale_factors: crate::weights::ScaleFactors,
 }
 
 impl DualAnnealing {
-    pub fn new(data: Data, weights: Weights) -> Self {
-        Self { data, weights }
+    pub fn new(data: Data, weights: Weights, scale_factors: crate::weights::ScaleFactors) -> Self {
+        Self { data, weights, scale_factors }
     }
 
     /// Run dual annealing on a layout.
@@ -79,7 +80,7 @@ impl DualAnnealing {
         let mut rng = WyRand::new();
 
         // Initialize cache with the starting layout
-        let mut cache = CachedLayout::new(layout, self.data.clone(), &self.weights);
+        let mut cache = CachedLayout::new(layout, self.data.clone(), &self.weights, &self.scale_factors);
 
         // Build list of swappable positions (excluding pins)
         let pin_set: fxhash::FxHashSet<usize> = pins.iter().copied().collect();
