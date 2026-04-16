@@ -471,8 +471,12 @@ impl CachedLayout {
     }
 
     pub fn score(&self) -> i64 {
+        if !self.current_magic_rules.is_empty() {
+            // Magic rules make incremental running totals unreliable — compute from scratch
+            return self.compute_score();
+        }
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
-            + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
+            + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
     }
 
     /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty, finger_usage)
@@ -698,7 +702,7 @@ impl CachedLayout {
             fu_score *= self.finger_usage_weight * self.finger_usage_scale;
         }
 
-        sfb_score + stretch_score + scissors_score + trigram_score + fu_score
+        sfb_score + stretch_score + scissors_score + trigram_score + fu_score + self.magic_penalty()
     }
 
     // ==================== Lower Bound ====================
