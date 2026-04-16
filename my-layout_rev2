@@ -24,6 +24,39 @@ k ' d c b . m ◊ x ;
 , a
 magic: a→c b→s d→a e→c g→u h→l i→u k→y l→. o→e p→e q→u r→n s→c t→a u→i w→a
 
+Best score: -1.27T
+my-layout
+j b h f v ; q i ' w
+s n r t d . o u e g
+x p l m k , a y ◊ c
+z ␣
+magic: ,→, .→. ;→; a→f b→u c→a d→␣ f→␣ h→␣ j→j k→␣ l→␣ n→␣ o→a p→␣ q→q r→l s→␣ t→␣ u→i v→v x→x y→i z→z ␣→t
+
+Best score: -1.28T
+my-layout
+w b d ; , q j x o v
+g s t i y l n ␣ a m
+c f p u . h r z ' k
+◊ e
+magic: '→' ,→, .→. ;→; a→n b→s h→a i→i j→j k→␣ l→o m→a n→o o→a p→t q→q r→o t→y u→i v→a x→␣ y→, z→z ␣→a
+
+Dual annealing completed in 13771.80s (212 restarts)
+Best score: -1.29T
+my-layout
+c m i p k h r ␣ a v
+g s y t d l n q o u
+w f , b j x ; z ' .
+◊ e
+magic: '→a ,→, .→. ;→; a→n b→o h→a i→i j→j l→o m→s n→␣ o→u p→t q→q r→l s→m t→y u→n v→a x→x y→, z→z ␣→a
+
+Best score: -1.29T
+my-layout
+l r z w v ; ' i d ◊
+m n ␣ t c . o e h u
+j x q g b , a y p k
+f s
+magic: '→' ,→, .→. ;→; a→y b→e c→t d→e e→i f→␣ g→␣ h→e i→e j→j l→l m→l n→g o→a p→h q→q r→n s→␣ t→␣ v→i w→w x→x y→e z→z ␣→t
+
 Best score: -1.31T
 my-layout
 q d j w v ; ' i h ◊

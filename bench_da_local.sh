@@ -40,7 +40,7 @@ q" | "$BINARY" 2>/dev/null)
     best_raw="-$best_raw"
 
     echo "$LAYOUT,$label,$sa,$sa_temp,$sa_final,$greedy,$run_num,$elapsed,$best_raw,$iters_raw,$rate,$restarts" >> "$CSV"
-    echo "$label: best=$best iters=$iters rate=${rate}/s"
+    echo "  $label [$run_num]: best=$best iters=$iters rate=${rate}/s"
 }
 
 # Configs: (label, sa_iters, sa_temp, sa_final, greedy)
@@ -77,19 +77,22 @@ configs=(
 )
 
 total=$((${#configs[@]} * RUNS))
-est_min=$(echo "$total * $TIME / 60" | bc)
-echo "Configs: ${#configs[@]}, Runs: $RUNS, Time/run: ${TIME}s"
-echo "Total: $total runs (~${est_min} minutes)"
+est_min=$(echo "${#configs[@]} * $TIME / 60" | bc)
+echo "Configs: ${#configs[@]}, Runs: $RUNS (parallel), Time/run: ${TIME}s"
+echo "Total: $total runs (~${est_min} minutes wall clock)"
 echo ""
 
 current=0
 for config_str in "${configs[@]}"; do
     IFS=',' read -r label sa sa_temp sa_final greedy <<< "$config_str"
     echo "Config: $label"
+
+    # Run all 3 in parallel
     for run in $(seq 1 $RUNS); do
         current=$((current + 1))
-        run_test "$label" "$sa" "$sa_temp" "$sa_final" "$greedy" "$run"
+        run_test "$label" "$sa" "$sa_temp" "$sa_final" "$greedy" "$run" &
     done
+    wait
     echo ""
 done
 
