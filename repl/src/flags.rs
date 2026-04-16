@@ -128,6 +128,10 @@ xflags::xflags! {
             optional count: usize
             /// SA iterations. Defaults to 10000000.
             optional -s, --sa sa_iters: usize
+            /// SA initial temperature. Defaults to 10.0.
+            optional --sa-temp sa_temp: f64
+            /// SA final temperature. Defaults to 1e-5.
+            optional --sa-final sa_final: f64
             /// Greedy polish depth. 0=off, 1=hill-climb, 2+=progressive. Defaults to 1.
             optional -g, --greedy greedy_depth: usize
             /// Characters to pin.
