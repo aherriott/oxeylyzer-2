@@ -362,6 +362,9 @@ impl CachedLayout {
             cache.apply_magic_rule(magic_key, leader, output, true);
         }
 
+        // Ensure magic deltas are consistent with final key positions
+        cache.recompute_magic_deltas();
+
         // Auto-compute trigram scale: measure raw magnitudes, then rescale
         // trigram weights so they produce the same magnitude as bigram-based scores.
         {
@@ -471,12 +474,8 @@ impl CachedLayout {
     }
 
     pub fn score(&self) -> i64 {
-        if !self.current_magic_rules.is_empty() {
-            // Magic rules make incremental running totals unreliable — compute from scratch
-            return self.compute_score();
-        }
         self.sfb.score() + self.stretch.score() + self.scissors.score() + self.trigram.score()
-            + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
+            + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
     }
 
     /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty, finger_usage)
@@ -563,7 +562,17 @@ impl CachedLayout {
                 sfb + stretch + scissors + trigram + self.magic_penalty() + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
-                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, false)
+                // Apply, read score, revert
+                let revert = self.get_revert_neighbor(neighbor);
+                self.apply_magic_rule(rule.magic_key, rule.leader, rule.output, true);
+                let s = self.score();
+                match revert {
+                    Neighbor::MagicRule(rev) => {
+                        self.apply_magic_rule(rev.magic_key, rev.leader, rev.output, true);
+                    }
+                    _ => unreachable!(),
+                }
+                s
             }
         }
     }
@@ -592,9 +601,8 @@ impl CachedLayout {
     }
 
     /// Swap only the keys array entries. O(1). Does NOT update sub-cache running totals.
-    /// score() will be INVALID after this. Use compute_score() for the correct score.
-    #[inline]
-    pub fn swap_keys_only(&mut self, pos_a: CachePos, pos_b: CachePos) {
+    /// Only for internal use where running totals don't matter (e.g., MCTS rollout undo).
+    pub(crate) fn swap_keys_only(&mut self, pos_a: CachePos, pos_b: CachePos) {
         self.keys.swap(pos_a, pos_b);
         // Update key_positions
         let key_a = self.keys[pos_a]; // after swap
@@ -1072,18 +1080,17 @@ impl CachedLayout {
         if depth > 0 {
             let mut return_best = false;
             for &neighbor in neighbors {
-                match neighbor {
-                    Neighbor::KeySwap(PosPair(a, b)) => cache.swap_keys_only(a, b),
-                    _ => { cache.apply_neighbor(neighbor); }
-                }
+                // Apply swap with full running total update
+                cache.apply_neighbor_and_update(neighbor);
 
                 let best = Self::best_neighbor_recursive(cache, neighbors, depth - 1, diffs, cur_best);
 
+                // Revert — KeySwap is self-inverse, MagicRule needs explicit revert
                 match neighbor {
-                    Neighbor::KeySwap(PosPair(a, b)) => cache.swap_keys_only(a, b),
+                    Neighbor::KeySwap(_) => cache.apply_neighbor_and_update(neighbor),
                     _ => {
                         let revert = cache.get_revert_neighbor(neighbor);
-                        cache.apply_neighbor(revert);
+                        cache.apply_neighbor_and_update(revert);
                     }
                 }
 
@@ -1094,7 +1101,7 @@ impl CachedLayout {
             }
             return_best
         } else {
-            let score = cache.compute_score();
+            let score = cache.score();
             if score > *cur_best {
                 *cur_best = score;
                 true

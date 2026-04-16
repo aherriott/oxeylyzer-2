@@ -138,20 +138,20 @@ impl Analyzer {
             .apply_neighbor(neighbor)
     }
 
-    /// Swap keys only — O(1), no sub-cache updates. For depth-N intermediate levels.
+    /// Swap keys and recompute. For depth-N intermediate levels.
     pub fn swap_only(&mut self, pos_a: usize, pos_b: usize) {
         self.cache
             .as_mut()
             .expect("Analyzer has no Layout set")
-            .swap_keys_only(pos_a, pos_b)
+            .swap_keys_and_update(pos_a, pos_b)
     }
 
-    /// Compute score from scratch using current keys. For depth-N leaf.
+    /// Get the current score.
     pub fn compute_score(&self) -> i64 {
         self.cache
             .as_ref()
             .expect("Analyzer has no Layout set")
-            .compute_score()
+            .score()
     }
 
     /// Apply a neighbor and update weighted_score arrays.

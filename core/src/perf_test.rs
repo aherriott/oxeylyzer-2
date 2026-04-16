@@ -67,10 +67,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_compute_score() {
+    fn verify_score_consistency() {
         let (mut a, l) = make();
         a.use_layout(&l, &[]);
         let score = a.score();
+        // compute_score now delegates to score(), so they should always match
         let computed = a.compute_score();
         println!("\n=== score()={score}, compute_score()={computed} ===");
         assert_eq!(score, computed, "compute_score must match score()");
