@@ -7,7 +7,7 @@ set -e
 
 BINARY="./target/release/main"
 LAYOUT="my-layout"
-TIME=120  # 2 minutes per run
+TIME=15
 RUNS=3
 CSV="da_local_bench.csv"
 
