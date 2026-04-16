@@ -176,11 +176,8 @@ impl Layout {
                 let mut new_mk = MagicKey::new(mk.label());
                 let mut rng = tls_rng();
                 for &leader in &non_magic_keys {
-                    // ~50% chance of having a rule for each leader
-                    if rng.generate_range(0u32..2) == 0 {
-                        let output = non_magic_keys[rng.generate_range(0..non_magic_keys.len())];
-                        new_mk.add_rule(&leader.to_string(), &output.to_string());
-                    }
+                    let output = non_magic_keys[rng.generate_range(0..non_magic_keys.len())];
+                    new_mk.add_rule(&leader.to_string(), &output.to_string());
                 }
                 (c, new_mk)
             })
