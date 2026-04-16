@@ -117,6 +117,8 @@ xflags::xflags! {
             optional --restart restart_ratio: f64
             /// Max swaps per perturbation. Defaults to 8.
             optional --swaps max_swaps: usize
+            /// Pin top K most frequent keys during local greedy. Defaults to 0.
+            optional --pin-top pin_top: usize
             /// Characters to pin.
             optional -p, --pins pins: String
         }

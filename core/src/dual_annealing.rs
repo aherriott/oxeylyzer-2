@@ -27,6 +27,9 @@ pub struct DualAnnealingConfig {
     /// Number of swaps per perturbation scales with temperature.
     /// At max temp, up to this many swaps. Default: 8
     pub max_perturb_swaps: usize,
+    /// Pin the top K most frequent keys during local search (greedy).
+    /// Global perturbations still move all keys. Default: 0 (no pinning).
+    pub pin_top_k: usize,
 }
 
 impl Default for DualAnnealingConfig {
@@ -37,6 +40,7 @@ impl Default for DualAnnealingConfig {
             visit: 2.62,
             accept: -5.0,
             max_perturb_swaps: 8,
+            pin_top_k: 0,
         }
     }
 }
@@ -156,8 +160,44 @@ impl DualAnnealing {
                 swapped_pairs.push((pos_a, pos_b));
             }
 
-            // Local search on perturbed layout
-            cache.optimize(local_policy, pins);
+            // Local search: if pin_top_k > 0, pin the top K keys' current positions,
+            // randomize the rest, then greedy optimize only unpinned keys.
+            if config.pin_top_k > 0 {
+                // Find positions of the top K most frequent keys
+                let mut key_freqs: Vec<(usize, i64)> = swappable.iter()
+                    .map(|&pos| {
+                        let key = cache.get_key(pos);
+                        let freq = if key < cache.data().chars.len() { cache.data().chars[key] } else { 0 };
+                        (pos, freq)
+                    })
+                    .collect();
+                key_freqs.sort_by(|a, b| b.1.cmp(&a.1));
+                let top_k_pins: Vec<usize> = key_freqs.iter()
+                    .take(config.pin_top_k)
+                    .map(|&(pos, _)| pos)
+                    .chain(pins.iter().copied())
+                    .collect();
+
+                // Randomize unpinned keys: 100 random swaps among non-pinned positions
+                let pin_set_local: fxhash::FxHashSet<usize> = top_k_pins.iter().copied().collect();
+                let unpinned: Vec<usize> = swappable.iter()
+                    .filter(|p| !pin_set_local.contains(p))
+                    .copied()
+                    .collect();
+                if unpinned.len() >= 2 {
+                    for _ in 0..100 {
+                        let a = rng.generate_range(0..unpinned.len());
+                        let mut b = rng.generate_range(0..unpinned.len() - 1);
+                        if b >= a { b += 1; }
+                        cache.swap_keys(unpinned[a], unpinned[b]);
+                    }
+                }
+
+                // Greedy with top K pinned
+                cache.optimize(local_policy, &top_k_pins);
+            } else {
+                cache.optimize(local_policy, pins);
+            }
             let new_score = cache.score();
 
             // Tsallis acceptance probability
