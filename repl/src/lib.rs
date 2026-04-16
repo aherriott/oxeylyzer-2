@@ -157,81 +157,100 @@ impl Repl {
         }
     }
 
-    fn generate(&mut self, name: &str, count: Option<usize>, pin_chars: Option<String>, time_secs: Option<usize>) -> Result<()> {
-        use oxeylyzer_core::dual_annealing::{DualAnnealing, DualAnnealingConfig};
+    fn generate(&mut self, name: &str, pin_chars: Option<String>, time_secs: Option<usize>, top_n: Option<usize>) -> Result<()> {
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
         use rayon::prelude::*;
-        use std::sync::atomic::AtomicUsize;
+        use std::sync::Mutex;
+        use std::sync::atomic::AtomicU64;
 
         let layout = self.layout(name)?.clone();
-        let count = count.unwrap_or(10);
-        let time_per = std::time::Duration::from_secs(time_secs.unwrap_or(30) as u64);
+        let top_n = top_n.unwrap_or(10);
+        let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
         let pins = match pin_chars {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
         };
 
-        let policy = RolloutPolicy {
-            steps: vec![
-                OptStep::SA {
-                    initial_temp: 0.001,
-                    final_temp: 1E-7,
-                    iterations: 1000,
-                },
-                OptStep::Greedy,
-            ],
-        };
-        let config = DualAnnealingConfig::default();
+        let policy = RolloutPolicy { steps: vec![OptStep::Greedy] };
 
         self.stop.store(false, Ordering::SeqCst);
         let stop = self.stop.clone();
-        let completed = Arc::new(AtomicUsize::new(0));
 
         let ncpus = rayon::current_num_threads();
-        println!("Generating {} variants, {}s each, {} threads, from {}",
-            count, time_per.as_secs(), ncpus, name);
+        let time_str = time_limit.map_or("∞".to_string(), |d| format!("{}s", d.as_secs()));
+        println!("gen: random restart greedy, {} threads, top {}, from {} ({})",
+            ncpus, top_n, name, time_str);
+        if time_limit.is_none() {
+            println!("  (Ctrl+C to stop)");
+        }
 
         let start = std::time::Instant::now();
         let data = self.a.data().clone();
         let weights = self.a.weights().clone();
+        let total = AtomicU64::new(0);
 
-        let mut results: Vec<(Layout, i64)> = (0..count)
-            .into_par_iter()
-            .map(|_| {
-                if stop.load(Ordering::Relaxed) {
-                    return (layout.clone(), i64::MIN);
+        // Shared top-N list protected by mutex
+        let best_list: Arc<Mutex<Vec<(i64, Layout)>>> = Arc::new(Mutex::new(Vec::new()));
+        let last_print = Arc::new(Mutex::new(std::time::Instant::now()));
+
+        // Run greedy on random layouts continuously across all threads
+        (0..ncpus).into_par_iter().for_each(|_| {
+            loop {
+                if stop.load(Ordering::Relaxed) { break; }
+                if let Some(limit) = time_limit {
+                    if start.elapsed() >= limit { break; }
                 }
-                let variant_start = std::time::Instant::now();
-                let da = DualAnnealing::new(data.clone(), weights.clone());
-                let result = da.search(&layout, &pins, &config, &policy, u64::MAX, |_iter, _restarts, _current, _best| {
-                    stop.load(Ordering::Relaxed) || variant_start.elapsed() >= time_per
-                });
 
-                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                eprint!("\r  {}/{} completed   ", done, count);
+                let random_layout = layout.random_with_pins(&pins);
+                let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                    &random_layout, data.clone(), &weights,
+                );
+                cache.optimize(&policy, &pins);
+                let score = cache.score();
+                let count = total.fetch_add(1, Ordering::Relaxed) + 1;
 
-                (result.best_layout, result.best_score)
-            })
-            .collect();
+                // Update top-N
+                {
+                    let mut list = best_list.lock().unwrap();
+                    if list.len() < top_n || score > list.last().unwrap().0 {
+                        let result_layout = cache.to_layout();
+                        list.push((score, result_layout));
+                        list.sort_by(|a, b| b.0.cmp(&a.0));
+                        list.truncate(top_n);
+                    }
+                }
 
-        println!();
+                // Progress update
+                {
+                    let mut lp = last_print.lock().unwrap();
+                    if lp.elapsed().as_millis() > 500 {
+                        *lp = std::time::Instant::now();
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let rate = count as f64 / elapsed;
+                        let best = best_list.lock().unwrap().first().map(|(s, _)| *s).unwrap_or(i64::MIN);
+                        eprint!("\r  {} layouts | best: {} | {:.0}/s | {:.1}s   ",
+                            fmt_num(count as f64),
+                            fmt_num(best as f64),
+                            rate,
+                            elapsed,
+                        );
+                    }
+                }
+            }
+        });
+        eprintln!();
 
-        // Filter out any skipped results
-        results.retain(|(_, s)| *s != i64::MIN);
+        let elapsed = start.elapsed();
+        let count = total.load(Ordering::Relaxed);
+        println!("gen completed: {} layouts in {:.1}s ({:.0}/s)",
+            fmt_num(count as f64), elapsed.as_secs_f64(), count as f64 / elapsed.as_secs_f64());
 
-        // Sort by score (higher = better)
-        results.sort_by(|(_, s1), (_, s2)| s2.cmp(s1));
-
-        for (i, (mut layout, score)) in results.into_iter().enumerate().take(10) {
-            layout.name = "".into();
-            println!("#{}, score: {}{}", i + 1, fmt_num(score as f64), layout);
+        let list = best_list.lock().unwrap();
+        for (i, (score, layout)) in list.iter().enumerate() {
+            let mut l = layout.clone();
+            l.name = "".into();
+            println!("#{}, score: {}{}", i + 1, fmt_num(*score as f64), l);
         }
-
-        println!(
-            "generated {} variants in {:.1}s",
-            count,
-            start.elapsed().as_secs_f64()
-        );
 
         Ok(())
     }
@@ -873,7 +892,7 @@ impl Repl {
         match flags.subcommand {
             OxeylyzerCmd::Analyze(a) => self.analyze(&a.name)?,
             OxeylyzerCmd::Rank(_) => self.rank(),
-            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.count, g.pins, g.time)?,
+            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.pins, g.time, g.top)?,
             OxeylyzerCmd::Sfbs(s) => self.sfbs(&s.name, s.count)?,
             OxeylyzerCmd::Stretches(s) => self.stretches(&s.name, s.count)?,
             OxeylyzerCmd::Trigrams(t) => self.trigrams(&t.name)?,
