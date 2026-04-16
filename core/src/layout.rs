@@ -169,7 +169,7 @@ impl Layout {
             fingers,
             keyboard,
             shape,
-            magic: HashMap::default(),
+            magic: self.magic.clone(),
         }
     }
 }
