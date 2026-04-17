@@ -278,4 +278,36 @@ mod tests {
         assert_eq!(via_swap, via_neighbor,
             "apply_neighbor(KeySwap) should match swap_key");
     }
+
+    // ==================== Trigram stats ====================
+
+    #[test]
+    fn trigram_stats_are_nonzero() {
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+        let stats = a.stats();
+
+        let total_trigrams = stats.trigrams.inroll + stats.trigrams.outroll
+            + stats.trigrams.alternate + stats.trigrams.redirect
+            + stats.trigrams.onehandin + stats.trigrams.onehandout;
+
+        assert!(total_trigrams > 0.0,
+            "Trigram stats should be nonzero, got total={}", total_trigrams);
+        assert!(stats.trigrams.inroll > 0.0, "Inroll should be > 0");
+        assert!(stats.trigrams.alternate > 0.0, "Alternate should be > 0");
+    }
+
+    #[test]
+    fn trigram_stats_nonzero_magic() {
+        let (mut a, layout) = magic_fixture();
+        a.use_layout(&layout, &[]);
+        let stats = a.stats();
+
+        let total_trigrams = stats.trigrams.inroll + stats.trigrams.outroll
+            + stats.trigrams.alternate + stats.trigrams.redirect
+            + stats.trigrams.onehandin + stats.trigrams.onehandout;
+
+        assert!(total_trigrams > 0.0,
+            "Trigram stats should be nonzero for magic layout, got total={}", total_trigrams);
+    }
 }
