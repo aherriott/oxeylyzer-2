@@ -73,12 +73,15 @@ impl Weights {
         let avg_bg_weight = (self.sfbs.abs() + self.sfs.abs()).max(1) as f64 / 2.0;
         let bg_mag = bg_total * avg_finger * avg_bg_weight;
 
-        // Trigram magnitude estimate: tg_total * avg_trigram_weight
+        // Trigram magnitude estimate: tg_total * avg_reward_weight
+        // Only use reward weights (not redirect penalty) to compute the scale factor.
+        // Otherwise raising the redirect penalty shrinks the scale factor, weakening
+        // ALL trigram weights including the rewards — the opposite of what the user wants.
         let avg_tg_weight = {
-            let weights = [self.inroll, self.outroll, self.alternate, self.redirect,
-                          self.onehandin, self.onehandout];
-            let sum: i64 = weights.iter().map(|w| w.abs()).sum();
-            let count = weights.iter().filter(|&&w| w != 0).count().max(1);
+            let reward_weights = [self.inroll, self.outroll, self.alternate,
+                                  self.onehandin, self.onehandout];
+            let sum: i64 = reward_weights.iter().map(|w| w.abs()).sum();
+            let count = reward_weights.iter().filter(|&&w| w != 0).count().max(1);
             sum as f64 / count as f64
         };
         let tg_mag = tg_total * avg_tg_weight;

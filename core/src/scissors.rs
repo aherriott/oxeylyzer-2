@@ -2149,6 +2149,7 @@ mod tests {
     #[test]
     fn test_set_weights_stores_all_values() {
         // Test that set_weights correctly stores all scissor weight values
+        // set_weights negates: stored = -config_value (scissors are penalties)
         let keyboard = vec![key_at_row(0.0), key_at_row(2.0)];
         let fingers = vec![LI, LM];
         let mut cache = ScissorsCache::new(&keyboard, &fingers, 2);
@@ -2156,15 +2157,15 @@ mod tests {
         let weights = weights_with_scissors(-10, -5, -3, -2);
         cache.set_weights(&weights);
 
-        // Verify weights are stored correctly by checking internal state
-        assert_eq!(cache.full_scissors_weight, -10,
-            "full_scissors_weight should be set to -10");
-        assert_eq!(cache.half_scissors_weight, -5,
-            "half_scissors_weight should be set to -5");
-        assert_eq!(cache.full_scissors_skip_weight, -3,
-            "full_scissors_skip_weight should be set to -3");
-        assert_eq!(cache.half_scissors_skip_weight, -2,
-            "half_scissors_skip_weight should be set to -2");
+        // Weights are negated in set_weights: -(-10)=10, -(-5)=5, -(-3)=3, -(-2)=2
+        assert_eq!(cache.full_scissors_weight, 10,
+            "full_scissors_weight should be negated to 10");
+        assert_eq!(cache.half_scissors_weight, 5,
+            "half_scissors_weight should be negated to 5");
+        assert_eq!(cache.full_scissors_skip_weight, 3,
+            "full_scissors_skip_weight should be negated to 3");
+        assert_eq!(cache.half_scissors_skip_weight, 2,
+            "half_scissors_skip_weight should be negated to 2");
     }
 
     #[test]
@@ -2186,6 +2187,7 @@ mod tests {
     #[test]
     fn test_set_weights_with_positive_values() {
         // Test that set_weights handles positive values correctly
+        // Positive config values get negated: stored = -config_value
         let keyboard = vec![key_at_row(0.0), key_at_row(2.0)];
         let fingers = vec![LI, LM];
         let mut cache = ScissorsCache::new(&keyboard, &fingers, 2);
@@ -2193,10 +2195,10 @@ mod tests {
         let weights = weights_with_scissors(100, 50, 30, 20);
         cache.set_weights(&weights);
 
-        assert_eq!(cache.full_scissors_weight, 100);
-        assert_eq!(cache.half_scissors_weight, 50);
-        assert_eq!(cache.full_scissors_skip_weight, 30);
-        assert_eq!(cache.half_scissors_skip_weight, 20);
+        assert_eq!(cache.full_scissors_weight, -100);
+        assert_eq!(cache.half_scissors_weight, -50);
+        assert_eq!(cache.full_scissors_skip_weight, -30);
+        assert_eq!(cache.half_scissors_skip_weight, -20);
     }
 
     #[test]
@@ -2206,25 +2208,25 @@ mod tests {
         let fingers = vec![LI, LM];
         let mut cache = ScissorsCache::new(&keyboard, &fingers, 2);
 
-        // Set initial weights
+        // Set initial weights (negated: -(-10)=10, -(-5)=5)
         let weights1 = weights_with_scissors(-10, -5, -3, -2);
         cache.set_weights(&weights1);
 
-        assert_eq!(cache.full_scissors_weight, -10);
-        assert_eq!(cache.half_scissors_weight, -5);
+        assert_eq!(cache.full_scissors_weight, 10);
+        assert_eq!(cache.half_scissors_weight, 5);
 
-        // Update weights
+        // Update weights (negated: -(-20)=20, -(-15)=15, -(-8)=8, -(-4)=4)
         let weights2 = weights_with_scissors(-20, -15, -8, -4);
         cache.set_weights(&weights2);
 
-        assert_eq!(cache.full_scissors_weight, -20,
-            "full_scissors_weight should be updated to -20");
-        assert_eq!(cache.half_scissors_weight, -15,
-            "half_scissors_weight should be updated to -15");
-        assert_eq!(cache.full_scissors_skip_weight, -8,
-            "full_scissors_skip_weight should be updated to -8");
-        assert_eq!(cache.half_scissors_skip_weight, -4,
-            "half_scissors_skip_weight should be updated to -4");
+        assert_eq!(cache.full_scissors_weight, 20,
+            "full_scissors_weight should be updated to 20");
+        assert_eq!(cache.half_scissors_weight, 15,
+            "half_scissors_weight should be updated to 15");
+        assert_eq!(cache.full_scissors_skip_weight, 8,
+            "full_scissors_skip_weight should be updated to 8");
+        assert_eq!(cache.half_scissors_skip_weight, 4,
+            "half_scissors_skip_weight should be updated to 4");
     }
 
     #[test]
@@ -2237,11 +2239,12 @@ mod tests {
         let weights = crate::weights::dummy_weights();
         cache.set_weights(&weights);
 
-        // dummy_weights sets all scissor weights to 0
-        assert_eq!(cache.full_scissors_weight, 0);
-        assert_eq!(cache.half_scissors_weight, 0);
-        assert_eq!(cache.full_scissors_skip_weight, 0);
-        assert_eq!(cache.half_scissors_skip_weight, 0);
+        // dummy_weights: full_scissors=5, half_scissors=1, full_scissors_skip=2, half_scissors_skip=1
+        // set_weights negates: -5, -1, -2, -1
+        assert_eq!(cache.full_scissors_weight, -5);
+        assert_eq!(cache.half_scissors_weight, -1);
+        assert_eq!(cache.full_scissors_skip_weight, -2);
+        assert_eq!(cache.half_scissors_skip_weight, -1);
     }
 
     // ==========================================
@@ -2467,9 +2470,10 @@ mod tests {
         // Bigram score delta: 200 * 300 = 60000
         // Skipgram delta: (100 - 50) + (100 - 50) = 100
         // Skipgram score delta: 100 * 300 = 30000
-        // Weighted score: 60000 * (-10) + 30000 * (-3) = -600000 + -90000 = -690000
-        assert_eq!(score_delta, -690000,
-            "Weighted score delta should be -690000");
+        // Weights negated in set_weights: -(-10)=10, -(-3)=3
+        // Weighted score: 60000 * 10 + 30000 * 3 = 600000 + 90000 = 690000
+        assert_eq!(score_delta, 690000,
+            "Weighted score delta should be 690000");
     }
 
     #[test]
@@ -2581,10 +2585,11 @@ mod tests {
 
         let weighted = delta.weighted_score(&cache);
 
-        // Expected: 100 * (-10) + 50 * (-3) + 25 * (-5) + 10 * (-2)
-        //         = -1000 + -150 + -125 + -20 = -1295
-        assert_eq!(weighted, -1295,
-            "Weighted score should be -1295");
+        // Weights negated in set_weights: -(-10)=10, -(-5)=5, -(-3)=3, -(-2)=2
+        // Expected: 100 * 10 + 50 * 3 + 25 * 5 + 10 * 2
+        //         = 1000 + 150 + 125 + 20 = 1295
+        assert_eq!(weighted, 1295,
+            "Weighted score should be 1295");
     }
 
     // ==========================================
@@ -2629,8 +2634,9 @@ mod tests {
         // bigram_total = 100 * 300 = 30000, skipgram_total = 50 * 300 = 15000
         cache.set_totals_for_testing(30000, 100, 15000, 50, 0, 0, 0, 0);
 
-        // Score = 30000 * (-10) + 15000 * (-3) = -300000 + -45000 = -345000
-        assert_eq!(cache.score(), -345000, "Score should be -345000");
+        // Weights are negated in set_weights: -(-10)=10, -(-3)=3
+        // Score = 30000 * 10 + 15000 * 3 = 300000 + 45000 = 345000
+        assert_eq!(cache.score(), 345000, "Score should be 345000");
     }
 
     #[test]
@@ -2654,9 +2660,10 @@ mod tests {
         // bigram: 80 * 100 = 8000, skipgram: 40 * 100 = 4000
         cache.set_totals_for_testing(30000, 100, 15000, 50, 8000, 80, 4000, 40);
 
-        // Score = 30000 * (-10) + 15000 * (-3) + 8000 * (-5) + 4000 * (-2)
-        //       = -300000 + -45000 + -40000 + -8000 = -393000
-        assert_eq!(cache.score(), -393000, "Score should be -393000");
+        // Weights are negated in set_weights: -(-10)=10, -(-5)=5, -(-3)=3, -(-2)=2
+        // Score = 30000 * 10 + 15000 * 3 + 8000 * 5 + 4000 * 2
+        //       = 300000 + 45000 + 40000 + 8000 = 393000
+        assert_eq!(cache.score(), 393000, "Score should be 393000");
     }
 
     // ==========================================
@@ -2845,9 +2852,10 @@ mod tests {
         // Should add the new key's contribution without subtracting old
         // New bigram: (2,1) + (1,2) = 200 + 200 = 400, score = 400 * 300 = 120000
         // New skipgram: (2,1) + (1,2) = 100 + 100 = 200, score = 200 * 300 = 60000
-        // Weighted: 120000 * (-10) + 60000 * (-3) = -1200000 + -180000 = -1380000
-        assert_eq!(new_score, -1380000,
-            "Score should be -1380000 when replacing invalid old key");
+        // Weights negated: -(-10)=10, -(-3)=3
+        // Weighted: 120000 * 10 + 60000 * 3 = 1200000 + 180000 = 1380000
+        assert_eq!(new_score, 1380000,
+            "Score should be 1380000 when replacing invalid old key");
     }
 
     #[test]
@@ -2876,9 +2884,10 @@ mod tests {
         // Old bigram: (0,1) + (1,0) = 100 + 100 = 200, score = 200 * 300 = 60000
         // Old skipgram: (0,1) + (1,0) = 50 + 50 = 100, score = 100 * 300 = 30000
         // Delta: -60000 bigram, -30000 skipgram
-        // Weighted: -60000 * (-10) + -30000 * (-3) = 600000 + 90000 = 690000
-        assert_eq!(new_score, 690000,
-            "Score should be 690000 when replacing with invalid new key");
+        // Weights negated: -(-10)=10, -(-3)=3
+        // Weighted: -60000 * 10 + -30000 * 3 = -600000 + -90000 = -690000
+        assert_eq!(new_score, -690000,
+            "Score should be -690000 when replacing with invalid new key");
     }
 
     // ==========================================

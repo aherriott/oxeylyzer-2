@@ -385,6 +385,8 @@ impl TrigramCache {
     /// For each unplaced key, estimates the minimum trigram penalty by only counting
     /// trigrams where the other TWO positions are already filled. This underestimates
     /// but is a valid lower bound.
+    /// Compute a lower bound on the remaining trigram score for unplaced keys.
+    /// Uses offset scoring (all contributions ≤ 0) for B&B pruning correctness.
     pub fn lower_bound_remaining(
         &self,
         unplaced_keys: &[usize],
@@ -411,6 +413,7 @@ impl TrigramCache {
                     // Skip combos where pos_b or pos_c equals pos (self-referencing)
                     if combo.pos_b == pos || combo.pos_c == pos { continue; }
                     let freq = tg_flat[key * nk2 + kb * nk + kc];
+                    // B&B offset: (weight - max_w) ensures all contributions ≤ 0
                     penalty += freq * combo.weight - freq * max_w;
                 }
 
@@ -1328,11 +1331,14 @@ impl TrigramCache {
     pub fn score(&self) -> i64 {
         // Trigram score uses offset weights: each type's weight is reduced by max_weight
         // so that the best trigram type contributes 0 and all others are negative.
-        // This ensures every key placement makes the score worse (more negative),
-        // enabling branch-and-bound pruning.
+        // This ensures the total trigram score is always ≤ 0.
         //
         // The offset is: -max_weight * total_trigram_freq
         // where total_trigram_freq = sum of all per-type frequencies.
+        //
+        // For greedy optimization, the offset is a constant (total_freq doesn't change
+        // during key swaps on a fully-placed layout), so it doesn't affect neighbor ranking.
+        // The delta functions use raw combo.weight without offset, which is correct.
         let total_freq = self.inroll_freq + self.outroll_freq + self.alternate_freq
             + self.redirect_freq + self.onehandin_freq + self.onehandout_freq;
 
@@ -2044,7 +2050,6 @@ impl TrigramCache {
         let nk2 = nk * nk;
         let old_valid = old_key < nk;
         let new_valid = new_key < nk;
-        let max_w = self.max_trigram_weight;
 
         let mut score_delta: i64 = 0;
 
@@ -2063,7 +2068,7 @@ impl TrigramCache {
             let nf = if new_valid && nkb < nk && nkc < nk { tg[new_key * nk2 + nkb * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
             let fd = nf - of;
-            score_delta += fd * combo.weight - fd * max_w;
+            score_delta += fd * combo.weight;
         }
 
         // Case 2: pos is middle
@@ -2082,7 +2087,7 @@ impl TrigramCache {
             let nf = if new_valid && nkc < nk { tg[ka * nk2 + new_key * nk + nkc] } else { 0 };
             if of == 0 && nf == 0 { continue; }
             let fd = nf - of;
-            score_delta += fd * combo.weight - fd * max_w;
+            score_delta += fd * combo.weight;
         }
 
         // Case 3: pos is last
@@ -2099,7 +2104,7 @@ impl TrigramCache {
             let of = if old_valid { tg[ka * nk2 + kb * nk + old_key] } else { 0 };
             let nf = if new_valid { tg[ka * nk2 + kb * nk + new_key] } else { 0 };
             let fd = nf - of;
-            score_delta += fd * combo.weight - fd * max_w;
+            score_delta += fd * combo.weight;
         }
 
         score_delta
@@ -2119,7 +2124,6 @@ impl TrigramCache {
         let nk2 = nk * nk;
         let ka_valid = key_a < nk;
         let kb_valid = key_b < nk;
-        let max_w = self.max_trigram_weight;
         let mut sd: i64 = 0;
 
         for combo in &self.trigram_combos_per_key[pos_a] {
@@ -2134,7 +2138,7 @@ impl TrigramCache {
             let of = if ka_valid { tg[key_a * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if kb_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
             let fd = nf - of;
-            sd += fd * combo.weight - fd * max_w;
+            sd += fd * combo.weight;
         }
 
         for combo in &self.trigram_combos_per_key[pos_b] {
@@ -2149,7 +2153,7 @@ impl TrigramCache {
             let of = if kb_valid { tg[key_b * nk2 + ok2 * nk + ok3] } else { 0 };
             let nf = if ka_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
             let fd = nf - of;
-            sd += fd * combo.weight - fd * max_w;
+            sd += fd * combo.weight;
         }
 
         for combo in &self.trigram_combos_mid[pos_a] {
@@ -2160,7 +2164,7 @@ impl TrigramCache {
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
             let fd = nf - of;
-            sd += fd * combo.weight - fd * max_w;
+            sd += fd * combo.weight;
         }
 
         for combo in &self.trigram_combos_mid[pos_b] {
@@ -2171,7 +2175,7 @@ impl TrigramCache {
             let of = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
             let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
             let fd = nf - of;
-            sd += fd * combo.weight - fd * max_w;
+            sd += fd * combo.weight;
         }
 
         sd
@@ -3190,10 +3194,11 @@ mod tests {
         cache.set_weights(&weights);
 
         // Verify weights are copied correctly
+        // Redirect is negated in set_weights (penalty convention)
         assert_eq!(cache.inroll_weight, weights.inroll);
         assert_eq!(cache.outroll_weight, weights.outroll);
         assert_eq!(cache.alternate_weight, weights.alternate);
-        assert_eq!(cache.redirect_weight, weights.redirect);
+        assert_eq!(cache.redirect_weight, -weights.redirect);
         assert_eq!(cache.onehandin_weight, weights.onehandin);
         assert_eq!(cache.onehandout_weight, weights.onehandout);
     }
@@ -3229,11 +3234,11 @@ mod tests {
 
         cache.set_weights(&weights);
 
-        // Verify weights are copied correctly
+        // Redirect is negated: -(-400) = 400
         assert_eq!(cache.inroll_weight, 100);
         assert_eq!(cache.outroll_weight, 200);
         assert_eq!(cache.alternate_weight, 300);
-        assert_eq!(cache.redirect_weight, -400);
+        assert_eq!(cache.redirect_weight, 400);
         assert_eq!(cache.onehandin_weight, 50);
         assert_eq!(cache.onehandout_weight, -25);
     }
@@ -3294,11 +3299,11 @@ mod tests {
         };
         cache.set_weights(&weights2);
 
-        // Verify new weights are applied
+        // Verify new weights are applied (redirect negated: -400)
         assert_eq!(cache.inroll_weight, 100);
         assert_eq!(cache.outroll_weight, 200);
         assert_eq!(cache.alternate_weight, 300);
-        assert_eq!(cache.redirect_weight, 400);
+        assert_eq!(cache.redirect_weight, -400);
         assert_eq!(cache.onehandin_weight, 500);
         assert_eq!(cache.onehandout_weight, 600);
     }
@@ -3398,9 +3403,10 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        // Expected: 10*1 + 20*2 + 30*3 + 40*4 + 50*5 + 60*6
-        //         = 10 + 40 + 90 + 160 + 250 + 360 = 910
-        assert_eq!(cache.score(), 910);
+        // Expected: 10*1 + 20*2 + 30*3 + 40*(-4) + 50*5 + 60*6
+        //         = 10 + 40 + 90 - 160 + 250 + 360 = 590
+        // (redirect weight is negated internally: positive config value = penalty)
+        assert_eq!(cache.score(), 590);
     }
 
     #[test]
@@ -3441,9 +3447,11 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        // Expected: 100*10 + 100*10 + 100*10 + 100*(-20) + 100*5 + 100*(-5)
-        //         = 1000 + 1000 + 1000 - 2000 + 500 - 500 = 1000
-        assert_eq!(cache.score(), 1000);
+        // redirect=-20 in config → redirect_weight = -(-20) = 20 (negated in set_weights)
+        // onehandout=-5 in config → onehandout_weight = -5 (not negated, it's a reward)
+        // Expected: 100*10 + 100*10 + 100*10 + 100*20 + 100*5 + 100*(-5)
+        //         = 1000 + 1000 + 1000 + 2000 + 500 - 500 = 5000
+        assert_eq!(cache.score(), 5000);
     }
 
     #[test]
@@ -3484,9 +3492,10 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        // Expected: 50*2 + (-10)*3 + 30*4 + (-20)*5 + 10*6 + 0*7
-        //         = 100 - 30 + 120 - 100 + 60 + 0 = 150
-        assert_eq!(cache.score(), 150);
+        // redirect=5 in config → redirect_weight = -5 (negated in set_weights)
+        // Expected: 50*2 + (-10)*3 + 30*4 + (-20)*(-5) + 10*6 + 0*7
+        //         = 100 - 30 + 120 + 100 + 60 + 0 = 350
+        assert_eq!(cache.score(), 350);
     }
 
     #[test]

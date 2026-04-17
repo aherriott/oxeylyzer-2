@@ -448,6 +448,8 @@ impl CachedLayout {
             + self.magic_penalty() + self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale
     }
 
+
+
     /// Returns (sfb_score, stretch_score, scissors_score, trigram_score, magic_penalty, finger_usage)
     pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64, i64) {
         (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(),
