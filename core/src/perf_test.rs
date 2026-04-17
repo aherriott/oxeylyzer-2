@@ -2,7 +2,7 @@
 mod tests {
     use crate::cached_layout::CachedLayout;
     use crate::prelude::*;
-    use crate::weights::dummy_weights;
+    use crate::weights::{dummy_weights, ScaleFactors};
     use std::time::Instant;
 
     fn make() -> (Analyzer, Layout) {
@@ -59,7 +59,7 @@ mod tests {
         let (_, l) = make();
         let data = crate::data::Data::load("../data/english.json").expect("data");
         let weights = dummy_weights();
-        let mut c = CachedLayout::new(&l, data, &weights);
+        let mut c = CachedLayout::new(&l, data, &weights, &ScaleFactors::default());
         let n = 3u32;
         let t = Instant::now();
         for _ in 0..n { c.update(); }

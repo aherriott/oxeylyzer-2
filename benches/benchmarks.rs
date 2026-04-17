@@ -153,7 +153,7 @@ mod bench {
         let (_, layout) = util::analyzer_layout("english", "qwerty");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
         let weights = dummy_weights();
-        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights, &oxeylyzer_core::weights::ScaleFactors::default());
         let pos = match swap { Neighbor::KeySwap(PosPair(a, _)) => a, _ => 0 };
 
         bencher.bench(|| {
@@ -172,7 +172,7 @@ mod bench {
         let (_, layout) = util::analyzer_layout("english", "qwerty");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
         let weights = dummy_weights();
-        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights, &oxeylyzer_core::weights::ScaleFactors::default());
         let (pos_a, pos_b) = match swap { Neighbor::KeySwap(PosPair(a, b)) => (a, b), _ => (0, 1) };
 
         bencher.bench(|| {
@@ -193,7 +193,7 @@ mod bench {
             .expect("magic layout should exist");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
         let weights = dummy_weights();
-        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights, &oxeylyzer_core::weights::ScaleFactors::default());
 
         let char_mapping = cached.char_mapping();
         let leader_a = char_mapping.get_u('a');
@@ -217,7 +217,7 @@ mod bench {
             .expect("magic layout should exist");
         let data = oxeylyzer_core::data::Data::load("./data/english.json").unwrap();
         let weights = dummy_weights();
-        let mut cached = CachedLayout::new(&layout, data.clone(), &weights);
+        let mut cached = CachedLayout::new(&layout, data.clone(), &weights, &oxeylyzer_core::weights::ScaleFactors::default());
 
         let char_mapping = cached.char_mapping();
         let leader_a = char_mapping.get_u('a');

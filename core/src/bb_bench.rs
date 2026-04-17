@@ -4,14 +4,14 @@ mod tests {
     use crate::cached_layout::{CachedLayout, EMPTY_KEY};
     use crate::data::Data;
     use crate::layout::Layout;
-    use crate::weights::dummy_weights;
+    use crate::weights::{dummy_weights, ScaleFactors};
     use std::time::Instant;
 
     fn setup() -> (BranchBound, CachedLayout) {
         let data = Data::load("../data/english.json").expect("data");
         let weights = dummy_weights();
         let layout = Layout::load("../layouts/qwerty.dof").expect("layout");
-        let mut bb = BranchBound::new(layout, data, weights);
+        let mut bb = BranchBound::new(layout, data, weights, ScaleFactors::default());
         let cache = bb.create_empty_cache();
         (bb, cache)
     }
@@ -82,7 +82,7 @@ mod tests {
         println!("\n=== B&B search to various depths ===");
 
         for max_depth in [4, 5, 6, 7] {
-            let mut bb = BranchBound::new(layout.clone(), data.clone(), weights.clone());
+            let mut bb = BranchBound::new(layout.clone(), data.clone(), weights.clone(), ScaleFactors::default());
             let t = Instant::now();
             let (results, stats) = bb.search_limited(i64::MIN, 5, max_depth);
             let elapsed = t.elapsed();

@@ -30,6 +30,9 @@ pub mod weights;
 #[cfg(test)]
 mod cache_tests;
 
+#[cfg(test)]
+mod api_tests;
+
 pub mod prelude {
     pub use super::{
         analyze::Analyzer,

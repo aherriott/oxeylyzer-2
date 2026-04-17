@@ -56,6 +56,11 @@ impl Analyzer {
     pub fn weights(&self) -> &Weights { &self.weights }
     pub fn scale_factors(&self) -> &ScaleFactors { &self.scale_factors }
 
+    #[cfg(test)]
+    pub fn cache_mut(&mut self) -> &mut CachedLayout {
+        self.cache.as_mut().expect("Analyzer has no Layout set")
+    }
+
     pub fn use_layout(&mut self, layout: &Layout, _pins: &[usize]) {
         // TODO: use pins
         self.cache = Some(CachedLayout::new(layout, self.data.clone(), &self.weights, &self.scale_factors));

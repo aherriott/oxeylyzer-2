@@ -968,7 +968,9 @@ mod magic_rule_integration_tests {
             redirect: -1,
             onehandin: 1,
             onehandout: 0,
-            thumb: 0,
+            finger_usage: 0,
+            magic_rule_penalty: 0,
+            magic_repeat_penalty: 0,
             full_scissors: -2,
             half_scissors: -1,
             full_scissors_skip: -1,
@@ -1095,7 +1097,7 @@ mod magic_rule_integration_tests {
         // Create data with 'ab' bigrams and all layout chars to ensure proper array sizing
         let data = create_test_data_with_layout_chars("ababababab", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         // Get the magic key and leader key IDs
         let magic_key = cache.char_mapping().get_u('*');
@@ -1133,7 +1135,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1169,7 +1171,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abababab", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1205,7 +1207,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1246,7 +1248,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1291,7 +1293,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcdabcdabcd", &['a', 'b', 'c', 'd', '*', '#']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key1 = cache.char_mapping().get_u('*');
         let magic_key2 = cache.char_mapping().get_u('#');
@@ -1364,7 +1366,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcdabcdabcd", &['a', 'b', 'c', 'd', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key_id = cache.char_mapping().get_u('*');
         let leader_a = cache.char_mapping().get_u('a');
@@ -1443,7 +1445,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("ababab", &['a', 'b', 'c', '*', '#']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key1_id = cache.char_mapping().get_u('*');
         let magic_key2_id = cache.char_mapping().get_u('#');
@@ -1520,7 +1522,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("ababab", &['a', 'b', 'c', '*', '#']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key1_id = cache.char_mapping().get_u('*');
         let magic_key2_id = cache.char_mapping().get_u('#');
@@ -1562,7 +1564,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         // Get speculative score for swapping positions 0 and 1
         let speculative_score = cache.score_neighbor(Neighbor::KeySwap(PosPair(0, 1)));
@@ -1623,7 +1625,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', 'd', '*', '#']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         println!("Initial score: {}", cache.score());
         println!("SFB: {}, Stretch: {}, Scissors: {}, Trigram: {}",
@@ -1710,7 +1712,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', 'd', '*', '#']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let key_a = cache.char_mapping().get_u('a');
         let key_b = cache.char_mapping().get_u('b');
@@ -1789,7 +1791,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("ababab", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1816,7 +1818,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("ababab", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1843,7 +1845,7 @@ mod magic_rule_integration_tests {
         let weights = create_test_weights();
         let data = create_test_data_with_layout_chars("abcabcabcabc", &['a', 'b', 'c', '*']);
 
-        let mut cache = CachedLayout::new(&layout, data, &weights);
+        let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
         let magic_key = cache.char_mapping().get_u('*');
         let leader = cache.char_mapping().get_u('a');
@@ -1909,7 +1911,10 @@ mod pbt_constant_frequencies {
             redirect: -1,
             onehandin: 1,
             onehandout: 0,
-            thumb: 0,
+
+            finger_usage: 0,
+            magic_rule_penalty: 0,
+            magic_repeat_penalty: 0,
             full_scissors: -2,
             half_scissors: -1,
             full_scissors_skip: -1,
@@ -2014,7 +2019,7 @@ mod pbt_constant_frequencies {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Capture initial frequency arrays from MagicCache
             let initial_bg_freq = cache.magic.bg_freq_flat().to_vec();
@@ -2108,7 +2113,7 @@ mod pbt_constant_frequencies {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars("abcdabcdabcd", &['a', 'b', 'c', 'd', '*']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Capture initial frequency arrays
             let initial_bg_freq = cache.magic.bg_freq_flat().to_vec();
@@ -2204,7 +2209,7 @@ mod pbt_constant_frequencies {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars("abcdabcdabcd", &['a', 'b', 'c', 'd', '*']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Capture initial frequency arrays
             let initial_bg_freq = cache.magic.bg_freq_flat().to_vec();
@@ -2296,7 +2301,10 @@ mod pbt_total_score_preservation {
             redirect: -1,
             onehandin: 1,
             onehandout: 0,
-            thumb: 0,
+
+            finger_usage: 0,
+            magic_rule_penalty: 0,
+            magic_repeat_penalty: 0,
             full_scissors: -2,
             half_scissors: -1,
             full_scissors_skip: -1,
@@ -2448,7 +2456,7 @@ mod pbt_total_score_preservation {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Get key IDs
             let key_a = cache.char_mapping().get_u('a');
@@ -2504,8 +2512,8 @@ mod pbt_total_score_preservation {
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
             // Create two identical caches
-            let mut cache1 = CachedLayout::new(&layout, data.clone(), &weights);
-            let mut cache2 = CachedLayout::new(&layout, data, &weights);
+            let mut cache1 = CachedLayout::new(&layout, data.clone(), &weights, &crate::weights::ScaleFactors::default());
+            let mut cache2 = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Get key IDs (same for both caches)
             let key_a = cache1.char_mapping().get_u('a');
@@ -2556,7 +2564,7 @@ mod pbt_total_score_preservation {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Record initial score
             let initial_score = cache.score();
@@ -2608,7 +2616,7 @@ mod pbt_total_score_preservation {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Get key IDs
             let key_a = cache.char_mapping().get_u('a');
@@ -2689,7 +2697,7 @@ mod pbt_total_score_preservation {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Record initial score
             let initial_score = cache.score();
@@ -2729,7 +2737,7 @@ mod pbt_total_score_preservation {
             let weights = create_test_weights();
             let data = create_test_data_with_layout_chars(text_pattern, &['a', 'b', 'c', 'd', '*', '#']);
 
-            let mut cache = CachedLayout::new(&layout, data, &weights);
+            let mut cache = CachedLayout::new(&layout, data, &weights, &crate::weights::ScaleFactors::default());
 
             // Get key IDs
             let key_a = cache.char_mapping().get_u('a');

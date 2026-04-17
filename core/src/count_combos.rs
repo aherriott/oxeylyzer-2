@@ -2,14 +2,14 @@
 mod tests {
     use crate::prelude::*;
     use crate::cached_layout::CachedLayout;
-    use crate::weights::dummy_weights;
+    use crate::weights::{dummy_weights, ScaleFactors};
 
     #[test]
     fn count_trigram_combos() {
         let data = crate::data::Data::load("../data/english.json").expect("data");
         let weights = dummy_weights();
         let layout = Layout::load("../layouts/qwerty.dof").expect("layout");
-        let cached = CachedLayout::new(&layout, data, &weights);
+        let cached = CachedLayout::new(&layout, data, &weights, &ScaleFactors::default());
 
         // We need to access trigram combo counts. Let's add a method.
         let (first, mid, end) = cached.trigram_combo_counts();

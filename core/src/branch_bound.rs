@@ -1115,7 +1115,7 @@ mod tests {
         let layout = Layout::load("../layouts/qwerty.dof").expect("layout should exist");
         let weights = dummy_weights();
 
-        let mut bb = BranchBound::new(layout, data, weights);
+        let mut bb = BranchBound::new(layout, data, weights, crate::weights::ScaleFactors::default());
 
         println!("Characters by frequency: {:?}", &bb.chars_by_frequency()[..10]);
         println!("Num positions: {}", bb.num_positions);
@@ -1145,7 +1145,7 @@ mod tests {
         let layout = Layout::load("../layouts/qwerty.dof").expect("layout should exist");
         let weights = dummy_weights();
 
-        let mut bb = BranchBound::new(layout, data, weights);
+        let mut bb = BranchBound::new(layout, data, weights, crate::weights::ScaleFactors::default());
 
         // Use a moderately tight bound to test pruning
         // Score of 0 should prune most branches since scores are negative
