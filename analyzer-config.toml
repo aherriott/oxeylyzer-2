@@ -5,19 +5,19 @@ layouts = ["./core/test-layouts", "./layouts"] # can be an array of folders
 finger_usage = 25
 sfbs = 25
 sfs = 3
-stretches = 16
+stretches = 19
 sft = 30
 inroll = 3
 outroll = 3
 alternate = 3
-redirect = 7
+redirect = 12
 onehandin = 2
 onehandout = 0
 full_scissors = 5
 half_scissors = 1
 full_scissors_skip = 2
 half_scissors_skip = 1
-magic_rule_penalty = 1
+magic_rule_penalty = 2
 magic_repeat_penalty = 0
 
 [weights.fingers]
