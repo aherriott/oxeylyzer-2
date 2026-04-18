@@ -483,18 +483,24 @@ impl CachedLayout {
         let skipgram_total = self.data.skipgram_total;
         let chars = &self.data.chars;
 
-        // Finger use: sum character frequencies per finger
+        // Finger use: sum character frequencies per finger.
+        // chars[key] = (json_pct * (raw_total / 100)) as i64, and char_total = raw_total / 100.
+        // Dividing gives json_pct (0-100 scale), so divide by 100 to get fraction (0-1 scale).
+        let char_total_raw = char_total * 100.0;
         for (pos, &key) in self.keys.iter().enumerate() {
             if key != EMPTY_KEY && (key as usize) < chars.len() {
                 let finger = self.fingers[pos] as usize;
-                stats.finger_use[finger] += chars[key as usize] as f64 / char_total;
+                stats.finger_use[finger] += chars[key as usize] as f64 / char_total_raw;
             }
         }
 
         self.sfb.stats(stats, bigram_total, skipgram_total);
         self.stretch.stats(stats, bigram_total);
         self.scissors.stats(stats, bigram_total, skipgram_total);
-        self.trigram.stats(stats, self.data.trigram_total);
+        // trigram_total from AnalyzerData is raw_total / 100. Multiply by 100 to get
+        // the raw total, matching the scale of the integer frequencies stored in TrigramCache.
+        // (SFCache, StretchCache, ScissorsCache already do this internally.)
+        self.trigram.stats(stats, self.data.trigram_total * 100.0);
     }
 
     // ==================== Mutation API ====================

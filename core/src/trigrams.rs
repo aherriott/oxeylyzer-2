@@ -2807,7 +2807,7 @@ impl Finger {
         matches!(
             (self.0, rhs.0),
             (LP, LR | LM | LI | LT)
-                | (RP, RP | RM | RI | RT)
+                | (RP, RR | RM | RI | RT)
                 | (LR, LM | LI | LT)
                 | (RR, RM | RI | RT)
                 | (LM, LI | LT)
