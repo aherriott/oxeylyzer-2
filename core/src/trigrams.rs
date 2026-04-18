@@ -2876,11 +2876,6 @@ impl Trigram {
         !(f1.is_inward(f2) || f2.is_inward(f3))
     }
 
-    const fn is_thumb(&self) -> bool {
-        let [f1, f2, f3] = self.0;
-
-        f1.is_thumb() || f2.is_thumb() || f3.is_thumb()
-    }
 }
 
 pub const fn trigrams() -> [TrigramType; 1000] {
