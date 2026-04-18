@@ -1,0 +1,21 @@
+{
+    "name": "oxey-v30",
+    "board": "colstag",
+    "layers": {
+        "main": [
+            "c l u v j  f n d o .",
+            "m r e s g  p h t a i",
+            "w x &mag y z  q b k ' ,",
+            "  ~ spc ~  ~ ~ ~     "
+        ]
+    },
+    "fingering": "traditional",
+    "magic": {
+        "mag": {
+            "'": "'", ",": ",", ".": ",", "a": "n", "g": "s",
+            "h": "a", "i": "i", "m": "c", "n": "f", "o": "a",
+            "p": "h", "r": "l", "s": "y", "t": "i", "v": "v",
+            "y": "s", " ": " "
+        }
+    }
+}
