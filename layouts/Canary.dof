@@ -3,15 +3,14 @@
 	"authors": [
 		"AKL Creators"
 	],
-	"board": "ansi",
+	"board": "colstag",
 	"year": 2022,
 	"link": "github.com/Apsu/Canary",
 	"layers": {
 		"main": [
 			"w l y p b z f o u '",
 			"c r s t g m n e i a",
-			"q j v d k x h / , .",
-			" ~ ~ ~  spc ~ ~ "
+			"q j v d k x h / , ."
 		]
 	},
 	"fingering": "traditional"

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Goal-seek: find weights that produce a magic-key layout that beats
-sturdy, graphite, AND canary on every metric, then maximize the margin.
+sturdy, gallium, AND canary on every metric, then maximize the margin.
 
 Tiered fitness (lower = better):
   - Tier 0: Beats all 3 targets on all metrics → negative margin (maximize)
-  - Tier 1: Beats sturdy + graphite on all metrics → 1000 + canary miss penalty
-  - Tier 2: Beats sturdy on all metrics → 2000 + graphite miss penalty
+  - Tier 1: Beats sturdy + gallium on all metrics → 1000 + canary miss penalty
+  - Tier 2: Beats sturdy on all metrics → 2000 + gallium miss penalty
   - Tier 3: Doesn't beat sturdy on all → 3000 + sturdy miss penalty
 
 Within each tier, lower fitness = better.
@@ -41,7 +41,7 @@ HIGHER_IS_BETTER = ["inroll", "outroll", "alternate"]
 ALL_METRICS = LOWER_IS_BETTER + HIGHER_IS_BETTER
 
 # Target layouts in priority order
-TARGETS = ["sturdy", "graphite", "canary"]
+TARGETS = ["sturdy", "gallium", "canary"]
 
 
 @dataclass
@@ -325,46 +325,109 @@ def compute_fitness(m: LayoutMetrics, targets: dict) -> float:
     """
     Tiered fitness (lower = better):
       Tier 0: beats all 3 → negative combined margin
-      Tier 1: beats sturdy+graphite → 1000 + canary miss
-      Tier 2: beats sturdy → 2000 + graphite miss
+      Tier 1: beats sturdy+gallium → 1000 + canary miss
+      Tier 2: beats sturdy → 2000 + gallium miss
       Tier 3: doesn't beat sturdy → 3000 + sturdy miss
     """
     sturdy = targets["sturdy"]
-    graphite = targets["graphite"]
+    gallium = targets["gallium"]
     canary = targets["canary"]
 
     s_wins, s_total = win_count(m, sturdy)
-    g_wins, g_total = win_count(m, graphite)
+    g_wins, g_total = win_count(m, gallium)
     c_wins, c_total = win_count(m, canary)
 
     beats_sturdy_all = (s_wins == s_total)
-    beats_graphite_all = (g_wins == g_total)
+    beats_gallium_all = (g_wins == g_total)
     beats_canary_all = (c_wins == c_total)
 
-    if beats_sturdy_all and beats_graphite_all and beats_canary_all:
+    if beats_sturdy_all and beats_gallium_all and beats_canary_all:
         # Tier 0: maximize combined margin over all 3
-        combined = total_margin(m, sturdy) + total_margin(m, graphite) + total_margin(m, canary)
+        combined = total_margin(m, sturdy) + total_margin(m, gallium) + total_margin(m, canary)
         return -combined  # negative so lower = bigger margin
 
-    if beats_sturdy_all and beats_graphite_all:
+    if beats_sturdy_all and beats_gallium_all:
         # Tier 1: beat canary next
         return 1000.0 + miss_penalty(m, canary)
 
     if beats_sturdy_all:
-        # Tier 2: beat graphite next
-        return 2000.0 + miss_penalty(m, graphite)
+        # Tier 2: beat gallium next
+        return 2000.0 + miss_penalty(m, gallium)
 
     # Tier 3: beat sturdy first
     return 3000.0 + miss_penalty(m, sturdy)
 
 
 def perturb_weights(base: WeightSet, temperature: float = 0.3) -> WeightSet:
+    """Random perturbation (fallback when no feedback available)."""
     ws = WeightSet(**asdict(base))
     for name in TUNABLE:
         val = getattr(ws, name)
         delta = max(1, int(val * temperature))
         new_val = max(0, val + random.randint(-delta, delta))
         setattr(ws, name, new_val)
+    return ws
+
+
+# Mapping from metric name to the weight(s) that influence it
+METRIC_TO_WEIGHT = {
+    "sfbs": ["sfbs"],
+    "sfs": ["sfs"],
+    "stretches": ["stretches"],
+    "redirect": ["redirect"],
+    "onehandin": ["onehandin"],
+    "onehandout": [],  # no dedicated weight currently
+    "inroll": ["inroll"],
+    "outroll": ["outroll"],
+    "alternate": ["alternate"],
+}
+
+
+def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetrics,
+                     step_size: int = 3) -> WeightSet:
+    """
+    Directed weight adjustment based on which metrics miss the target.
+    - Missed metrics: bump their weight up by step_size
+    - Metrics winning by large margin (>30%): reduce weight by step_size (free up budget)
+    - Add small random noise to all weights to avoid getting stuck
+    """
+    ws = WeightSet(**asdict(base))
+    comps = beats_target(metrics, target)
+
+    for metric, (val, tval, beats) in comps.items():
+        weight_names = METRIC_TO_WEIGHT.get(metric, [])
+        if not weight_names:
+            continue
+
+        if tval == 0:
+            continue
+
+        if metric in LOWER_IS_BETTER:
+            margin_pct = (tval - val) / tval  # positive = winning
+        else:
+            margin_pct = (val - tval) / tval  # positive = winning
+
+        for wname in weight_names:
+            if wname not in TUNABLE:
+                continue
+            current = getattr(ws, wname)
+
+            if not beats:
+                # Missing this metric — increase weight proportional to how far off
+                miss_ratio = abs(margin_pct)
+                bump = max(1, int(step_size * (1 + miss_ratio)))
+                setattr(ws, wname, current + bump)
+            elif margin_pct > 0.3:
+                # Winning by >30% — reduce weight to free budget for missing metrics
+                reduction = max(1, int(step_size * 0.5))
+                setattr(ws, wname, max(0, current - reduction))
+
+    # Small random noise on all tunable weights (±1) to avoid exact cycles
+    for name in TUNABLE:
+        val = getattr(ws, name)
+        val = max(0, val + random.randint(-1, 1))
+        setattr(ws, name, val)
+
     return ws
 
 
@@ -492,9 +555,9 @@ def tier_label(fitness: float) -> str:
     if fitness < 1000:
         return "ALL 3 ✓✓✓"
     if fitness < 2000:
-        return "sturdy✓ graphite✓ canary✗"
+        return "sturdy✓ gallium✓ canary✗"
     if fitness < 3000:
-        return "sturdy✓ graphite✗"
+        return "sturdy✓ gallium✗"
     return "sturdy✗"
 
 
@@ -521,7 +584,7 @@ def main():
     shutil.copy(CONFIG, CONFIG_BAK)
 
     print("=" * 70)
-    print("GOAL SEEK: Beat sturdy → graphite → canary, maximize margin")
+    print("GOAL SEEK: Beat sturdy → gallium → canary, maximize margin")
     print("=" * 70)
     print(f"Gen time per trial: {GEN_TIME}s, top {TOP_N} per trial")
     print()
@@ -543,6 +606,13 @@ def main():
     for name in TARGETS:
         targets[name] = measure_layout(name)
         m = targets[name]
+        if m.sfbs == 0.0 and m.inroll == 0.0:
+            print(f"  ERROR: {name} returned all zeros — layout failed to load!")
+            print(f"  Check that layouts/{name}.dof exists and is valid.")
+            if os.path.exists(CONFIG_BAK):
+                shutil.copy(CONFIG_BAK, CONFIG)
+                os.remove(CONFIG_BAK)
+            return
         print(f"  {name:12s}: sfbs={m.sfbs:.3f}% sfs={m.sfs:.3f}% stretch={m.stretches:.3f} "
               f"inroll={m.inroll:.1f}% outroll={m.outroll:.1f}% alt={m.alternate:.1f}% "
               f"redir={m.redirect:.1f}%")
@@ -570,6 +640,8 @@ def main():
 
     print(f"Temperature: {temperature:.3f}\n")
 
+    last_best_metrics = None  # metrics from the best layout of the previous trial
+
     try:
         for trial in range(start_trial, 10000):
             phase = tier_label(best_fitness)
@@ -579,6 +651,21 @@ def main():
 
             if trial == start_trial and not state:
                 ws = best_weights
+            elif last_best_metrics is not None:
+                # Determine which target is the current bottleneck
+                s_w, _ = win_count(last_best_metrics, targets["sturdy"])
+                if s_w < 9:
+                    bottleneck_target = targets["sturdy"]
+                elif win_count(last_best_metrics, targets["gallium"])[0] < 9:
+                    bottleneck_target = targets["gallium"]
+                elif win_count(last_best_metrics, targets["canary"])[0] < 9:
+                    bottleneck_target = targets["canary"]
+                else:
+                    bottleneck_target = targets["sturdy"]  # maximize margin vs sturdy
+
+                # Use directed perturbation based on feedback
+                ws = directed_perturb(best_weights, last_best_metrics, bottleneck_target)
+                print(f"  (directed perturbation vs {bottleneck_target.name})")
             else:
                 ws = perturb_weights(best_weights, temperature)
 
@@ -621,13 +708,14 @@ def main():
 
             trial_best_fitness = float("inf")
             trial_best_name = None
+            trial_best_metrics = None
 
             for rank, dof_name in enumerate(layout_names, 1):
                 metrics = analyze_layout(dof_name)
                 fitness = compute_fitness(metrics, targets)
 
                 s_wins, _ = win_count(metrics, targets["sturdy"])
-                g_wins, _ = win_count(metrics, targets["graphite"])
+                g_wins, _ = win_count(metrics, targets["gallium"])
                 c_wins, _ = win_count(metrics, targets["canary"])
 
                 print(f"\n  #{rank}: S={s_wins}/9 G={g_wins}/9 C={c_wins}/9 "
@@ -637,7 +725,7 @@ def main():
                 if s_wins < 9:
                     print_vs_target(metrics, targets["sturdy"], "sturdy")
                 elif g_wins < 9:
-                    print_vs_target(metrics, targets["graphite"], "graphite")
+                    print_vs_target(metrics, targets["gallium"], "gallium")
                 elif c_wins < 9:
                     print_vs_target(metrics, targets["canary"], "canary")
                 else:
@@ -651,6 +739,7 @@ def main():
                 if fitness < trial_best_fitness:
                     trial_best_fitness = fitness
                     trial_best_name = dof_name
+                    trial_best_metrics = metrics
 
                 # Track global top 3 — copy .dof to goalseed-best
                 if top3.maybe_add(fitness, dof_name, metrics, ws):
@@ -669,7 +758,11 @@ def main():
                 temperature = max(0.05, temperature * 0.95)
             else:
                 print(f"\n  No improvement ({trial_best_fitness:.4f} vs {best_fitness:.4f})")
-                temperature = min(0.5, temperature * 1.02)
+                temperature = min(0.3, temperature * 1.01)  # heat slowly on stagnation
+
+            # Save feedback for next trial's directed perturbation
+            if trial_best_metrics is not None:
+                last_best_metrics = trial_best_metrics
 
             # Keep .dof files that are in the top 3
             top3_names = {e[1] for e in top3.entries}

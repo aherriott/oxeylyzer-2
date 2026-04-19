@@ -89,7 +89,11 @@ impl StretchCache {
     }
 
     fn compute_stretch(k1: &PhysicalKey, k2: &PhysicalKey, f1: Finger, f2: Finger) -> i64 {
+        // No stretch for: same finger, different hands, or thumb keys
         if f1 == f2 || f1.hand() != f2.hand() {
+            return 0;
+        }
+        if matches!(f1, Finger::LT | Finger::RT) || matches!(f2, Finger::LT | Finger::RT) {
             return 0;
         }
         let (dx, dy) = dx_dy(k1, k2, f1, f2);

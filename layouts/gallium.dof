@@ -3,7 +3,7 @@
 	"authors": [
 		"GalileoBlues"
 	],
-	"board": "ortho",
+	"board": "colstag",
 	"link": "https://github.com/GalileoBlues/Gallium",
 	"layers": {
 		"main": [
