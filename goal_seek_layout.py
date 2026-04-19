@@ -115,6 +115,7 @@ def run_repl(commands: str, timeout: int = 300) -> str:
     result = subprocess.run(
         [BINARY], input=commands,
         capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "RAYON_NUM_THREADS": "3"},
     )
     return result.stdout + result.stderr
 
