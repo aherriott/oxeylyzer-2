@@ -1,0 +1,28 @@
+{
+    "name": "goalseed-t12-r3",
+    "board": "colstag",
+    "layers": {
+        "main": [
+            "\ufffd d l w m  \ufffd p e a ,",
+            "spc t r g c  b n u o i",
+            "\ufffd k j v q  &mag f \ufffd ' .",
+            "  ~ spc ~  ~ ~ ~     "
+        ]
+    },
+    "fingering": "traditional",
+    "magic": {
+        "mag": {
+            ".": ",",
+            "h": "y",
+            "i": "i",
+            "o": "a",
+            "q": "u",
+            "r": "l",
+            "u": "e",
+            "v": "v",
+            "x": "x",
+            "z": "z",
+            " ": "t"
+        }
+    }
+}
