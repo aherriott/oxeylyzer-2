@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-Goal-seek: find weights that produce a magic-key layout beating sturdy on every metric.
+Goal-seek: find weights that produce a magic-key layout that beats sturdy
+on every metric by the widest possible margin.
+
+Two-phase approach:
+  Phase 1: Find any weight set that produces all-9-wins (already solved)
+  Phase 2: Starting from winning weights, maximize the total margin of victory
+
+Fitness (lower = better):
+  - If not all 9 wins: large penalty (1000 + sum of miss ratios)
+  - If all 9 wins: negative margin score (more negative = bigger margin = better)
+    margin = sum of (improvement_ratio) across all 9 metrics
 
 Loop:
-  1. Pick a weight vector (Bayesian-ish: random perturbation of best known)
+  1. Perturb weights from best known
   2. Write analyzer-config.toml
-  3. Run `gen my-layout -t 120` (2 min per trial)
-  4. Parse top 3 layouts from gen output
-  5. Create temp .dof files, analyze each
-  6. Score against sturdy on all metrics
-  7. Log results, keep best
-
-Sturdy targets (from analyzer):
-  SFBs:      0.584%
-  SFS:       3.702%
-  Stretches: 2.705
-  Inroll:    24.330%
-  Outroll:   25.958%
-  Alternate: 24.268%
-  Redirect:   7.462%
+  3. Run `gen my-layout -t <GEN_TIME>`
+  4. Parse top layouts, create .dof, analyze each
+  5. Pick the layout with best fitness
+  6. Log results, update best if improved
 """
 
 import subprocess
@@ -30,7 +30,7 @@ import shutil
 import time
 import random
 import csv
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 BINARY = "./target/release/main"
@@ -39,11 +39,17 @@ CONFIG_BAK = "./analyzer-config.toml.bak"
 LAYOUT_DIR = "./layouts"
 GEN_LAYOUT = "my-layout"
 GEN_TIME = 120  # seconds per gen run
-TOP_N = 3       # parse top N from gen
+TOP_N = 5       # parse top N from gen
 LOG_FILE = "goal_seek_results.csv"
 STATE_FILE = "goal_seek_state.json"
+BEST_DOF_DIR = "./layouts/goalseed-best"
 
-# Sturdy reference metrics (will be measured at startup)
+# Metrics where lower is better
+LOWER_IS_BETTER = ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout"]
+# Metrics where higher is better
+HIGHER_IS_BETTER = ["inroll", "outroll", "alternate"]
+ALL_METRICS = LOWER_IS_BETTER + HIGHER_IS_BETTER
+
 STURDY_METRICS = None
 
 
@@ -65,26 +71,27 @@ class LayoutMetrics:
 
 @dataclass
 class WeightSet:
-    sfbs: int = 25
-    sfs: int = 3
-    stretches: int = 19
+    # Seeded from the t12 victory weights
+    sfbs: int = 39
+    sfs: int = 6
+    stretches: int = 23
     sft: int = 5
     inroll: int = 3
-    outroll: int = 3
-    alternate: int = 3
-    redirect: int = 35
-    onehandin: int = 2
+    outroll: int = 2
+    alternate: int = 0
+    redirect: int = 16
+    onehandin: int = 1
     onehandout: int = 0
     full_scissors: int = 5
     half_scissors: int = 1
     full_scissors_skip: int = 2
     half_scissors_skip: int = 1
-    finger_usage: int = 35
-    magic_rule_penalty: int = 2
+    finger_usage: int = 19
+    magic_rule_penalty: int = 1
     magic_repeat_penalty: int = 0
 
 
-# Weights we optimize (the rest stay fixed)
+# Weights we optimize
 TUNABLE = [
     "sfbs", "sfs", "stretches", "inroll", "outroll",
     "alternate", "redirect", "onehandin", "finger_usage",
@@ -132,7 +139,7 @@ def measure_sturdy() -> LayoutMetrics:
     """Analyze sturdy and return its metrics."""
     output = run_repl("a sturdy\nq\n", timeout=120)
     metrics = parse_analyze_output(output, "sturdy")
-    if metrics is None:
+    if metrics is None or metrics.sfbs == 0.0:
         print("ERROR: Could not parse sturdy metrics!")
         sys.exit(1)
     return metrics
@@ -188,7 +195,6 @@ def parse_analyze_output(output: str, name: str) -> LayoutMetrics:
     return m
 
 
-
 def parse_gen_output(output: str) -> list:
     """Parse gen output into list of (rank, score_str, layout_lines, magic_line)."""
     layouts = []
@@ -226,15 +232,11 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
     name = f"goalseed-t{trial}-r{rank}"
     dof_path = os.path.join(LAYOUT_DIR, f"{name}.dof")
 
-    # Parse the key rows from gen output
-    # Gen output has rows like: "v r c k z . u o y f"
-    # We need to map back to .dof format with &mag and spc
     rows = []
     thumb_key = None
     for line in lines:
         chars = line.strip().split()
         if len(chars) <= 2 and len(chars) >= 1:
-            # This is the thumb key line (single char like "␣" or "e")
             thumb_key = chars[0]
             continue
         row_chars = []
@@ -250,7 +252,6 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
     if len(rows) < 3:
         return None
 
-    # Build the 3 main rows (10 chars each, space in middle)
     main_rows = []
     for row in rows[:3]:
         if len(row) >= 10:
@@ -260,8 +261,6 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
         else:
             main_rows.append(" ".join(row))
 
-    # Thumb row: the single key goes in a specific position
-    # Based on my-layout.dof pattern: " ~ <key> ~  ~ ~ ~ "
     if thumb_key == "␣":
         thumb_key_dof = "spc"
     elif thumb_key:
@@ -270,20 +269,18 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
         thumb_key_dof = "spc"
     thumb_row = f"  ~ {thumb_key_dof} ~  ~ ~ ~     "
 
-    # Parse magic rules from "a→c b→s ..." format
     magic_rules = {}
     if magic_str:
         for rule in magic_str.split():
             parts = rule.split("→")
             if len(parts) == 2:
                 leader = parts[0]
-                output = parts[1]
-                # Map special chars
+                output_char = parts[1]
                 if leader == "␣":
                     leader = " "
-                if output == "␣":
-                    output = " "
-                magic_rules[leader] = output
+                if output_char == "␣":
+                    output_char = " "
+                magic_rules[leader] = output_char
 
     dof = {
         "name": name,
@@ -308,7 +305,6 @@ def analyze_layout(name: str) -> LayoutMetrics:
     output = run_repl(f"a {name}\nq\n", timeout=120)
     metrics = parse_analyze_output(output, name)
 
-    # Count magic rules from the output
     for line in output.split("\n"):
         if line.strip().startswith("magic:"):
             rules = line.strip().replace("magic:", "").strip().split()
@@ -321,42 +317,73 @@ def analyze_layout(name: str) -> LayoutMetrics:
 def beats_sturdy(m: LayoutMetrics, sturdy: LayoutMetrics) -> dict:
     """Check which metrics beat sturdy. Returns dict of metric -> (value, sturdy_value, beats)."""
     comparisons = {}
-    # Lower is better
-    for metric in ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout"]:
+    for metric in LOWER_IS_BETTER:
         val = getattr(m, metric)
         sval = getattr(sturdy, metric)
         comparisons[metric] = (val, sval, val < sval)
-    # Higher is better
-    for metric in ["inroll", "outroll", "alternate"]:
+    for metric in HIGHER_IS_BETTER:
         val = getattr(m, metric)
         sval = getattr(sturdy, metric)
         comparisons[metric] = (val, sval, val > sval)
     return comparisons
 
 
+
 def compute_fitness(m: LayoutMetrics, sturdy: LayoutMetrics) -> float:
     """
-    Fitness score: how close to beating sturdy on all metrics.
-    0 = beats sturdy on everything. Positive = worse.
-    Each metric contributes a penalty if it doesn't beat sturdy.
+    Fitness score (lower = better):
+    - If not all 9 wins: 1000 + sum of miss penalties (ensures any all-win beats any non-all-win)
+    - If all 9 wins: negative total margin (more negative = bigger margin = better)
+
+    Margin for each metric = improvement ratio:
+      lower-is-better:  (sturdy - ours) / sturdy   (positive when we're better)
+      higher-is-better: (ours - sturdy) / sturdy    (positive when we're better)
     """
-    penalty = 0.0
     comps = beats_sturdy(m, sturdy)
-    for metric, (val, sval, beats) in comps.items():
-        if not beats:
-            if metric in ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout"]:
-                # Lower is better — penalty = how much worse we are (as ratio)
+    wins = sum(1 for _, _, b in comps.values() if b)
+    total = len(comps)
+
+    if wins < total:
+        # Phase 1: penalty for missing metrics
+        penalty = 1000.0
+        for metric, (val, sval, beats) in comps.items():
+            if not beats:
                 if sval > 0:
-                    penalty += (val - sval) / sval
-                else:
-                    penalty += val
-            else:
-                # Higher is better — penalty = how much worse we are (as ratio)
-                if sval > 0:
-                    penalty += (sval - val) / sval
+                    if metric in LOWER_IS_BETTER:
+                        penalty += (val - sval) / sval
+                    else:
+                        penalty += (sval - val) / sval
                 else:
                     penalty += 1.0
-    return penalty
+        return penalty
+
+    # Phase 2: all 9 wins — maximize margin
+    # Return negative margin so lower fitness = bigger margin
+    total_margin = 0.0
+    for metric, (val, sval, beats) in comps.items():
+        if sval > 0:
+            if metric in LOWER_IS_BETTER:
+                total_margin += (sval - val) / sval  # positive = we're lower = better
+            else:
+                total_margin += (val - sval) / sval  # positive = we're higher = better
+    return -total_margin  # negate so lower = better
+
+
+def compute_margin_details(m: LayoutMetrics, sturdy: LayoutMetrics) -> list:
+    """Return list of (metric, our_val, sturdy_val, margin_pct, beats) for display."""
+    details = []
+    comps = beats_sturdy(m, sturdy)
+    for metric in ALL_METRICS:
+        val, sval, beats = comps[metric]
+        if sval > 0:
+            if metric in LOWER_IS_BETTER:
+                margin_pct = (sval - val) / sval * 100  # positive = better
+            else:
+                margin_pct = (val - sval) / sval * 100  # positive = better
+        else:
+            margin_pct = 0.0
+        details.append((metric, val, sval, margin_pct, beats))
+    return details
 
 
 def perturb_weights(base: WeightSet, temperature: float = 0.3) -> WeightSet:
@@ -364,7 +391,6 @@ def perturb_weights(base: WeightSet, temperature: float = 0.3) -> WeightSet:
     ws = WeightSet(**asdict(base))
     for name in TUNABLE:
         val = getattr(ws, name)
-        # Perturbation proportional to current value
         delta = max(1, int(val * temperature))
         new_val = val + random.randint(-delta, delta)
         new_val = max(0, new_val)
@@ -378,18 +404,13 @@ def cleanup_dof_files(trial: int):
         f.unlink()
 
 
-def format_comparison(m: LayoutMetrics, sturdy: LayoutMetrics) -> str:
-    """Format a comparison table row."""
-    comps = beats_sturdy(m, sturdy)
-    wins = sum(1 for _, _, b in comps.values() if b)
-    total = len(comps)
-
-    parts = [f"  {m.name}: {wins}/{total} metrics beat sturdy"]
-    for metric, (val, sval, beats) in comps.items():
-        marker = "✓" if beats else "✗"
-        parts.append(f"    {marker} {metric}: {val:.3f} vs {sval:.3f}")
-    return "\n".join(parts)
-
+def save_best_layout(trial: int, rank: int, name: str):
+    """Copy the best layout .dof to the best directory for safekeeping."""
+    os.makedirs(BEST_DOF_DIR, exist_ok=True)
+    src = os.path.join(LAYOUT_DIR, f"{name}.dof")
+    dst = os.path.join(BEST_DOF_DIR, f"{name}.dof")
+    if os.path.exists(src):
+        shutil.copy(src, dst)
 
 
 def save_state(state: dict):
@@ -407,37 +428,36 @@ def load_state() -> dict:
 
 
 def log_result(trial: int, ws: WeightSet, metrics: LayoutMetrics, fitness: float,
-               wins: int, total: int):
+               wins: int, total: int, margin: float):
     """Append a result row to the CSV log."""
     file_exists = os.path.exists(LOG_FILE)
     with open(LOG_FILE, "a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
             header = (
-                ["trial", "fitness", "wins", "total", "layout_name", "magic_rules"]
-                + ["sfbs", "sfs", "stretches", "inroll", "outroll", "alternate",
-                   "redirect", "onehandin", "onehandout"]
+                ["trial", "fitness", "margin", "wins", "total",
+                 "layout_name", "magic_rules"]
+                + ALL_METRICS
                 + [f"w_{name}" for name in TUNABLE]
             )
             writer.writerow(header)
         row = (
-            [trial, f"{fitness:.4f}", wins, total, metrics.name, metrics.magic_rules]
-            + [f"{metrics.sfbs:.3f}", f"{metrics.sfs:.3f}", f"{metrics.stretches:.3f}",
-               f"{metrics.inroll:.3f}", f"{metrics.outroll:.3f}", f"{metrics.alternate:.3f}",
-               f"{metrics.redirect:.3f}", f"{metrics.onehandin:.3f}", f"{metrics.onehandout:.3f}"]
+            [trial, f"{fitness:.4f}", f"{margin:.4f}", wins, total,
+             metrics.name, metrics.magic_rules]
+            + [f"{getattr(metrics, m):.3f}" for m in ALL_METRICS]
             + [getattr(ws, name) for name in TUNABLE]
         )
         writer.writerow(row)
 
 
+
 def main():
     global STURDY_METRICS
 
-    # Backup config
     shutil.copy(CONFIG, CONFIG_BAK)
 
     print("=" * 70)
-    print("GOAL SEEK: Find magic layout that beats sturdy on every metric")
+    print("GOAL SEEK: Beat sturdy on all metrics, maximize margin")
     print("=" * 70)
     print(f"Gen time per trial: {GEN_TIME}s")
     print(f"Top layouts per trial: {TOP_N}")
@@ -455,7 +475,9 @@ def main():
     print("Build complete.")
     print()
 
-    # Measure sturdy baseline
+    # Measure sturdy baseline (use fixed weights for consistent measurement)
+    # We need sturdy measured with the SAME weights each time for fair comparison.
+    # Use the trial weights — sturdy's stats (sfbs%, inroll%, etc.) are weight-independent.
     print("Measuring sturdy baseline...")
     STURDY_METRICS = measure_sturdy()
     print(f"  SFBs:      {STURDY_METRICS.sfbs:.3f}%")
@@ -472,35 +494,41 @@ def main():
     # Load or initialize state
     state = load_state()
     if state:
-        print(f"Resuming from trial {state['trial']} (best fitness: {state['best_fitness']:.4f})")
+        print(f"Resuming from trial {state['trial']}")
         best_weights = WeightSet(**state["best_weights"])
         best_fitness = state["best_fitness"]
         best_wins = state["best_wins"]
+        best_margin = state.get("best_margin", 0.0)
         start_trial = state["trial"] + 1
         temperature = state.get("temperature", 0.3)
+        best_layout_name = state.get("best_layout_name", "")
+        print(f"  Best: {best_wins}/9 wins, fitness={best_fitness:.4f}, margin={best_margin:.2f}%")
     else:
-        best_weights = WeightSet()  # defaults
+        best_weights = WeightSet()  # seeded from t12 victory
         best_fitness = float("inf")
         best_wins = 0
+        best_margin = 0.0
         start_trial = 1
-        temperature = 0.5
+        temperature = 0.3  # start smaller since we're near a good region
+        best_layout_name = ""
 
     print(f"Starting temperature: {temperature:.2f}")
     print()
 
     try:
         for trial in range(start_trial, 10000):
+            phase = "MAXIMIZE" if best_wins == 9 else "FIND WINS"
             print(f"{'=' * 70}")
-            print(f"TRIAL {trial} | best so far: {best_wins}/9 wins, fitness={best_fitness:.4f}")
+            print(f"TRIAL {trial} [{phase}] | best: {best_wins}/9, "
+                  f"margin={best_margin:.1f}%, fitness={best_fitness:.4f}")
             print(f"{'=' * 70}")
 
             # Generate new weights
-            if trial == 1:
+            if trial == start_trial and not state:
                 ws = best_weights
             else:
                 ws = perturb_weights(best_weights, temperature)
 
-            # Print weights being tested
             print(f"Weights: {', '.join(f'{n}={getattr(ws, n)}' for n in TUNABLE)}")
 
             # Write config and run gen
@@ -530,10 +558,11 @@ def main():
 
             print(f"  Parsed {len(parsed)} layouts")
 
-            # Create .dof files and analyze each
+            # Analyze each layout, pick the best
             trial_best_fitness = float("inf")
             trial_best_metrics = None
             trial_best_name = None
+            trial_best_margin = 0.0
 
             for rank, score_str, lines, magic_str in parsed:
                 dof_name = gen_layout_to_dof(rank, lines, magic_str, trial)
@@ -547,46 +576,48 @@ def main():
                 wins = sum(1 for _, _, b in comps.values() if b)
                 total = len(comps)
 
-                print(f"\n  #{rank} ({score_str}): {wins}/{total} wins, fitness={fitness:.4f}")
-                for metric, (val, sval, beats) in comps.items():
-                    marker = "✓" if beats else "✗"
-                    print(f"    {marker} {metric}: {val:.3f} vs {sval:.3f}")
+                # Compute margin details
+                details = compute_margin_details(metrics, STURDY_METRICS)
+                total_margin_pct = sum(d[3] for d in details)
 
-                log_result(trial, ws, metrics, fitness, wins, total)
+                print(f"\n  #{rank} ({score_str}): {wins}/{total} wins, "
+                      f"margin={total_margin_pct:+.1f}%, fitness={fitness:.4f}")
+                for metric, val, sval, margin_pct, beats in details:
+                    marker = "✓" if beats else "✗"
+                    print(f"    {marker} {metric:12s}: {val:7.3f} vs {sval:7.3f}  "
+                          f"({margin_pct:+.1f}%)")
+
+                log_result(trial, ws, metrics, fitness, wins, total, total_margin_pct)
 
                 if fitness < trial_best_fitness:
                     trial_best_fitness = fitness
                     trial_best_metrics = metrics
                     trial_best_name = dof_name
+                    trial_best_margin = total_margin_pct
 
-                # Check for victory!
-                if wins == total:
-                    print()
-                    print("!" * 70)
-                    print(f"  VICTORY! {dof_name} beats sturdy on ALL {total} metrics!")
-                    print("!" * 70)
-                    print(f"\n  Weights: {', '.join(f'{n}={getattr(ws, n)}' for n in TUNABLE)}")
-                    print(f"\n  Layout file: {LAYOUT_DIR}/{dof_name}.dof")
-                    # Restore config but keep the winning .dof
-                    shutil.copy(CONFIG_BAK, CONFIG)
-                    os.remove(CONFIG_BAK)
-                    return
-
-            # Update best if this trial improved
+            # Update best if improved
             if trial_best_fitness < best_fitness:
                 best_fitness = trial_best_fitness
                 best_weights = ws
                 comps = beats_sturdy(trial_best_metrics, STURDY_METRICS)
                 best_wins = sum(1 for _, _, b in comps.values() if b)
-                print(f"\n  ★ New best! {best_wins}/9 wins, fitness={best_fitness:.4f}")
-                print(f"    Layout: {trial_best_name}")
-                # Keep the best .dof, clean others
-                temperature = max(0.1, temperature * 0.95)  # cool down on improvement
-            else:
-                print(f"\n  No improvement (trial fitness={trial_best_fitness:.4f})")
-                temperature = min(0.8, temperature * 1.02)  # heat up on stagnation
+                best_margin = trial_best_margin
+                best_layout_name = trial_best_name
 
-            # Clean up trial .dof files (except if it's the best ever)
+                print(f"\n  ★ New best! {best_wins}/9 wins, margin={best_margin:+.1f}%, "
+                      f"fitness={best_fitness:.4f}")
+                print(f"    Layout: {trial_best_name}")
+
+                # Save the best layout permanently
+                save_best_layout(trial, 0, trial_best_name)
+
+                temperature = max(0.1, temperature * 0.95)
+            else:
+                print(f"\n  No improvement (fitness={trial_best_fitness:.4f} vs "
+                      f"best={best_fitness:.4f})")
+                temperature = min(0.6, temperature * 1.02)
+
+            # Clean up trial .dof files
             cleanup_dof_files(trial)
 
             # Save state
@@ -594,8 +625,10 @@ def main():
                 "trial": trial,
                 "best_fitness": best_fitness,
                 "best_wins": best_wins,
+                "best_margin": best_margin,
                 "best_weights": asdict(best_weights),
                 "temperature": temperature,
+                "best_layout_name": best_layout_name,
             })
 
             print()
@@ -604,15 +637,22 @@ def main():
         print("\n\nInterrupted by user.")
 
     finally:
-        # Restore config
         if os.path.exists(CONFIG_BAK):
             shutil.copy(CONFIG_BAK, CONFIG)
             os.remove(CONFIG_BAK)
             print("Config restored.")
 
-        print(f"\nBest result: {best_wins}/9 wins, fitness={best_fitness:.4f}")
+        print(f"\n{'=' * 70}")
+        print(f"FINAL RESULTS")
+        print(f"{'=' * 70}")
+        print(f"Best: {best_wins}/9 wins, margin={best_margin:+.1f}%")
+        print(f"Best layout: {best_layout_name}")
         print(f"Best weights: {', '.join(f'{n}={getattr(best_weights, n)}' for n in TUNABLE)}")
         print(f"Results logged to {LOG_FILE}")
+        if best_layout_name:
+            best_path = os.path.join(BEST_DOF_DIR, f"{best_layout_name}.dof")
+            if os.path.exists(best_path):
+                print(f"Best layout saved to: {best_path}")
 
 
 if __name__ == "__main__":
