@@ -338,9 +338,13 @@ def perturb_weights(base: WeightSet, temperature: float = 0.3) -> WeightSet:
     return ws
 
 
-def cleanup_dof_files(trial: int):
+def cleanup_dof_files(trial: int, keep: set = None):
+    """Remove temporary .dof files from a trial, except those in keep set."""
+    if keep is None:
+        keep = set()
     for f in Path(LAYOUT_DIR).glob(f"goalseed-t{trial}-*.dof"):
-        f.unlink()
+        if f.name not in keep:
+            f.unlink()
 
 
 def save_best_layout(name: str):
@@ -349,6 +353,75 @@ def save_best_layout(name: str):
     dst = os.path.join(BEST_DOF_DIR, f"{name}.dof")
     if os.path.exists(src):
         shutil.copy(src, dst)
+
+
+def next_oxey_version() -> int:
+    """Find the next available oxey-vN.dof version number."""
+    existing = list(Path(LAYOUT_DIR).glob("oxey-v*.dof"))
+    max_v = 0
+    for f in existing:
+        m = re.match(r"oxey-v(\d+)\.dof", f.name)
+        if m:
+            max_v = max(max_v, int(m.group(1)))
+    return max_v + 1
+
+
+def print_layout_dof(dof_path: str):
+    """Print a .dof file's layout rows and magic rules."""
+    if not os.path.exists(dof_path):
+        print(f"    (file not found: {dof_path})")
+        return
+    with open(dof_path) as f:
+        dof = json.load(f)
+    for row in dof.get("layers", {}).get("main", []):
+        print(f"    {row}")
+    rules = dof.get("magic", {}).get("mag", {})
+    if rules:
+        rule_strs = [f"{k}→{v}" for k, v in sorted(rules.items())]
+        print(f"    magic: {' '.join(rule_strs)}")
+
+
+class TopN:
+    """Track the top N results across all trials."""
+
+    def __init__(self, n: int = 3):
+        self.n = n
+        self.entries = []  # list of (fitness, name, metrics, weights_dict)
+
+    def maybe_add(self, fitness: float, name: str, metrics: LayoutMetrics, ws: WeightSet):
+        """Add if it's in the top N. Returns True if added."""
+        entry = (fitness, name, metrics, asdict(ws))
+        # Don't add duplicates by name
+        if any(e[1] == name for e in self.entries):
+            return False
+        self.entries.append(entry)
+        self.entries.sort(key=lambda e: e[0])
+        if len(self.entries) > self.n:
+            # Remove the worst and delete its .dof from goalseed-best
+            removed = self.entries.pop()
+            removed_dof = os.path.join(BEST_DOF_DIR, f"{removed[1]}.dof")
+            if os.path.exists(removed_dof):
+                os.remove(removed_dof)
+            return removed[1] != name  # True if we kept the new one
+        return True
+
+    def best_fitness(self) -> float:
+        if self.entries:
+            return self.entries[0][0]
+        return float("inf")
+
+    def to_json(self) -> list:
+        return [
+            {"fitness": f, "name": n, "weights": w}
+            for f, n, _, w in self.entries
+        ]
+
+    def from_json(self, data: list):
+        # Restore from saved state (metrics not saved, will be None)
+        self.entries = [
+            (e["fitness"], e["name"], None, e["weights"])
+            for e in data
+        ]
 
 
 def save_state(state: dict):
@@ -447,12 +520,15 @@ def main():
 
     # Load or init state
     state = load_state()
+    top3 = TopN(3)
     if state:
         best_weights = WeightSet(**state["best_weights"])
         best_fitness = state["best_fitness"]
         start_trial = state["trial"] + 1
         temperature = state.get("temperature", 0.1)
         best_layout_name = state.get("best_layout_name", "")
+        if "top3" in state:
+            top3.from_json(state["top3"])
         print(f"Resuming from trial {start_trial}, best fitness={best_fitness:.4f} "
               f"[{tier_label(best_fitness)}]")
     else:
@@ -540,11 +616,14 @@ def main():
                     trial_best_fitness = fitness
                     trial_best_name = dof_name
 
+                # Track global top 3
+                if top3.maybe_add(fitness, dof_name, metrics, ws):
+                    save_best_layout(dof_name)
+
             if trial_best_fitness < best_fitness:
                 best_fitness = trial_best_fitness
                 best_weights = ws
                 best_layout_name = trial_best_name
-                save_best_layout(trial_best_name)
                 print(f"\n  ★ New best! fitness={best_fitness:.4f} [{tier_label(best_fitness)}]")
                 print(f"    Layout: {trial_best_name}")
                 temperature = max(0.05, temperature * 0.95)
@@ -552,7 +631,10 @@ def main():
                 print(f"\n  No improvement ({trial_best_fitness:.4f} vs {best_fitness:.4f})")
                 temperature = min(0.5, temperature * 1.02)
 
-            cleanup_dof_files(trial)
+            # Keep .dof files that are in the top 3
+            top3_names = {e[1] for e in top3.entries}
+            keep_files = {f"{n}.dof" for n in top3_names}
+            cleanup_dof_files(trial, keep=keep_files)
 
             save_state({
                 "trial": trial,
@@ -560,6 +642,7 @@ def main():
                 "best_weights": asdict(best_weights),
                 "temperature": temperature,
                 "best_layout_name": best_layout_name,
+                "top3": top3.to_json(),
             })
             print()
 
@@ -573,26 +656,36 @@ def main():
             print("Config restored.")
 
         print(f"\n{'=' * 70}")
-        print(f"FINAL: fitness={best_fitness:.4f} [{tier_label(best_fitness)}]")
-        print(f"Weights: {', '.join(f'{n}={getattr(best_weights, n)}' for n in TUNABLE)}")
-        print(f"Results: {LOG_FILE}")
+        print(f"TOP 3 RESULTS")
+        print(f"{'=' * 70}")
 
-        # Print best layout
-        if best_layout_name:
-            best_dof = os.path.join(BEST_DOF_DIR, f"{best_layout_name}.dof")
-            if os.path.exists(best_dof):
-                print(f"\nBest layout: {best_dof}")
-                with open(best_dof) as f:
+        next_v = next_oxey_version()
+        saved_oxey = []
+
+        for i, (fitness, name, metrics, ws_dict) in enumerate(top3.entries):
+            oxey_name = f"oxey-v{next_v + i}"
+            src_dof = os.path.join(BEST_DOF_DIR, f"{name}.dof")
+            dst_dof = os.path.join(LAYOUT_DIR, f"{oxey_name}.dof")
+
+            print(f"\n  #{i+1}: fitness={fitness:.4f} [{tier_label(fitness)}]")
+            print(f"    Weights: {', '.join(f'{n}={ws_dict[n]}' for n in TUNABLE)}")
+
+            # Copy to oxey-v*.dof with updated name
+            if os.path.exists(src_dof):
+                with open(src_dof) as f:
                     dof = json.load(f)
-                print()
-                for row in dof.get("layers", {}).get("main", []):
-                    print(f"  {row}")
-                rules = dof.get("magic", {}).get("mag", {})
-                if rules:
-                    rule_strs = [f"{k}→{v}" for k, v in sorted(rules.items())]
-                    print(f"  magic: {' '.join(rule_strs)}")
+                dof["name"] = oxey_name
+                with open(dst_dof, "w") as f:
+                    json.dump(dof, f, indent=4)
+                saved_oxey.append(dst_dof)
+                print(f"    Saved as: {dst_dof}")
+                print_layout_dof(dst_dof)
             else:
-                print(f"\nBest layout not found. Check {BEST_DOF_DIR}/ for saved layouts.")
+                print(f"    (.dof not found at {src_dof})")
+
+        if saved_oxey:
+            print(f"\nSaved {len(saved_oxey)} layouts: {', '.join(saved_oxey)}")
+        print(f"Results: {LOG_FILE}")
 
 
 if __name__ == "__main__":
