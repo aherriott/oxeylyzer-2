@@ -163,7 +163,15 @@ impl Layout {
         let keyboard = self.keyboard.clone();
 
         let mut keys = self.keys.clone();
-        shuffle_pins(&mut keys, pins);
+        // Auto-pin positions with REPLACEMENT_CHAR (unused ~ positions) so they don't
+        // get shuffled into main rows
+        let mut all_pins: Vec<usize> = pins.to_vec();
+        for (i, &c) in self.keys.iter().enumerate() {
+            if c == REPLACEMENT_CHAR && !all_pins.contains(&i) {
+                all_pins.push(i);
+            }
+        }
+        shuffle_pins(&mut keys, &all_pins);
 
         // Randomize magic rules: for each magic key, assign random leader→output pairs
         let non_magic_keys: Vec<char> = keys.iter()
@@ -191,6 +199,77 @@ impl Layout {
             shape,
             magic,
         }
+    }
+
+    /// Save layout as a .dof JSON file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn save_dof<P: AsRef<std::path::Path>>(&self, path: P, name: &str) -> Result<()> {
+        use serde_json::{json, Map, Value};
+
+        let shape = self.shape.inner();
+        let mut key_iter = self.keys.iter();
+        let mut rows: Vec<String> = Vec::new();
+
+        for &row_len in shape.iter() {
+            let mut row_chars: Vec<String> = Vec::new();
+            for _ in 0..row_len {
+                if let Some(&c) = key_iter.next() {
+                    let s = if c == REPLACEMENT_CHAR {
+                        "~".to_string()
+                    } else if MAGIC_CHARS.contains(c) {
+                        "&mag".to_string()
+                    } else if c == SPACE_CHAR || c == ' ' {
+                        "spc".to_string()
+                    } else if c == SHIFT_CHAR {
+                        "shift".to_string()
+                    } else {
+                        c.to_string()
+                    };
+                    row_chars.push(s);
+                }
+            }
+            // Format row with gap in the middle (5 + 5 for 10-key rows)
+            if row_chars.len() >= 10 {
+                let left = row_chars[..5].join(" ");
+                let right = row_chars[5..].join(" ");
+                rows.push(format!("{}  {}", left, right));
+            } else if row_chars.len() > 3 {
+                let mid = row_chars.len() / 2;
+                let left = row_chars[..mid].join(" ");
+                let right = row_chars[mid..].join(" ");
+                rows.push(format!("{}  {}", left, right));
+            } else {
+                rows.push(row_chars.join(" "));
+            }
+        }
+
+        // Build magic rules JSON
+        let mut magic_obj = Map::new();
+        for (_magic_char, magic_key) in &self.magic {
+            let label = "mag".to_string(); // .dof files use "mag", not the internal char
+            let mut rules_map = Map::new();
+            for (leader, output) in magic_key.rules() {
+                // Map special chars back to .dof format
+                let leader_str = if *leader == SPACE_CHAR.to_string() { " ".to_string() } else { leader.to_string() };
+                let output_str = if *output == SPACE_CHAR.to_string() { " ".to_string() } else { output.to_string() };
+                rules_map.insert(leader_str, Value::String(output_str));
+            }
+            magic_obj.insert(label, Value::Object(rules_map));
+        }
+
+        let dof = json!({
+            "name": name,
+            "board": "colstag",
+            "layers": {
+                "main": rows
+            },
+            "fingering": "traditional",
+            "magic": magic_obj
+        });
+
+        let json_str = serde_json::to_string_pretty(&dof)?;
+        std::fs::write(path, json_str)?;
+        Ok(())
     }
 }
 

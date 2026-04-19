@@ -33,7 +33,8 @@ GEN_TIME = 120  # seconds per gen run
 TOP_N = 5       # parse top N from gen
 LOG_FILE = "goal_seek_results.csv"
 STATE_FILE = "goal_seek_state.json"
-BEST_DOF_DIR = "./layouts/goalseed-best"
+SAVE_DIR = "./layouts/goalseed-gen"  # where gen --save writes .dof files
+BEST_DOF_DIR = "./layouts/goalseed-best"  # permanent storage for top 3
 
 LOWER_IS_BETTER = ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout"]
 HIGHER_IS_BETTER = ["inroll", "outroll", "alternate"]
@@ -185,35 +186,63 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
     name = f"goalseed-t{trial}-r{rank}"
     dof_path = os.path.join(LAYOUT_DIR, f"{name}.dof")
 
-    rows = []
-    thumb_key = None
+    # Special char mapping from gen output to .dof format
+    CHAR_MAP = {
+        "◊": "&mag",
+        "␣": "spc",
+        "⇑": "shift",
+        "\ufffd": "~",   # replacement char = unused position
+    }
+
+    # Parse all rows from gen output
+    # Colstag: 3 main rows of 10 keys + 1 thumb row of 7 keys
+    # The gen output also has a single-char line for the name (empty) which we skip
+    all_rows = []
     for line in lines:
         chars = line.strip().split()
-        if len(chars) <= 2:
-            thumb_key = chars[0]
+        if not chars:
             continue
-        row_chars = []
-        for c in chars:
-            if c == "◊":
-                row_chars.append("&mag")
-            elif c == "␣":
-                row_chars.append("spc")
-            else:
-                row_chars.append(c)
-        rows.append(row_chars)
+        mapped = [CHAR_MAP.get(c, c) for c in chars]
+        all_rows.append(mapped)
 
-    if len(rows) < 3:
+    # Separate main rows (10 chars) from thumb row (< 10 chars, typically 7)
+    main_rows_raw = []
+    thumb_row_raw = None
+    for row in all_rows:
+        if len(row) >= 10:
+            main_rows_raw.append(row)
+        elif len(row) >= 3:
+            # Thumb row: has ~ for unused positions
+            thumb_row_raw = row
+        # Single char lines (len 1-2) are standalone thumb key indicators
+        # from older gen format — treat as thumb key
+        elif len(row) <= 2:
+            thumb_row_raw = row
+
+    if len(main_rows_raw) < 3:
         return None
 
+    # Build the 3 main rows
     main_rows = []
-    for row in rows[:3]:
-        if len(row) >= 10:
-            main_rows.append(f"{' '.join(row[:5])}  {' '.join(row[5:10])}")
-        else:
-            main_rows.append(" ".join(row))
+    for row in main_rows_raw[:3]:
+        left = " ".join(row[:5])
+        right = " ".join(row[5:10])
+        main_rows.append(f"{left}  {right}")
 
-    thumb_key_dof = "spc" if (thumb_key == "␣" or not thumb_key) else thumb_key
-    thumb_row = f"  ~ {thumb_key_dof} ~  ~ ~ ~     "
+    # Build thumb row
+    if thumb_row_raw and len(thumb_row_raw) >= 3:
+        # Full thumb row from gen output — map directly
+        # Pad to 7 with ~ if needed
+        padded = thumb_row_raw + ["~"] * max(0, 7 - len(thumb_row_raw))
+        # Format: "  left  right" matching colstag thumb layout
+        # colstag thumb: 3 left + 4 right (or similar)
+        thumb_row = " ".join(padded[:3]) + "  " + " ".join(padded[3:7])
+    elif thumb_row_raw and len(thumb_row_raw) <= 2:
+        # Old format: single thumb key
+        thumb_key = CHAR_MAP.get(thumb_row_raw[0], thumb_row_raw[0])
+        thumb_row = f"  ~ {thumb_key} ~  ~ ~ ~     "
+    else:
+        thumb_row = "  ~ spc ~  ~ ~ ~     "
 
     magic_rules = {}
     if magic_str:
@@ -231,12 +260,13 @@ def gen_layout_to_dof(rank: int, lines: list, magic_str: str, trial: int) -> str
         "magic": {"mag": magic_rules}
     }
     with open(dof_path, "w") as f:
-        json.dump(dof, f, indent=4)
+        json.dump(dof, f, indent=4, ensure_ascii=False)
     return name
 
 
 def analyze_layout(name: str) -> LayoutMetrics:
-    output = run_repl(f"a {name}\nq\n", timeout=120)
+    """Run analyze on a layout and return metrics. Reloads config first."""
+    output = run_repl(f"r\na {name}\nq\n", timeout=120)
     metrics = parse_analyze_output(output, name)
     for line in output.split("\n"):
         if line.strip().startswith("magic:"):
@@ -555,37 +585,44 @@ def main():
             print(f"Weights: {', '.join(f'{n}={getattr(ws, n)}' for n in TUNABLE)}")
 
             write_config(ws)
-            print(f"Running gen my-layout -t {GEN_TIME}...")
+            # Clean save dir before gen
+            save_dir = Path(SAVE_DIR)
+            if save_dir.exists():
+                for f in save_dir.glob("*.dof"):
+                    f.unlink()
+            print(f"Running gen my-layout -t {GEN_TIME} --save {SAVE_DIR}...")
             gen_start = time.time()
 
             try:
                 gen_output = run_repl(
-                    f"gen {GEN_LAYOUT} -t {GEN_TIME}\nq\n",
+                    f"gen {GEN_LAYOUT} -t {GEN_TIME} -s {SAVE_DIR}\nq\n",
                     timeout=GEN_TIME + 60,
                 )
             except subprocess.TimeoutExpired:
                 print("  gen timed out, skipping")
-                cleanup_dof_files(trial)
                 continue
 
             print(f"  gen completed in {time.time() - gen_start:.0f}s")
 
-            parsed = parse_gen_output(gen_output)
-            if not parsed:
-                print("  No layouts parsed, skipping")
-                cleanup_dof_files(trial)
+            # Read saved .dof files
+            dof_files = sorted(save_dir.glob("*.dof")) if save_dir.exists() else []
+            if not dof_files:
+                print("  No .dof files saved, skipping")
                 continue
 
-            print(f"  Parsed {len(parsed)} layouts")
+            # Copy .dof files to layouts/ for analysis, take top N
+            layout_names = []
+            for dof_file in dof_files[:TOP_N]:
+                dest = os.path.join(LAYOUT_DIR, dof_file.name)
+                shutil.copy(dof_file, dest)
+                layout_names.append(dof_file.stem)
+
+            print(f"  Saved {len(layout_names)} layouts")
 
             trial_best_fitness = float("inf")
             trial_best_name = None
 
-            for rank, score_str, lines, magic_str in parsed:
-                dof_name = gen_layout_to_dof(rank, lines, magic_str, trial)
-                if dof_name is None:
-                    continue
-
+            for rank, dof_name in enumerate(layout_names, 1):
                 metrics = analyze_layout(dof_name)
                 fitness = compute_fitness(metrics, targets)
 
@@ -593,7 +630,7 @@ def main():
                 g_wins, _ = win_count(metrics, targets["graphite"])
                 c_wins, _ = win_count(metrics, targets["canary"])
 
-                print(f"\n  #{rank} ({score_str}): S={s_wins}/9 G={g_wins}/9 C={c_wins}/9 "
+                print(f"\n  #{rank}: S={s_wins}/9 G={g_wins}/9 C={c_wins}/9 "
                       f"fitness={fitness:.4f} [{tier_label(fitness)}]")
 
                 # Show details for the current bottleneck target
@@ -604,7 +641,6 @@ def main():
                 elif c_wins < 9:
                     print_vs_target(metrics, targets["canary"], "canary")
                 else:
-                    # All 3 beaten — show margins
                     for tname in TARGETS:
                         m_val = total_margin(metrics, targets[tname])
                         w, _ = win_count(metrics, targets[tname])
@@ -616,9 +652,13 @@ def main():
                     trial_best_fitness = fitness
                     trial_best_name = dof_name
 
-                # Track global top 3
+                # Track global top 3 — copy .dof to goalseed-best
                 if top3.maybe_add(fitness, dof_name, metrics, ws):
-                    save_best_layout(dof_name)
+                    os.makedirs(BEST_DOF_DIR, exist_ok=True)
+                    src = os.path.join(LAYOUT_DIR, f"{dof_name}.dof")
+                    dst = os.path.join(BEST_DOF_DIR, f"{dof_name}.dof")
+                    if os.path.exists(src):
+                        shutil.copy(src, dst)
 
             if trial_best_fitness < best_fitness:
                 best_fitness = trial_best_fitness
@@ -633,8 +673,12 @@ def main():
 
             # Keep .dof files that are in the top 3
             top3_names = {e[1] for e in top3.entries}
-            keep_files = {f"{n}.dof" for n in top3_names}
-            cleanup_dof_files(trial, keep=keep_files)
+            # Clean gen .dof files from layouts/ (keep top3)
+            for dof_name in layout_names:
+                if dof_name not in top3_names:
+                    dof_path = os.path.join(LAYOUT_DIR, f"{dof_name}.dof")
+                    if os.path.exists(dof_path):
+                        os.remove(dof_path)
 
             save_state({
                 "trial": trial,

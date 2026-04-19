@@ -157,7 +157,7 @@ impl Repl {
         }
     }
 
-    fn generate(&mut self, name: &str, pin_chars: Option<String>, time_secs: Option<usize>, top_n: Option<usize>) -> Result<()> {
+    fn generate(&mut self, name: &str, pin_chars: Option<String>, time_secs: Option<usize>, top_n: Option<usize>, save_dir: Option<String>) -> Result<()> {
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
         use rayon::prelude::*;
         use std::sync::Mutex;
@@ -170,6 +170,15 @@ impl Repl {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
         };
+
+        // Auto-pin positions with REPLACEMENT_CHAR (unused ~ positions) so the
+        // optimizer never swaps them into main rows
+        let mut all_pins = pins.clone();
+        for (i, &c) in layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR && !all_pins.contains(&i) {
+                all_pins.push(i);
+            }
+        }
 
         let policy = RolloutPolicy { steps: vec![OptStep::Greedy] };
 
@@ -202,11 +211,11 @@ impl Repl {
                     if start.elapsed() >= limit { break; }
                 }
 
-                let random_layout = layout.random_with_pins(&pins);
+                let random_layout = layout.random_with_pins(&all_pins);
                 let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
                     &random_layout, data.clone(), &weights, &scale_factors,
                 );
-                cache.optimize(&policy, &pins);
+                cache.optimize(&policy, &all_pins);
                 let score = cache.score();
                 let count = total.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -251,6 +260,19 @@ impl Repl {
             let mut l = layout.clone();
             l.name = "".into();
             println!("#{}, score: {}{}", i + 1, fmt_num(*score as f64), l);
+        }
+
+        // Save top layouts as .dof files if --save was specified
+        if let Some(ref dir) = save_dir {
+            std::fs::create_dir_all(dir).ok();
+            for (i, (_score, layout)) in list.iter().enumerate() {
+                let dof_name = format!("gen-{}", i + 1);
+                let path = format!("{}/{}.dof", dir, dof_name);
+                match layout.save_dof(&path, &dof_name) {
+                    Ok(()) => println!("Saved: {}", path),
+                    Err(e) => eprintln!("Failed to save {}: {}", path, e),
+                }
+            }
         }
 
         Ok(())
@@ -712,6 +734,13 @@ impl Repl {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
         };
+        // Auto-pin REPLACEMENT_CHAR positions
+        let mut all_pins = pins.clone();
+        for (i, &c) in layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR && !all_pins.contains(&i) {
+                all_pins.push(i);
+            }
+        }
 
         let mut steps = Vec::new();
         if sa_iters > 0 {
@@ -737,11 +766,11 @@ impl Repl {
         let mut results: Vec<(Layout, i64)> = Vec::with_capacity(count);
 
         for i in 0..count {
-            let random_layout = layout.random_with_pins(&pins);
+            let random_layout = layout.random_with_pins(&all_pins);
             let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
                 &random_layout, self.a.data().clone(), self.a.weights(), self.a.scale_factors(),
             );
-            let final_score = cache.optimize(&policy, &pins);
+            let final_score = cache.optimize(&policy, &all_pins);
             let final_layout = cache.to_layout();
             results.push((final_layout, final_score));
 
@@ -790,6 +819,13 @@ impl Repl {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
         };
+        // Auto-pin REPLACEMENT_CHAR positions
+        let mut all_pins = pins.clone();
+        for (i, &c) in layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR && !all_pins.contains(&i) {
+                all_pins.push(i);
+            }
+        }
 
         // Build local search policy
         let mut steps = Vec::new();
@@ -839,7 +875,7 @@ impl Repl {
         let mut last_print = std::time::Instant::now();
 
         let da = DualAnnealing::new(self.a.data().clone(), self.a.weights().clone(), self.a.scale_factors().clone());
-        let result = da.search(&layout, &pins, &config, &policy, max_iter, |iter, restarts, current, best| {
+        let result = da.search(&layout, &all_pins, &config, &policy, max_iter, |iter, restarts, current, best| {
             if last_print.elapsed().as_millis() > 500 {
                 last_print = std::time::Instant::now();
                 let elapsed = start.elapsed().as_secs_f64();
@@ -893,7 +929,7 @@ impl Repl {
         match flags.subcommand {
             OxeylyzerCmd::Analyze(a) => self.analyze(&a.name)?,
             OxeylyzerCmd::Rank(_) => self.rank(),
-            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.pins, g.time, g.top)?,
+            OxeylyzerCmd::Gen(g) => self.generate(&g.name, g.pins, g.time, g.top, g.save)?,
             OxeylyzerCmd::Sfbs(s) => self.sfbs(&s.name, s.count)?,
             OxeylyzerCmd::Stretches(s) => self.stretches(&s.name, s.count)?,
             OxeylyzerCmd::Trigrams(t) => self.trigrams(&t.name)?,

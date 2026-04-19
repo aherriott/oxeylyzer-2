@@ -1,0 +1,28 @@
+{
+    "name": "goalseed-t1-r4",
+    "board": "colstag",
+    "layers": {
+        "main": [
+            "x p h w f  \ufffd \ufffd , u q",
+            "s n r d c  ' a i e y",
+            "z b l g m  \ufffd o . \ufffd j",
+            "  ~ spc ~  ~ ~ ~     "
+        ]
+    },
+    "fingering": "traditional",
+    "magic": {
+        "mag": {
+            "d": "g",
+            "e": "u",
+            "g": "u",
+            "h": "r",
+            "l": "u",
+            "m": "f",
+            "o": "a",
+            "q": "u",
+            "r": "l",
+            "u": "e",
+            " ": " "
+        }
+    }
+}

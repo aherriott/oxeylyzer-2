@@ -17,6 +17,8 @@ xflags::xflags! {
             optional -t, --time time_secs: usize
             /// Number of top layouts to track. Default: 10.
             optional -n, --top top_n: usize
+            /// Save top layouts as .dof files in this directory.
+            optional -s, --save save_dir: String
         }
         /// Shows the top n sfbs on a layout.
         cmd sfbs {
