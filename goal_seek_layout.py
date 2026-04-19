@@ -573,9 +573,25 @@ def main():
 
         print(f"\n{'=' * 70}")
         print(f"FINAL: fitness={best_fitness:.4f} [{tier_label(best_fitness)}]")
-        print(f"Layout: {best_layout_name}")
         print(f"Weights: {', '.join(f'{n}={getattr(best_weights, n)}' for n in TUNABLE)}")
         print(f"Results: {LOG_FILE}")
+
+        # Print best layout
+        if best_layout_name:
+            best_dof = os.path.join(BEST_DOF_DIR, f"{best_layout_name}.dof")
+            if os.path.exists(best_dof):
+                print(f"\nBest layout: {best_dof}")
+                with open(best_dof) as f:
+                    dof = json.load(f)
+                print()
+                for row in dof.get("layers", {}).get("main", []):
+                    print(f"  {row}")
+                rules = dof.get("magic", {}).get("mag", {})
+                if rules:
+                    rule_strs = [f"{k}→{v}" for k, v in sorted(rules.items())]
+                    print(f"  magic: {' '.join(rule_strs)}")
+            else:
+                print(f"\nBest layout not found. Check {BEST_DOF_DIR}/ for saved layouts.")
 
 
 if __name__ == "__main__":
