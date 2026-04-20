@@ -3,28 +3,40 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "x p r z k  , q u y c",
-      "s t n h m  a o e i g",
-      "v b l d f  ' . &mag j w"
+      ". m y q z  k p e a c",
+      "i t s n l  d h u o g",
+      ", j v r x  b f &mag ' w"
     ]
   },
   "magic": {
     "mag": {
-      ".": ".",
-      "a": ".",
-      "b": "t",
-      "d": "m",
-      "i": "a",
-      "l": "r",
+      "'": "a",
+      ",": ".",
+      ".": ",",
+      "a": "'",
+      "b": "a",
+      "c": ".",
+      "d": "p",
+      "f": "p",
+      "g": ".",
+      "h": "b",
+      "i": ",",
+      "j": "m",
+      "k": "f",
+      "l": "z",
+      "m": "y",
       "n": "l",
       "o": "a",
-      "p": "t",
-      "q": "q",
+      "p": "h",
+      "q": "l",
       "r": "l",
-      "t": "y",
-      "v": "v",
+      "s": "y",
+      "t": ".",
+      "v": "y",
       "w": "c",
-      "y": "i"
+      "x": ".",
+      "y": "s",
+      "z": "o"
     }
   },
   "name": "gen-4"

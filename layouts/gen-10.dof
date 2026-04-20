@@ -3,34 +3,39 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "' r l z q  k p u m c",
-      "e n s a ,  d h i t g",
-      "&mag x j o .  b f y v w"
+      "c l n , z  b f m a y",
+      "g s r e '  d h t o i",
+      "w q x u &mag  k p v . j"
     ]
   },
   "magic": {
     "mag": {
-      "'": "'",
-      ",": ",",
-      ".": ".",
+      "'": ",",
+      ".": "a",
       "a": ".",
-      "b": "u",
-      "h": "h",
-      "i": "i",
-      "j": "j",
+      "b": "a",
+      "c": "w",
+      "d": "f",
+      "f": "y",
+      "g": "w",
+      "h": "a",
+      "i": "y",
+      "j": "i",
+      "k": "f",
       "l": "s",
+      "m": "t",
+      "n": ".",
       "o": "a",
       "p": "h",
-      "q": "q",
+      "q": "l",
       "r": "n",
       "s": "l",
       "t": "y",
-      "u": "i",
-      "v": "v",
+      "u": "'",
+      "v": "a",
       "w": "c",
-      "x": "x",
-      "y": "i",
-      "z": "a"
+      "x": ".",
+      "y": "i"
     }
   },
   "name": "gen-10"

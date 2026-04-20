@@ -29,8 +29,8 @@ CONFIG = "./analyzer-config.toml"
 CONFIG_BAK = "./analyzer-config.toml.bak"
 LAYOUT_DIR = "./layouts"
 GEN_LAYOUT = "my-layout"
-GEN_TIME = 120  # seconds per gen run
-TOP_N = 5       # parse top N from gen
+GEN_TIME = 1200  # seconds per gen run (20 minutes)
+TOP_N = 10       # parse top N from gen
 LOG_FILE = "goal_seek_results.csv"
 STATE_FILE = "goal_seek_state.json"
 SAVE_DIR = "./layouts/goalseed-gen"  # where gen --save writes .dof files
@@ -682,8 +682,8 @@ def main():
 
             try:
                 gen_output = run_repl(
-                    f"gen {GEN_LAYOUT} -t {GEN_TIME} -s {SAVE_DIR}\nq\n",
-                    timeout=GEN_TIME + 60,
+                    f"gen {GEN_LAYOUT} -t {GEN_TIME} -n {TOP_N} -s {SAVE_DIR}\nq\n",
+                    timeout=GEN_TIME + 120,
                 )
             except subprocess.TimeoutExpired:
                 print("  gen timed out, skipping")
