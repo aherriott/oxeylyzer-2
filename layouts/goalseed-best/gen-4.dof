@@ -3,28 +3,21 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "j h &mag x q  w g r v z",
-      "i d e a .  f p n s t",
-      ", m u o '  b c l y k"
+      "c l y k j  q z u o .",
+      "g r s t m  b n e a i",
+      "w x f d v  p h &mag ' ,"
     ]
   },
   "magic": {
     "mag": {
-      "'": "a",
+      ".": ",",
       "a": "y",
-      "d": "m",
-      "h": "m",
-      "i": ",",
-      "j": "i",
-      "l": "r",
-      "n": "l",
+      "i": "i",
+      "n": "'",
       "o": "a",
-      "q": "q",
+      "p": "h",
       "r": "l",
       "s": "y",
-      "t": "z",
-      "v": "y",
-      "x": "a",
       "y": "s"
     }
   },

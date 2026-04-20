@@ -3,9 +3,9 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "b y o f w  z j m u &mag",
-      "n s a c d  l r t i e",
-      "q v . p g  x h k , '"
+      "c u a q j  b k y r &mag",
+      "g i o t m  d h s n e",
+      "w , . l z  f p v x '"
     ]
   },
   "magic": {
@@ -13,14 +13,16 @@
       "a": ".",
       "b": "o",
       "i": "u",
-      "n": ".",
+      "l": "t",
       "o": "a",
-      "r": "l",
+      "p": "h",
+      "r": "n",
       "s": "y",
       "u": "i",
-      "v": "y",
+      "v": "v",
+      "w": "c",
       "y": "s"
     }
   },
-  "name": "gen-4"
+  "name": "gen-6"
 }

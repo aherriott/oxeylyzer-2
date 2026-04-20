@@ -3,9 +3,9 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      ", u o b q  m g v x j",
-      "i e a n p  c d s r t",
-      ". &mag ' h z  f w y l k"
+      ", u o b z  g m y r k",
+      "i e a n p  d c s l t",
+      ". &mag ' h q  w f v x j"
     ]
   },
   "magic": {
@@ -22,5 +22,5 @@
       "y": "s"
     }
   },
-  "name": "gen-3"
+  "name": "gen-6"
 }

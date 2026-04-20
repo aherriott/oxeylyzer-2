@@ -1,0 +1,23 @@
+{
+    "board": "colstag",
+    "fingering": "traditional",
+    "layers": {
+        "main": [
+            "x l m p c  b h a e ,",
+            "s r t y d  k n o u i",
+            "z j v w g  q f ' &mag ."
+        ]
+    },
+    "magic": {
+        "mag": {
+            ".": ".",
+            "c": "y",
+            "d": "y",
+            "i": "i",
+            "n": "k",
+            "o": "a",
+            "r": "l"
+        }
+    },
+    "name": "oxey-v55"
+}

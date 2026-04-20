@@ -84,8 +84,8 @@ class WeightSet:
 
 TUNABLE = [
     "sfbs", "sfs", "stretches", "inroll", "outroll",
-    "alternate", "redirect", "onehandin", "finger_usage",
-    "magic_rule_penalty",
+    "alternate", "redirect", "onehandin", "onehandout",
+    "finger_usage", "magic_rule_penalty",
 ]
 
 FINGER_WEIGHTS = {
@@ -376,7 +376,7 @@ METRIC_TO_WEIGHT = {
     "stretches": ["stretches"],
     "redirect": ["redirect"],
     "onehandin": ["onehandin"],
-    "onehandout": [],  # no dedicated weight currently
+    "onehandout": ["onehandout"],
     "inroll": ["inroll"],
     "outroll": ["outroll"],
     "alternate": ["alternate"],
