@@ -1,0 +1,96 @@
+{
+  "trial": 18,
+  "best_fitness": 3000.160984242495,
+  "best_weights": {
+    "sfbs": 39,
+    "sfs": 6,
+    "stretches": 23,
+    "sft": 5,
+    "inroll": 3,
+    "outroll": 2,
+    "alternate": 0,
+    "redirect": 16,
+    "onehandin": 1,
+    "onehandout": 0,
+    "full_scissors": 5,
+    "half_scissors": 1,
+    "full_scissors_skip": 2,
+    "half_scissors_skip": 1,
+    "finger_usage": 19,
+    "magic_rule_penalty": 1,
+    "magic_repeat_penalty": 0
+  },
+  "temperature": 0.11250892098042892,
+  "best_layout_name": "gen-9",
+  "top3": [
+    {
+      "fitness": 3000.160984242495,
+      "name": "gen-9",
+      "weights": {
+        "sfbs": 39,
+        "sfs": 6,
+        "stretches": 23,
+        "sft": 5,
+        "inroll": 3,
+        "outroll": 2,
+        "alternate": 0,
+        "redirect": 16,
+        "onehandin": 1,
+        "onehandout": 0,
+        "full_scissors": 5,
+        "half_scissors": 1,
+        "full_scissors_skip": 2,
+        "half_scissors_skip": 1,
+        "finger_usage": 19,
+        "magic_rule_penalty": 1,
+        "magic_repeat_penalty": 0
+      }
+    },
+    {
+      "fitness": 3000.2714695625814,
+      "name": "gen-7",
+      "weights": {
+        "sfbs": 38,
+        "sfs": 9,
+        "stretches": 21,
+        "sft": 5,
+        "inroll": 3,
+        "outroll": 6,
+        "alternate": 0,
+        "redirect": 19,
+        "onehandin": 1,
+        "onehandout": 1,
+        "full_scissors": 5,
+        "half_scissors": 1,
+        "full_scissors_skip": 2,
+        "half_scissors_skip": 1,
+        "finger_usage": 20,
+        "magic_rule_penalty": 0,
+        "magic_repeat_penalty": 0
+      }
+    },
+    {
+      "fitness": 3000.2773642073284,
+      "name": "gen-1",
+      "weights": {
+        "sfbs": 40,
+        "sfs": 9,
+        "stretches": 24,
+        "sft": 5,
+        "inroll": 3,
+        "outroll": 5,
+        "alternate": 3,
+        "redirect": 20,
+        "onehandin": 0,
+        "onehandout": 1,
+        "full_scissors": 5,
+        "half_scissors": 1,
+        "full_scissors_skip": 2,
+        "half_scissors_skip": 1,
+        "finger_usage": 20,
+        "magic_rule_penalty": 1,
+        "magic_repeat_penalty": 0
+      }
+    }
+  ]
+}

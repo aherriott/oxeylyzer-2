@@ -388,7 +388,7 @@ def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetr
     """
     Directed weight adjustment based on which metrics miss the target.
     - Missed metrics: bump their weight up by step_size
-    - Metrics winning by large margin (>30%): reduce weight by step_size (free up budget)
+    - Metrics winning by >50% margin: reduce weight slightly (but keep floor of 1)
     - Add small random noise to all weights to avoid getting stuck
     """
     ws = WeightSet(**asdict(base))
@@ -413,14 +413,14 @@ def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetr
             current = getattr(ws, wname)
 
             if not beats:
-                # Missing this metric — increase weight proportional to how far off
+                # Missing this metric — increase weight proportional to miss
                 miss_ratio = abs(margin_pct)
                 bump = max(1, int(step_size * (1 + miss_ratio)))
                 setattr(ws, wname, current + bump)
-            elif margin_pct > 0.3:
-                # Winning by >30% — reduce weight to free budget for missing metrics
-                reduction = max(1, int(step_size * 0.5))
-                setattr(ws, wname, max(0, current - reduction))
+            elif margin_pct > 0.5:
+                # Winning by >50% — reduce weight slightly (floor at 1 so metric keeps pull)
+                reduction = max(1, int(step_size * 0.3))
+                setattr(ws, wname, max(1, current - reduction))
 
     # Small random noise on all tunable weights (±1) to avoid exact cycles
     for name in TUNABLE:
