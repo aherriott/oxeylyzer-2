@@ -19,9 +19,12 @@ echo "Building..."
 cargo build -p oxeylyzer-repl --release 2>/dev/null || { echo "Build failed"; exit 1; }
 
 parse_score() {
-    # Parse "#1, score: -992B" or similar (handle K/M/B/T suffixes)
+    # Parse score value from lines like "#1, score: -992B" or "Best score: -1.21T"
+    # We need the number AFTER "score:", not the "#1" rank.
     local line="$1"
-    local num=$(echo "$line" | grep -oE '\-?[0-9]+\.?[0-9]*[KMBT]?' | head -1)
+    # Strip everything before "score:" to isolate the score value
+    local after=$(echo "$line" | sed 's/.*score:[[:space:]]*//')
+    local num=$(echo "$after" | grep -oE '\-?[0-9]+\.?[0-9]*[KMBT]?' | head -1)
     # Convert to raw i64
     python3 -c "
 s = '$num'
@@ -61,10 +64,8 @@ for t in "${TIMES[@]}"; do
         # gen (random-restart greedy, runs for t seconds)
         run_method "gen" "$t" "$rep" "gen $LAYOUT -t $t -n 1"
 
-        # sa: use greedy-only (which is what -g 1 does); sa_iters to fit in time
-        # sa runs count variants; we use count=1 for one solution, sa_iters based on time
-        # 1M iters ~= 1s, so sa_iters = t*1000000
-        local sa_iters=$((t * 1000000))
+        # sa: 1M iters ~ 1s, so sa_iters = t * 1M
+        sa_iters=$((t * 1000000))
         run_method "sa" "$t" "$rep" "sa $LAYOUT 1 -s $sa_iters"
 
         # da: dual annealing with time limit
