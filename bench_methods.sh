@@ -26,10 +26,10 @@ cargo build -p oxeylyzer-repl --release 2>/dev/null || { echo "Build failed"; ex
 mkdir -p "$LOG_DIR"
 echo "method,rep,elapsed_secs,best_score" > "$OUT"
 
-total_runs=$((4 * REPS))
+total_runs=$((5 * REPS))
 total_secs=$((DURATION_SECS * total_runs))
 total_hours=$(echo "scale=1; $total_secs / 3600" | bc)
-echo "Running 4 methods x $REPS reps at ${DURATION_SECS}s each = ${total_secs}s (${total_hours}h)"
+echo "Running 5 methods x $REPS reps at ${DURATION_SECS}s each = ${total_secs}s (${total_hours}h)"
 echo ""
 
 # Parse best score from a progress line like "  X layouts | best: -1.23T | ..."
@@ -118,6 +118,9 @@ for rep in $(seq 1 $REPS); do
 
     # mcts: time-limited
     run_and_sample "mcts" "$rep" "mcts $LAYOUT -t $DURATION_SECS"
+
+    # bh: basin hopping — jumps between local optima
+    run_and_sample "bh" "$rep" "bh $LAYOUT -t $DURATION_SECS"
 done
 
 echo ""
@@ -154,7 +157,7 @@ for (method, rep), samples in data.items():
         final = max(samples, key=lambda s: s[0])  # latest sample
         by_method[method].append(final[1])
 
-for method in ['gen', 'sa', 'da', 'mcts']:
+for method in ['gen', 'sa', 'da', 'mcts', 'bh']:
     scores = by_method.get(method, [])
     if scores:
         best = max(scores)
@@ -164,7 +167,7 @@ for method in ['gen', 'sa', 'da', 'mcts']:
 # Show convergence milestones
 print("\\n=== Convergence milestones (best score by time) ===")
 milestones = [60, 300, 900, 1800, 3600]
-for method in ['gen', 'sa', 'da', 'mcts']:
+for method in ['gen', 'sa', 'da', 'mcts', 'bh']:
     print(f"\\n  {method}:")
     for t in milestones:
         scores_at_t = []

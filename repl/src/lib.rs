@@ -824,6 +824,356 @@ impl Repl {
         Ok(())
     }
 
+    /// Measure landscape ruggedness: Pearson correlation between layout score and
+    /// single-swap neighbor scores. Parallelized across threads.
+    /// Low correlation (<0.3) means swap-neighbors are nearly uncorrelated with the
+    /// parent layout — a rugged landscape where hill-climbing is weak.
+    fn basin_hopping_cmd(
+        &mut self,
+        name: &str,
+        perturbation_swaps: Option<usize>,
+        initial_temp: Option<f64>,
+        restart_temp: Option<f64>,
+        cooling_rate: Option<f64>,
+        restart_after_stale: Option<usize>,
+        time_secs: Option<usize>,
+        iterations: Option<usize>,
+        pin_chars: Option<String>,
+    ) -> Result<()> {
+        use oxeylyzer_core::basin_hopping::{BasinHopping, BasinHoppingConfig};
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+
+        let layout = self.layout(name)?.clone();
+        let pins = match pin_chars {
+            Some(chars) => pin_positions(&layout, chars),
+            None => vec![],
+        };
+        // Auto-pin REPLACEMENT_CHAR positions
+        let mut all_pins = pins.clone();
+        for (i, &c) in layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR && !all_pins.contains(&i) {
+                all_pins.push(i);
+            }
+        }
+
+        let policy = RolloutPolicy { steps: vec![OptStep::Greedy] };
+
+        let mut config = BasinHoppingConfig::default();
+        if let Some(s) = perturbation_swaps { config.perturbation_swaps = s; }
+        if let Some(t) = initial_temp { config.initial_temp = t; }
+        if let Some(r) = restart_temp { config.restart_temp = r; }
+        if let Some(c) = cooling_rate { config.cooling_rate = c; }
+        if let Some(s) = restart_after_stale { config.restart_after_stale = s; }
+
+        let max_iter = iterations.map(|i| i as u64).unwrap_or(u64::MAX);
+        let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
+
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
+
+        let time_str = time_limit.map_or(
+            format!("max {} iters", max_iter),
+            |d| format!("{}s", d.as_secs())
+        );
+        println!("Basin hopping: swaps={}, initial_temp={:.0e}, cool={}, stale={}, from {} ({})",
+            config.perturbation_swaps, config.initial_temp, config.cooling_rate,
+            config.restart_after_stale, name, time_str);
+        if time_limit.is_some() {
+            println!("  (Ctrl+C to stop)");
+        }
+
+        let start = std::time::Instant::now();
+        let mut last_print = std::time::Instant::now();
+
+        let bh = BasinHopping::new(
+            self.a.data().clone(),
+            self.a.weights().clone(),
+            self.a.scale_factors().clone(),
+        );
+        let result = bh.search(&layout, &all_pins, &config, &policy, max_iter,
+            |iter, restarts, current, best| {
+                if last_print.elapsed().as_millis() > 500 {
+                    last_print = std::time::Instant::now();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let rate = iter as f64 / elapsed;
+                    eprint!("\r  iter {} | restarts: {} | current: {} | best: {} | {:.1}/s | {:.1}s   ",
+                        fmt_num(iter as f64),
+                        restarts,
+                        fmt_num(current as f64),
+                        fmt_num(best as f64),
+                        rate,
+                        elapsed,
+                    );
+                }
+                if stop.load(Ordering::SeqCst) { return true; }
+                if let Some(limit) = time_limit {
+                    if start.elapsed() >= limit { return true; }
+                }
+                false
+            });
+        eprintln!();
+
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("Basin hopping completed in {:.1}s", elapsed);
+        println!("  {} restarts, {} accepts, {} improvements", result.restarts, result.accepts, result.improves);
+        println!("Best score: {}", fmt_num(result.best_score as f64));
+
+        let mut best = result.best_layout;
+        best.name = "".into();
+        println!("#1, score: {}{}", fmt_num(result.best_score as f64), best);
+
+        Ok(())
+    }
+
+    fn ruggedness_cmd(&mut self, name: &str, num_layouts: Option<usize>, num_neighbors: Option<usize>, use_greedy: bool) -> Result<()> {
+        use rayon::prelude::*;
+        use std::sync::Mutex;
+        use std::sync::atomic::AtomicU64;
+        use oxeylyzer_core::analyze::Neighbor;
+        use oxeylyzer_core::layout::PosPair;
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+
+        // Simple xorshift RNG (no external dep needed)
+        struct Xorshift64 { state: u64 }
+        impl Xorshift64 {
+            fn new(seed: u64) -> Self { Self { state: seed.wrapping_add(1) } }
+            fn next(&mut self) -> u64 {
+                let mut x = self.state;
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                self.state = x;
+                x
+            }
+            fn range(&mut self, n: usize) -> usize {
+                (self.next() as usize) % n
+            }
+        }
+
+        let layout = self.layout(name)?.clone();
+        let num_layouts = num_layouts.unwrap_or(200);
+        let num_neighbors = num_neighbors.unwrap_or(100);
+
+        let policy = RolloutPolicy { steps: vec![OptStep::Greedy] };
+
+        // Auto-pin REPLACEMENT_CHAR positions so we don't "swap" into unused slots
+        let mut all_pins: Vec<usize> = Vec::new();
+        for (i, &c) in layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR {
+                all_pins.push(i);
+            }
+        }
+
+        let total_positions = layout.keys.len();
+        let valid_positions: Vec<usize> = (0..total_positions)
+            .filter(|p| !all_pins.contains(p))
+            .collect();
+
+        let start_type = if use_greedy { "greedy-optimized" } else { "random" };
+        println!("Ruggedness experiment: {} {} layouts × {} neighbors each",
+            num_layouts, start_type, num_neighbors);
+        println!("  valid positions: {}", valid_positions.len());
+        println!("  pinned (~) positions: {}", all_pins.len());
+
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
+
+        let data = self.a.data().clone();
+        let weights = self.a.weights().clone();
+        let scale_factors = self.a.scale_factors().clone();
+
+        let start = std::time::Instant::now();
+        let done = AtomicU64::new(0);
+        let last_print = Arc::new(Mutex::new(std::time::Instant::now()));
+
+        // For each random layout: collect (parent_score, neighbor_scores[])
+        // We parallelize across layouts.
+        let results: Vec<(i64, Vec<i64>)> = (0..num_layouts)
+            .into_par_iter()
+            .filter_map(|seed_i| {
+                if stop.load(Ordering::Relaxed) { return None; }
+
+                let random_layout = layout.random_with_pins(&all_pins);
+                let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                    &random_layout, data.clone(), &weights, &scale_factors,
+                );
+
+                // Optionally run greedy to local optimum before sampling
+                if use_greedy {
+                    cache.optimize(&policy, &all_pins);
+                }
+
+                let parent_score = cache.score();
+
+                // Sample random single-swap neighbors
+                let mut rng = Xorshift64::new(seed_i as u64 + 0xA1B2C3D4);
+                let mut neighbor_scores = Vec::with_capacity(num_neighbors);
+
+                for _ in 0..num_neighbors {
+                    if valid_positions.len() < 2 { break; }
+                    let i = rng.range(valid_positions.len());
+                    let mut j = rng.range(valid_positions.len());
+                    while j == i { j = rng.range(valid_positions.len()); }
+                    let pos_a = valid_positions[i];
+                    let pos_b = valid_positions[j];
+
+                    let score = cache.score_neighbor(Neighbor::KeySwap(PosPair(pos_a, pos_b)));
+                    neighbor_scores.push(score);
+                }
+
+                // Progress
+                let count = done.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Ok(mut lp) = last_print.try_lock() {
+                    if lp.elapsed().as_millis() > 500 {
+                        *lp = std::time::Instant::now();
+                        let elapsed = start.elapsed().as_secs_f64();
+                        eprint!("\r  {}/{} layouts | {:.0}/s | {:.1}s   ",
+                            count, num_layouts,
+                            count as f64 / elapsed,
+                            elapsed,
+                        );
+                    }
+                }
+
+                Some((parent_score, neighbor_scores))
+            })
+            .collect();
+        eprintln!();
+
+        if results.is_empty() {
+            println!("No results collected.");
+            return Ok(());
+        }
+
+        // Compute per-layout Pearson correlation: correlation between parent_score
+        // (constant for a given layout) and neighbor_scores. But that's degenerate —
+        // a constant has 0 variance.
+        //
+        // Better metric: for each layout, compute correlation between (parent_score, neighbor_score)
+        // across the pairs (one parent repeated, each neighbor distinct). This is just
+        // measuring if high-parent-score layouts have high-neighbor-score on average.
+        //
+        // The useful ruggedness metric is different: for each random layout, measure
+        // the normalized stdev of neighbor scores (how much does a single swap change things)
+        // and the correlation between parent and mean neighbor score.
+
+        // Flatten into parent-neighbor pairs for global Pearson
+        let mut all_parent: Vec<f64> = Vec::new();
+        let mut all_neighbor: Vec<f64> = Vec::new();
+        let mut per_layout_mean_neighbor: Vec<f64> = Vec::new();
+        let mut per_layout_std_neighbor: Vec<f64> = Vec::new();
+        let mut per_layout_parent: Vec<f64> = Vec::new();
+
+        for (parent, neighbors) in &results {
+            if neighbors.is_empty() { continue; }
+            let parent_f = *parent as f64;
+            per_layout_parent.push(parent_f);
+            let mean = neighbors.iter().map(|&s| s as f64).sum::<f64>() / neighbors.len() as f64;
+            per_layout_mean_neighbor.push(mean);
+
+            let var = neighbors.iter()
+                .map(|&s| (s as f64 - mean).powi(2))
+                .sum::<f64>() / neighbors.len() as f64;
+            per_layout_std_neighbor.push(var.sqrt());
+
+            for &n in neighbors {
+                all_parent.push(parent_f);
+                all_neighbor.push(n as f64);
+            }
+        }
+
+        fn pearson(xs: &[f64], ys: &[f64]) -> f64 {
+            if xs.len() != ys.len() || xs.is_empty() { return 0.0; }
+            let n = xs.len() as f64;
+            let mean_x = xs.iter().sum::<f64>() / n;
+            let mean_y = ys.iter().sum::<f64>() / n;
+            let mut num = 0.0;
+            let mut den_x = 0.0;
+            let mut den_y = 0.0;
+            for i in 0..xs.len() {
+                let dx = xs[i] - mean_x;
+                let dy = ys[i] - mean_y;
+                num += dx * dy;
+                den_x += dx * dx;
+                den_y += dy * dy;
+            }
+            if den_x == 0.0 || den_y == 0.0 { return 0.0; }
+            num / (den_x * den_y).sqrt()
+        }
+
+        let global_corr = pearson(&all_parent, &all_neighbor);
+        let parent_vs_mean_corr = pearson(&per_layout_parent, &per_layout_mean_neighbor);
+
+        // Fitness-distance correlation style: how much does a 1-swap change the score?
+        // Compute: for each neighbor, |parent - neighbor| / |parent|, then mean/stdev.
+        let mut rel_changes: Vec<f64> = Vec::new();
+        for (parent, neighbors) in &results {
+            let p = *parent as f64;
+            if p == 0.0 { continue; }
+            for &n in neighbors {
+                rel_changes.push(((n as f64 - p) / p.abs()).abs());
+            }
+        }
+        let mean_rel_change = rel_changes.iter().sum::<f64>() / rel_changes.len().max(1) as f64;
+
+        // Fraction of neighbors that are improvements (score > parent, since less negative is better)
+        let mut improve_fracs: Vec<f64> = Vec::new();
+        for (parent, neighbors) in &results {
+            if neighbors.is_empty() { continue; }
+            let improvements = neighbors.iter().filter(|&&s| s > *parent).count();
+            improve_fracs.push(improvements as f64 / neighbors.len() as f64);
+        }
+        let mean_improve_frac = improve_fracs.iter().sum::<f64>() / improve_fracs.len().max(1) as f64;
+
+        // Parent score distribution stats
+        let mean_parent = per_layout_parent.iter().sum::<f64>() / per_layout_parent.len() as f64;
+        let std_parent = (per_layout_parent.iter()
+            .map(|&s| (s - mean_parent).powi(2))
+            .sum::<f64>() / per_layout_parent.len() as f64).sqrt();
+
+        // Per-layout mean neighbor-spread: std(neighbors) / |mean(parent)|
+        let mean_layout_std = per_layout_std_neighbor.iter().sum::<f64>()
+            / per_layout_std_neighbor.len().max(1) as f64;
+        let rel_layout_std = mean_layout_std / mean_parent.abs().max(1.0);
+
+        let elapsed = start.elapsed().as_secs_f64();
+        println!();
+        println!("Ruggedness Results (computed in {:.1}s)", elapsed);
+        println!("  samples: {} layouts × up to {} neighbors", results.len(), num_neighbors);
+        println!();
+        println!("  Parent score distribution:");
+        println!("    mean: {}", fmt_num(mean_parent));
+        println!("    stdev: {} ({:.1}% of |mean|)", fmt_num(std_parent), 100.0 * std_parent / mean_parent.abs().max(1.0));
+        println!();
+        println!("  Neighbor variability (per layout, averaged):");
+        println!("    mean stdev of neighbor scores: {}", fmt_num(mean_layout_std));
+        println!("    relative to |parent|: {:.3}%", 100.0 * rel_layout_std);
+        println!();
+        println!("  Pearson correlations:");
+        println!("    global (parent, neighbor) pairs: {:.3}", global_corr);
+        println!("    parent vs mean(neighbors) across layouts: {:.3}", parent_vs_mean_corr);
+        println!();
+        println!("  Neighbor improvement dynamics:");
+        println!("    mean |Δscore| / |parent|: {:.4} ({:.2}%)", mean_rel_change, mean_rel_change * 100.0);
+        println!("    mean fraction of improving neighbors: {:.3}", mean_improve_frac);
+        println!();
+        println!("Interpretation:");
+        if global_corr > 0.7 {
+            println!("  Smooth landscape (corr > 0.7) — neighbors carry strong fitness info.");
+            println!("  Hill climbing and SA/DA should work well.");
+        } else if global_corr > 0.3 {
+            println!("  Moderately rugged (corr 0.3-0.7) — neighbors have some predictive value.");
+            println!("  Greedy + restart is reasonable; structured moves may help further.");
+        } else {
+            println!("  Very rugged (corr < 0.3) — neighbors are nearly uncorrelated with parent.");
+            println!("  This suggests the current key-swap neighborhood is poorly aligned with the");
+            println!("  fitness landscape. Structured neighborhoods (block moves, vowel shuffling,");
+            println!("  column permutation) may yield a smoother landscape.");
+        }
+
+        Ok(())
+    }
+
     fn dual_annealing_cmd(
         &mut self,
         name: &str,
@@ -976,6 +1326,8 @@ impl Repl {
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
             OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.sa_temp, d.sa_final, d.greedy, d.iterations, d.time, d.temp, d.qv, d.qa, d.restart, d.swaps, d.pin_top, d.pins)?,
             OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.sa_temp, s.sa_final, s.greedy, s.time, s.pins)?,
+            OxeylyzerCmd::Bh(b) => self.basin_hopping_cmd(&b.name, b.swaps, b.temp, b.restart, b.cool, b.stale, b.time, b.iterations, b.pins)?,
+            OxeylyzerCmd::Ruggedness(r) => self.ruggedness_cmd(&r.name, r.layouts, r.neighbors, r.greedy.unwrap_or(false))?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

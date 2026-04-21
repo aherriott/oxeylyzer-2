@@ -143,8 +143,44 @@ xflags::xflags! {
             /// Characters to pin.
             optional -p, --pins pins: String
         }
+        /// Basin hopping: random restart greedy, but perturb+greedy from local optima
+        /// with Metropolis acceptance. Good for smooth landscapes with many diverse
+        /// local optima of varying quality (which layouts have).
+        cmd bh basin basinhopping {
+            /// Name of the layout to use as a basis.
+            required name: String
+            /// Number of random swaps per perturbation. Default: 4
+            optional -k, --swaps perturbation_swaps: usize
+            /// Initial acceptance temperature. Default: 1e11
+            optional --temp initial_temp: f64
+            /// Restart temperature — below this, jump to fresh random. Default: 1e9
+            optional --restart restart_temp: f64
+            /// Cooling rate per iteration. Default: 0.999
+            optional --cool cooling_rate: f64
+            /// Restart after N iterations without improvement. Default: 50
+            optional --stale restart_after_stale: usize
+            /// Time limit in seconds.
+            optional -t, --time time_secs: usize
+            /// Max iterations. Defaults to unlimited.
+            optional -i, --iterations iterations: usize
+            /// Characters to pin.
+            optional -p, --pins pins: String
+        }
         /// Quit the analyzer
         cmd q quit {}
+        /// Measure landscape ruggedness: correlation between layout score and
+        /// single-swap neighbor scores. Low correlation = rugged landscape.
+        cmd ruggedness rugged {
+            /// Template layout to use as basis for random starts.
+            required name: String
+            /// Number of random layouts to sample.
+            optional -n, --layouts num_layouts: usize
+            /// Number of single-swap neighbors per layout.
+            optional -k, --neighbors num_neighbors: usize
+            /// Run greedy on each random start before sampling neighbors.
+            /// Tests ruggedness near local optima (where gen converges).
+            optional -g, --greedy greedy: bool
+        }
     }
 }
 
