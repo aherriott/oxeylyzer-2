@@ -1,0 +1,28 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "z l h w f  q ' d i &mag",
+      "s r n p c  , a t u e",
+      "v x m g b  . o k y j"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "a": ".",
+      "b": "u",
+      "f": "y",
+      "h": "n",
+      "i": "o",
+      "o": "u",
+      "q": "q",
+      "r": "l",
+      "t": "y",
+      "u": "i",
+      "v": "v",
+      "y": "i"
+    }
+  },
+  "name": "gen-4"
+}

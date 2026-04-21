@@ -1,0 +1,32 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "w v r x q  , p a u j",
+      "g s n t m  b h o e i",
+      "c y l d k  ' f &mag z ."
+    ]
+  },
+  "magic": {
+    "mag": {
+      "e": "u",
+      "f": ",",
+      "h": ",",
+      "i": "z",
+      "j": "i",
+      "l": "r",
+      "n": "l",
+      "p": "h",
+      "r": "l",
+      "s": "y",
+      "t": "m",
+      "u": "e",
+      "v": "y",
+      "x": "t",
+      "y": "s",
+      "z": "e"
+    }
+  },
+  "name": "gen-2"
+}

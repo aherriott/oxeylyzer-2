@@ -1,0 +1,30 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "&mag a y z q  j k x , w",
+      "e o s h p  m t r i g",
+      "' . f n b  v d l u c"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "a": ".",
+      "b": "o",
+      "d": "m",
+      "f": "y",
+      "h": "n",
+      "i": "u",
+      "o": "a",
+      "p": "h",
+      "r": "l",
+      "s": "y",
+      "t": "u",
+      "u": "i",
+      "w": "c",
+      "y": "s"
+    }
+  },
+  "name": "gen-7"
+}

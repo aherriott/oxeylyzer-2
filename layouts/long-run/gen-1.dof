@@ -1,0 +1,34 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "l d m z b  q x i ' w",
+      "r t s h n  , a u e g",
+      "j k v p f  . o y &mag c"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "a": ".",
+      "b": "o",
+      "h": "n",
+      "i": "u",
+      "l": "r",
+      "m": "s",
+      "n": "f",
+      "o": "a",
+      "p": "h",
+      "q": "q",
+      "r": "l",
+      "s": "m",
+      "t": "y",
+      "u": "i",
+      "v": "v",
+      "w": "c",
+      "x": "a",
+      "y": "i"
+    }
+  },
+  "name": "gen-1"
+}
