@@ -1,33 +1,48 @@
 #!/bin/bash
-# Benchmark optimization methods: gen (random-restart greedy), sa, da, mcts
-# Runs each method at several time budgets, multiple repetitions, outputs CSV
+# Benchmark optimization methods by running each for a long duration and sampling
+# the best-so-far score at regular intervals. Produces convergence curves.
+#
+# Usage: ./bench_methods.sh [duration_secs]
+#   default duration: 2400s (40 min per run)
+#
+# Total wall-clock time: 3 methods * 3 reps * duration
+#   For 8 hours with 3 reps * 3 methods, duration = 8*3600 / 9 ≈ 3200s (~53 min per run)
 
 set -u
 
-BINARY="./target/release/main"
-LAYOUT="my-layout"
+DURATION_SECS=${1:-2400}  # default: 40 min per run → 8h total for 4 methods × 3 reps
+SAMPLE_INTERVAL=30   # seconds between samples
 REPS=3
 THREADS=3
+LAYOUT="my-layout"
 
-# Time budgets in seconds
-TIMES=(30 120 600)
-
-OUT="bench_methods_results.csv"
-echo "method,time_secs,rep,score,duration_secs" > "$OUT"
+BINARY="./target/release/main"
+OUT="bench_convergence.csv"
+LOG_DIR="bench_logs"
 
 echo "Building..."
 cargo build -p oxeylyzer-repl --release 2>/dev/null || { echo "Build failed"; exit 1; }
 
-parse_score() {
-    # Parse score value from lines like "#1, score: -992B" or "Best score: -1.21T"
-    # We need the number AFTER "score:", not the "#1" rank.
-    local line="$1"
-    # Strip everything before "score:" to isolate the score value
-    local after=$(echo "$line" | sed 's/.*score:[[:space:]]*//')
-    local num=$(echo "$after" | grep -oE '\-?[0-9]+\.?[0-9]*[KMBT]?' | head -1)
-    # Convert to raw i64
-    python3 -c "
-s = '$num'
+mkdir -p "$LOG_DIR"
+echo "method,rep,elapsed_secs,best_score" > "$OUT"
+
+total_runs=$((4 * REPS))
+total_secs=$((DURATION_SECS * total_runs))
+total_hours=$(echo "scale=1; $total_secs / 3600" | bc)
+echo "Running 4 methods x $REPS reps at ${DURATION_SECS}s each = ${total_secs}s (${total_hours}h)"
+echo ""
+
+# Parse best score from a progress line like "  X layouts | best: -1.23T | ..."
+# or "  iter X | ... | best: -1.23T | ..."
+# or "  X rollouts | best: -1.23T | ..."
+extract_score() {
+    # Reads the last progress line from stdin, extracts the number after "best:"
+    # Outputs raw i64 value
+    grep -oE 'best: -?[0-9]+\.?[0-9]*[KMBT]?' | tail -1 | \
+        sed 's/best: //' | \
+        python3 -c "
+import sys
+s = sys.stdin.read().strip()
 if not s: print(0); exit()
 mult = 1
 if s.endswith('T'): mult = 10**12; s = s[:-1]
@@ -38,64 +53,91 @@ print(int(float(s) * mult))
 "
 }
 
-run_method() {
+run_and_sample() {
     local method="$1"
-    local time_secs="$2"
-    local rep="$3"
-    local cmd="$4"
+    local rep="$2"
+    local cmd="$3"
 
-    echo "  [$method t=${time_secs}s rep=$rep]"
-    local start=$(date +%s)
-    local out
-    out=$(printf "$cmd\nq\n" | RAYON_NUM_THREADS=$THREADS $BINARY 2>&1)
-    local end=$(date +%s)
-    local duration=$((end - start))
+    local log_file="$LOG_DIR/${method}_rep${rep}.log"
+    local run_id="${method}_rep${rep}"
+    echo "[$(date '+%H:%M:%S')] Starting $run_id (duration: ${DURATION_SECS}s)"
 
-    # Extract the best score — first line after "score:" or similar
-    local best_line=$(echo "$out" | grep -E "^#1|^Best score:" | head -1)
-    local score=$(parse_score "$best_line")
+    # Start the method in background, capturing both stdout and stderr to log file
+    printf "$cmd\nq\n" | RAYON_NUM_THREADS=$THREADS $BINARY > "$log_file" 2>&1 &
+    local pid=$!
 
-    echo "$method,$time_secs,$rep,$score,$duration" >> "$OUT"
-    echo "    score=$score  duration=${duration}s"
+    # Sampling loop: every SAMPLE_INTERVAL, read latest progress line from log
+    local elapsed=0
+    while [ $elapsed -lt $DURATION_SECS ]; do
+        sleep $SAMPLE_INTERVAL
+        elapsed=$((elapsed + SAMPLE_INTERVAL))
+
+        if ! kill -0 $pid 2>/dev/null; then
+            echo "  [$(date '+%H:%M:%S')] $run_id finished at ${elapsed}s"
+            break
+        fi
+
+        # Extract best score from log file
+        local score
+        score=$(cat "$log_file" | tr '\r' '\n' | extract_score)
+        if [ -n "$score" ] && [ "$score" != "0" ]; then
+            echo "$method,$rep,$elapsed,$score" >> "$OUT"
+            echo "  [$(date '+%H:%M:%S')] $run_id @ ${elapsed}s: $score"
+        fi
+    done
+
+    # Ensure process is stopped
+    if kill -0 $pid 2>/dev/null; then
+        kill -INT $pid 2>/dev/null
+        sleep 2
+        kill -KILL $pid 2>/dev/null
+    fi
+    wait $pid 2>/dev/null
+
+    # Final score from log
+    local final_score
+    final_score=$(cat "$log_file" | tr '\r' '\n' | extract_score)
+    if [ -n "$final_score" ] && [ "$final_score" != "0" ]; then
+        echo "$method,$rep,$DURATION_SECS,$final_score" >> "$OUT"
+        echo "  [$(date '+%H:%M:%S')] $run_id final: $final_score"
+    fi
 }
 
-for t in "${TIMES[@]}"; do
-    for rep in $(seq 1 $REPS); do
-        # gen (random-restart greedy, runs for t seconds)
-        run_method "gen" "$t" "$rep" "gen $LAYOUT -t $t -n 1"
+for rep in $(seq 1 $REPS); do
+    echo ""
+    echo "=== Rep $rep of $REPS ==="
 
-        # sa: 1M iters ~ 1s, so sa_iters = t * 1M
-        sa_iters=$((t * 1000000))
-        run_method "sa" "$t" "$rep" "sa $LAYOUT 1 -s $sa_iters"
+    # gen: random-restart greedy, runs for DURATION_SECS
+    run_and_sample "gen" "$rep" "gen $LAYOUT -t $DURATION_SECS -n 1"
 
-        # da: dual annealing with time limit
-        run_method "da" "$t" "$rep" "da $LAYOUT -t $t"
+    # sa: time-limited SA+greedy with continuous restarts
+    run_and_sample "sa" "$rep" "sa $LAYOUT -t $DURATION_SECS"
 
-        # mcts: time-limited
-        run_method "mcts" "$t" "$rep" "mcts $LAYOUT -t $t"
-    done
+    # da: dual annealing with time limit
+    run_and_sample "da" "$rep" "da $LAYOUT -t $DURATION_SECS"
+
+    # mcts: time-limited
+    run_and_sample "mcts" "$rep" "mcts $LAYOUT -t $DURATION_SECS"
 done
 
 echo ""
-echo "Results written to $OUT"
+echo "=== Done ==="
+echo "Results: $OUT"
+echo "Logs: $LOG_DIR/"
 echo ""
-echo "=== Summary ==="
-python3 -c "
+
+# Summary
+python3 <<EOF
 import csv
 from collections import defaultdict
 
-by_key = defaultdict(list)
-with open('$OUT') as f:
+data = defaultdict(list)  # (method, rep) -> [(elapsed, score)]
+with open("$OUT") as f:
     reader = csv.DictReader(f)
     for row in reader:
-        key = (row['method'], row['time_secs'])
-        by_key[key].append(int(row['score']))
+        key = (row['method'], row['rep'])
+        data[key].append((int(row['elapsed_secs']), int(row['best_score'])))
 
-# Format: method | 30s | 120s | 600s
-methods = ['gen', 'sa', 'da', 'mcts']
-times = [30, 120, 600]
-
-# Use human-readable numbers
 def fmt(n):
     n = abs(n)
     if n >= 1e12: return f'-{n/1e12:.2f}T'
@@ -104,17 +146,35 @@ def fmt(n):
     if n >= 1e3: return f'-{n/1e3:.2f}K'
     return f'-{n}'
 
-print(f\"{'method':<8} {'30s':>12} {'120s':>12} {'600s':>12}\")
-print('-' * 52)
-for m in methods:
-    row = [m]
-    for t in times:
-        scores = by_key.get((m, str(t)), [])
-        if scores:
-            # Best of reps (least negative score)
-            best = max(scores)
-            row.append(fmt(best))
-        else:
-            row.append('--')
-    print(f\"{row[0]:<8} {row[1]:>12} {row[2]:>12} {row[3]:>12}\")
-"
+# Show best final score per method
+print("\\n=== Best final score per method ===")
+by_method = defaultdict(list)
+for (method, rep), samples in data.items():
+    if samples:
+        final = max(samples, key=lambda s: s[0])  # latest sample
+        by_method[method].append(final[1])
+
+for method in ['gen', 'sa', 'da', 'mcts']:
+    scores = by_method.get(method, [])
+    if scores:
+        best = max(scores)
+        mean = sum(scores) / len(scores)
+        print(f"  {method:<8}: best={fmt(best)}  mean={fmt(int(mean))}  reps={len(scores)}")
+
+# Show convergence milestones
+print("\\n=== Convergence milestones (best score by time) ===")
+milestones = [60, 300, 900, 1800, 3600]
+for method in ['gen', 'sa', 'da', 'mcts']:
+    print(f"\\n  {method}:")
+    for t in milestones:
+        scores_at_t = []
+        for (m, rep), samples in data.items():
+            if m != method: continue
+            # Find best score at or before time t
+            valid = [s for (e, s) in samples if e <= t]
+            if valid:
+                scores_at_t.append(max(valid))
+        if scores_at_t:
+            best = max(scores_at_t)
+            print(f"    @{t:>5}s: best={fmt(best)}  (n={len(scores_at_t)})")
+EOF

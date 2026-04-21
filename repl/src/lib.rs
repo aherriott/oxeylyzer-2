@@ -723,13 +723,13 @@ impl Repl {
         Ok(())
     }
 
-    fn sa_cmd(&mut self, name: &str, count: Option<usize>, sa_iters: Option<usize>, sa_temp: Option<f64>, sa_final: Option<f64>, greedy_depth: Option<usize>, pin_chars: Option<String>) -> Result<()> {
+    fn sa_cmd(&mut self, name: &str, count: Option<usize>, sa_iters: Option<usize>, sa_temp: Option<f64>, sa_final: Option<f64>, greedy_depth: Option<usize>, time_secs: Option<usize>, pin_chars: Option<String>) -> Result<()> {
         use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
 
         let layout = self.layout(name)?.clone();
-        let count = count.unwrap_or(1);
-        let sa_iters = sa_iters.unwrap_or(10_000_000);
+        let sa_iters = sa_iters.unwrap_or(1_000_000);
         let greedy_depth = greedy_depth.unwrap_or(1);
+        let time_limit = time_secs.map(|s| std::time::Duration::from_secs(s as u64));
         let pins = match pin_chars {
             Some(chars) => pin_positions(&layout, chars),
             None => vec![],
@@ -760,33 +760,67 @@ impl Repl {
         }
         let policy = RolloutPolicy { steps };
 
-        println!("SA: {} variants, {} iters, greedy={}, from {}", count, fmt_num(sa_iters as f64), greedy_depth, name);
+        self.stop.store(false, Ordering::SeqCst);
+        let stop = self.stop.clone();
+
+        let time_str = time_limit.map_or(
+            format!("{} variants", count.unwrap_or(1)),
+            |d| format!("{}s", d.as_secs())
+        );
+        println!("SA: {} iters, greedy={}, from {} ({})", fmt_num(sa_iters as f64), greedy_depth, name, time_str);
+        if time_limit.is_some() {
+            println!("  (Ctrl+C to stop)");
+        }
 
         let start = std::time::Instant::now();
-        let mut results: Vec<(Layout, i64)> = Vec::with_capacity(count);
+        let max_count = count.unwrap_or(usize::MAX);
+        let mut best_score: i64 = i64::MIN;
+        let mut best_layout: Option<Layout> = None;
+        let mut variants_run = 0usize;
+        let mut last_print = std::time::Instant::now();
 
-        for i in 0..count {
+        loop {
+            if stop.load(Ordering::Relaxed) { break; }
+            if let Some(limit) = time_limit {
+                if start.elapsed() >= limit { break; }
+            }
+            if time_limit.is_none() && variants_run >= max_count { break; }
+
             let random_layout = layout.random_with_pins(&all_pins);
             let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
                 &random_layout, self.a.data().clone(), self.a.weights(), self.a.scale_factors(),
             );
             let final_score = cache.optimize(&policy, &all_pins);
-            let final_layout = cache.to_layout();
-            results.push((final_layout, final_score));
+            variants_run += 1;
 
-            print!("\r  {}/{} | score: {}   ", i + 1, count, fmt_num(final_score as f64));
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+            if final_score > best_score {
+                best_score = final_score;
+                best_layout = Some(cache.to_layout());
+            }
+
+            if last_print.elapsed().as_millis() > 500 {
+                last_print = std::time::Instant::now();
+                let elapsed = start.elapsed().as_secs_f64();
+                let rate = variants_run as f64 / elapsed;
+                eprint!("\r  {} variants | best: {} | {:.2}/s | {:.1}s   ",
+                    fmt_num(variants_run as f64),
+                    fmt_num(best_score as f64),
+                    rate,
+                    elapsed,
+                );
+            }
         }
-        println!();
+        eprintln!();
 
-        results.sort_by(|(_, s1), (_, s2)| s2.cmp(s1));
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("SA completed: {} variants in {:.1}s ({:.2}/s)",
+            fmt_num(variants_run as f64), elapsed, variants_run as f64 / elapsed);
 
-        for (i, (mut layout, score)) in results.into_iter().enumerate().take(10) {
-            layout.name = "".into();
-            println!("#{}, score: {}{}", i + 1, fmt_num(score as f64), layout);
+        if let Some(mut l) = best_layout {
+            l.name = "".into();
+            println!("#1, score: {}{}", fmt_num(best_score as f64), l);
         }
 
-        println!("SA completed in {:.1}s", start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -941,7 +975,7 @@ impl Repl {
             OxeylyzerCmd::Beam(b) => self.beam_search_cmd(&b.name, b.width, b.interval)?,
             OxeylyzerCmd::Mcts(m) => self.mcts_cmd(&m.name, m.iterations, m.explore, m.sa, m.greedy, m.tree_depth, m.time)?,
             OxeylyzerCmd::Da(d) => self.dual_annealing_cmd(&d.name, d.sa, d.sa_temp, d.sa_final, d.greedy, d.iterations, d.time, d.temp, d.qv, d.qa, d.restart, d.swaps, d.pin_top, d.pins)?,
-            OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.sa_temp, s.sa_final, s.greedy, s.pins)?,
+            OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.sa_temp, s.sa_final, s.greedy, s.time, s.pins)?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 

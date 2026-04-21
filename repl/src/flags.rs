@@ -124,13 +124,13 @@ xflags::xflags! {
             /// Characters to pin.
             optional -p, --pins pins: String
         }
-        /// Classic SA: randomize → simulated annealing → greedy polish
+        /// Classic SA: randomize → simulated annealing → greedy polish, with restarts
         cmd sa {
             /// Name of the layout to use as a basis.
             required name: String
-            /// Number of variants to generate. Defaults to 1.
+            /// Number of variants to generate. Ignored if --time is specified.
             optional count: usize
-            /// SA iterations. Defaults to 10000000.
+            /// SA iterations per variant. Defaults to 1000000.
             optional -s, --sa sa_iters: usize
             /// SA initial temperature. Defaults to 10.0.
             optional --sa-temp sa_temp: f64
@@ -138,6 +138,8 @@ xflags::xflags! {
             optional --sa-final sa_final: f64
             /// Greedy polish depth. 0=off, 1=hill-climb, 2+=progressive. Defaults to 1.
             optional -g, --greedy greedy_depth: usize
+            /// Time limit in seconds. Runs with continuous restarts until time expires.
+            optional -t, --time time_secs: usize
             /// Characters to pin.
             optional -p, --pins pins: String
         }
