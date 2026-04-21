@@ -23,9 +23,11 @@ use nanorand::{Rng, WyRand};
 pub struct BasinHoppingConfig {
     /// Number of random swaps to perturb a local optimum. Default: 4
     pub perturbation_swaps: usize,
-    /// Initial acceptance temperature. Default: 1e11 (allows ~10% score changes)
+    /// Initial acceptance temperature (relative: T=10 accepts ~10x score-scale worsening).
+    /// Uses same formula as SA: accept prob = exp(delta / |worst_score| / T).
+    /// Default: 10.0 (matches SA tuning).
     pub initial_temp: f64,
-    /// Temperature after which to restart from random. Default: 1e9
+    /// Temperature below which to restart from random. Default: 1e-5
     pub restart_temp: f64,
     /// Cooling rate per iteration. Default: 0.999
     pub cooling_rate: f64,
@@ -38,10 +40,12 @@ impl Default for BasinHoppingConfig {
     fn default() -> Self {
         Self {
             perturbation_swaps: 4,
-            initial_temp: 1e11,
-            restart_temp: 1e9,
-            cooling_rate: 0.999,
-            restart_after_stale: 50,
+            initial_temp: 10.0,
+            restart_temp: 1e-5,
+            // Slower cooling: at 0.9999, temp halves every ~6900 iterations.
+            // At ~10 iters/s, that's ~11 minutes — appropriate for long runs.
+            cooling_rate: 0.9999,
+            restart_after_stale: 100,
         }
     }
 }
@@ -120,13 +124,15 @@ impl BasinHopping {
                 current_cache.optimize(policy, pins);
                 let new_score = current_cache.score();
 
-                // Metropolis acceptance on local optima
+                // Metropolis acceptance on local optima.
+                // Uses same relative formula as SA: exp(delta / |best_score| / T).
                 let delta = new_score - current_score;
                 let accept = if delta >= 0 {
                     true
                 } else {
+                    let normalized = (delta as f64) / (best_score.abs() as f64).max(1.0) / temp;
                     let u: f64 = (rng.generate::<u64>() as f64) / (u64::MAX as f64);
-                    u < (delta as f64 / temp).exp()
+                    u < normalized.exp()
                 };
 
                 if accept {

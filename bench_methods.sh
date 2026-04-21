@@ -116,8 +116,8 @@ for rep in $(seq 1 $REPS); do
     # da: dual annealing with time limit
     run_and_sample "da" "$rep" "da $LAYOUT -t $DURATION_SECS"
 
-    # mcts: time-limited
-    run_and_sample "mcts" "$rep" "mcts $LAYOUT -t $DURATION_SECS"
+    # # mcts: time-limited
+    # run_and_sample "mcts" "$rep" "mcts $LAYOUT -t $DURATION_SECS"
 
     # bh: basin hopping — jumps between local optima
     run_and_sample "bh" "$rep" "bh $LAYOUT -t $DURATION_SECS"
