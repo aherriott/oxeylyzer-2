@@ -133,6 +133,7 @@ impl MctsSearch {
                 cache.replace_key_no_update(pos, k, EMPTY_KEY);
             }
         }
+        cache.full_recompute();
 
         let mut root = MctsNode::new(usize::MAX); // root has no position
         let num_keys = self.keys_by_freq.len().min(self.num_positions);

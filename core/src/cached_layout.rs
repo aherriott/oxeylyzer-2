@@ -592,6 +592,16 @@ impl CachedLayout {
         }
     }
 
+    /// Full recompute of trigram frequencies from scratch. Use after out-of-order
+    /// `replace_key_no_update` operations (e.g., partial layouts in beam/mcts).
+    /// Base swap/replace operations via `update()` don't need this — it's only for
+    /// when the delta tracking breaks down due to operations involving EMPTY keys.
+    pub fn full_recompute(&mut self) {
+        let tg_flat = self.magic.tg_freq_flat();
+        self.trigram.recompute_frequencies(&self.keys, tg_flat);
+        self.update();
+    }
+
     // ==================== Lower Bound ====================
 
     /// Compute a lower bound on the remaining cost by greedy completion.

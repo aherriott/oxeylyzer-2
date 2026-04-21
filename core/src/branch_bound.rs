@@ -262,6 +262,7 @@ impl BranchBound {
             let key = cache.get_key(pos);
             cache.replace_key_no_update(pos, key, EMPTY_KEY);
         }
+        cache.full_recompute();
         cache
     }
 
@@ -655,6 +656,7 @@ impl BranchBound {
                     if occupied[pos] { continue; }
 
                     cache.replace_key_no_update(pos, EMPTY_KEY, key);
+                    cache.full_recompute();
                     let score = cache.score();
                     cache.replace_key_no_update(pos, key, EMPTY_KEY);
 
@@ -667,6 +669,7 @@ impl BranchBound {
             for d in (0..prev_positions.len()).rev() {
                 cache.replace_key_no_update(prev_positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
+            cache.full_recompute();
 
             // Prune at interval or at last depth
             if (depth + 1) % prune_interval == 0 || depth == num_keys - 1 {
@@ -682,10 +685,12 @@ impl BranchBound {
             for (d, &pos) in positions.iter().enumerate() {
                 cache.replace_key_no_update(pos, EMPTY_KEY, self.keys_by_freq[d]);
             }
+            cache.full_recompute();
             let score = cache.score();
             for d in (0..positions.len()).rev() {
                 cache.replace_key_no_update(positions[d], self.keys_by_freq[d], EMPTY_KEY);
             }
+            cache.full_recompute();
 
             let assignment: Vec<(char, usize)> = positions.iter().enumerate()
                 .map(|(d, &pos)| (self.chars_by_freq[d], pos))

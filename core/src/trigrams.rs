@@ -378,6 +378,48 @@ impl TrigramCache {
         }
     }
 
+    /// Recompute per-type frequency totals from scratch using current key positions.
+    /// Fixes drift from `replace_key_fast` when keys are cleared out of order.
+    /// NOTE: Also resets `magic_rule_score_delta` since callers are expected to
+    /// re-apply magic rules via update() afterward.
+    pub fn recompute_frequencies(&mut self, keys: &[usize], tg_flat: &[i64]) {
+        self.inroll_freq = 0;
+        self.outroll_freq = 0;
+        self.alternate_freq = 0;
+        self.redirect_freq = 0;
+        self.onehandin_freq = 0;
+        self.onehandout_freq = 0;
+        self.magic_rule_score_delta = 0;
+
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+
+        for (pos_a, combos) in self.trigram_combos_per_key.iter().enumerate() {
+            let ka = keys[pos_a];
+            if ka >= nk { continue; }
+
+            for combo in combos {
+                let kb = keys[combo.pos_b];
+                let kc = keys[combo.pos_c];
+                if kb >= nk || kc >= nk { continue; }
+
+                let freq = tg_flat[ka * nk2 + kb * nk + kc];
+                if freq == 0 { continue; }
+
+                match combo.trigram_type {
+                    TrigramType::Inroll => self.inroll_freq += freq,
+                    TrigramType::Outroll => self.outroll_freq += freq,
+                    TrigramType::Alternate => self.alternate_freq += freq,
+                    TrigramType::Redirect => self.redirect_freq += freq,
+                    TrigramType::OnehandIn => self.onehandin_freq += freq,
+                    TrigramType::OnehandOut => self.onehandout_freq += freq,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+
     // ==================== Lower Bound ====================
 
     /// Compute a lower bound on the remaining trigram penalty from unplaced keys.
@@ -1838,9 +1880,7 @@ impl TrigramCache {
         // Compute per-type frequency deltas for stats tracking
         let delta = self.compute_replace_delta_flat_typed(pos, old_key, new_key, keys, None, tg_flat);
         self.apply_delta(&delta);
-    }
-
-    /// Compute per-type frequency delta using flat trigram array.
+    }    /// Compute per-type frequency delta using flat trigram array.
     /// Returns a TrigramDelta with per-type breakdowns.
     fn compute_replace_delta_flat_typed(
         &self,
@@ -1854,46 +1894,76 @@ impl TrigramCache {
         let nk = self.num_keys;
         let nk2 = nk * nk;
         let mut delta = TrigramDelta::default();
+        let old_valid = old_key < nk;
+        let new_valid = new_key < nk;
 
-        // First position combos
+        // First position combos: pos is first in trigram (pos, pos_b, pos_c)
+        // When pos_b == pos or pos_c == pos, those positions share `pos` — use old_key/new_key
+        // accordingly instead of reading stale keys[pos].
         for combo in &self.trigram_combos_per_key[pos] {
             if skip_pos == Some(combo.pos_b) || skip_pos == Some(combo.pos_c) { continue; }
-            let kb = keys[combo.pos_b];
-            let kc = keys[combo.pos_c];
-            if kb >= nk || kc >= nk { continue; }
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
 
-            let old_freq = if old_key < nk { tg_flat[old_key * nk2 + kb * nk + kc] } else { 0 };
-            let new_freq = if new_key < nk { tg_flat[new_key * nk2 + kb * nk + kc] } else { 0 };
+            let old_kb = if pb == pos { old_key } else { keys[pb] };
+            let old_kc = if pc == pos { old_key } else { keys[pc] };
+            let new_kb = if pb == pos { new_key } else { keys[pb] };
+            let new_kc = if pc == pos { new_key } else { keys[pc] };
+
+            let old_freq = if old_valid && old_kb < nk && old_kc < nk {
+                tg_flat[old_key * nk2 + old_kb * nk + old_kc]
+            } else { 0 };
+            let new_freq = if new_valid && new_kb < nk && new_kc < nk {
+                tg_flat[new_key * nk2 + new_kb * nk + new_kc]
+            } else { 0 };
+
             let freq_delta = new_freq - old_freq;
             if freq_delta != 0 {
                 delta.add_typed(combo.trigram_type, freq_delta);
             }
         }
 
-        // Mid position combos
+        // Mid position combos: pos is middle (pos_a, pos, pos_c)
+        // Skip if pos_a == pos (already counted in first-position combos)
         for combo in &self.trigram_combos_mid[pos] {
+            if combo.pos_a == pos { continue; }
             if skip_pos == Some(combo.pos_a) || skip_pos == Some(combo.pos_c) { continue; }
-            let ka = keys[combo.pos_a];
-            let kc = keys[combo.pos_c];
-            if ka >= nk || kc >= nk { continue; }
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
 
-            let old_freq = if old_key < nk { tg_flat[ka * nk2 + old_key * nk + kc] } else { 0 };
-            let new_freq = if new_key < nk { tg_flat[ka * nk2 + new_key * nk + kc] } else { 0 };
+            let ka = keys[pa];
+            if ka >= nk { continue; }
+            let old_kc = if pc == pos { old_key } else { keys[pc] };
+            let new_kc = if pc == pos { new_key } else { keys[pc] };
+
+            let old_freq = if old_valid && old_kc < nk {
+                tg_flat[ka * nk2 + old_key * nk + old_kc]
+            } else { 0 };
+            let new_freq = if new_valid && new_kc < nk {
+                tg_flat[ka * nk2 + new_key * nk + new_kc]
+            } else { 0 };
+
             let freq_delta = new_freq - old_freq;
             if freq_delta != 0 {
                 delta.add_typed(combo.trigram_type, freq_delta);
             }
         }
 
-        // End position combos
+        // End position combos: pos is last (pos_a, pos_b, pos)
+        // Skip if pos_a == pos or pos_b == pos (already counted above)
         for combo in &self.trigram_combos_end[pos] {
+            if combo.pos_a == pos || combo.pos_b == pos { continue; }
             if skip_pos == Some(combo.pos_a) || skip_pos == Some(combo.pos_b) { continue; }
-            let ka = keys[combo.pos_a];
-            let kb = keys[combo.pos_b];
+            let pa = combo.pos_a;
+            let pb = combo.pos_b;
+
+            let ka = keys[pa];
+            let kb = keys[pb];
             if ka >= nk || kb >= nk { continue; }
 
-            let old_freq = if old_key < nk { tg_flat[ka * nk2 + kb * nk + old_key] } else { 0 };
-            let new_freq = if new_key < nk { tg_flat[ka * nk2 + kb * nk + new_key] } else { 0 };
+            let old_freq = if old_valid { tg_flat[ka * nk2 + kb * nk + old_key] } else { 0 };
+            let new_freq = if new_valid { tg_flat[ka * nk2 + kb * nk + new_key] } else { 0 };
+
             let freq_delta = new_freq - old_freq;
             if freq_delta != 0 {
                 delta.add_typed(combo.trigram_type, freq_delta);

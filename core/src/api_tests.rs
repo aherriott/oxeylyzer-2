@@ -106,13 +106,19 @@ mod tests {
         a.use_layout(&layout, &[]);
 
         let neighbors = a.neighbors();
-        for &neighbor in neighbors.iter().take(20) {
+        for (i, &neighbor) in neighbors.iter().enumerate().take(20) {
             a.use_layout(&layout, &[]);
+            let initial = a.score();
             let speculative = a.score_neighbor(neighbor);
+            // Speculative should not mutate
+            assert_eq!(a.score(), initial,
+                "score_neighbor should not mutate: neighbor #{} {:?}", i, neighbor);
+
             a.apply_neighbor(neighbor);
             let actual = a.score();
             assert_eq!(speculative, actual,
-                "score_neighbor should match apply for {:?}", neighbor);
+                "score_neighbor should match apply for #{} {:?} (initial was {})",
+                i, neighbor, initial);
         }
     }
 
@@ -309,5 +315,176 @@ mod tests {
 
         assert!(total_trigrams > 0.0,
             "Trigram stats should be nonzero for magic layout, got total={}", total_trigrams);
+    }
+
+    #[test]
+    fn fresh_cache_without_layout_has_zero_trigram_score() {
+        use crate::trigrams::TrigramCache;
+        use libdof::dofinitions::Finger::*;
+
+        let fingers = vec![LP; 30];
+        let cache = TrigramCache::new(&fingers, 30);
+        assert_eq!(cache.score(), 0,
+            "Fresh TrigramCache should have score 0, got {}", cache.score());
+    }
+
+    #[test]
+    fn place_then_clear_returns_zero_trigram() {
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+
+        let cache = a.cache_mut();
+
+        for pos in 0..30 {
+            let k = cache.get_key(pos);
+            if k != EMPTY_KEY {
+                cache.replace_key_no_update(pos, k, EMPTY_KEY);
+            }
+        }
+        cache.full_recompute();
+
+        let (sfb, stretch, scissors, trigram, _m, _f) = cache.score_breakdown();
+        assert_eq!(trigram, 0, "Before placing: trigram={}", trigram);
+        assert_eq!(sfb, 0, "Before placing: sfb={}", sfb);
+        assert_eq!(stretch, 0, "Before placing: stretch={}", stretch);
+        assert_eq!(scissors, 0, "Before placing: scissors={}", scissors);
+
+        cache.replace_key_no_update(0, EMPTY_KEY, 10);
+        cache.full_recompute();
+        let (sfb, stretch, scissors, trigram, _m, _f) = cache.score_breakdown();
+        assert_eq!(trigram, 0,
+            "One key placed (no trigrams possible): trigram={}", trigram);
+        assert_eq!(sfb, 0, "One key placed: sfb={}", sfb);
+
+        cache.replace_key_no_update(0, 10, EMPTY_KEY);
+        cache.full_recompute();
+        let (sfb, stretch, scissors, trigram, _m, _f) = cache.score_breakdown();
+        assert_eq!(trigram, 0, "After removing: trigram={}", trigram);
+        assert_eq!(sfb, 0, "After removing: sfb={}", sfb);
+        assert_eq!(stretch, 0, "After removing: stretch={}", stretch);
+        assert_eq!(scissors, 0, "After removing: scissors={}", scissors);
+    }
+
+    // ==================== Empty / partial layout scoring ====================
+    // These tests target the bug where clearing all keys leaves trigram score
+    // positive (violating the invariant that score ≤ 0 for any layout).
+
+    #[test]
+    fn empty_layout_has_zero_score() {
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+
+        let cache = a.cache_mut();
+        let num_positions = 30;
+
+        // Clear all keys
+        for pos in 0..num_positions {
+            let k = cache.get_key(pos);
+            if k != EMPTY_KEY {
+                cache.replace_key_no_update(pos, k, EMPTY_KEY);
+            }
+        }
+        cache.full_recompute();
+
+        let score = cache.score();
+        assert_eq!(score, 0,
+            "Empty layout should have score 0, got {}. Breakdown: {:?}",
+            score, cache.score_breakdown());
+    }
+
+    #[test]
+    fn empty_layout_has_zero_trigram_score() {
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+
+        let cache = a.cache_mut();
+        let num_positions = 30;
+
+        for pos in 0..num_positions {
+            let k = cache.get_key(pos);
+            if k != EMPTY_KEY {
+                cache.replace_key_no_update(pos, k, EMPTY_KEY);
+            }
+        }
+        cache.full_recompute();
+
+        let (_sfb, _stretch, _scissors, trigram, _magic, _finger) = cache.score_breakdown();
+        assert_eq!(trigram, 0,
+            "Empty layout trigram score should be 0, got {}", trigram);
+    }
+
+    #[test]
+    fn clear_and_refill_matches_original() {
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+        let original_score = a.score();
+        let original_breakdown = a.cache_mut().score_breakdown();
+
+        let cache = a.cache_mut();
+        let num_positions = 30;
+
+        let saved_keys: Vec<_> = (0..num_positions).map(|p| cache.get_key(p)).collect();
+
+        for pos in 0..num_positions {
+            let k = cache.get_key(pos);
+            if k != EMPTY_KEY {
+                cache.replace_key_no_update(pos, k, EMPTY_KEY);
+            }
+        }
+        cache.full_recompute();
+        let empty_breakdown = cache.score_breakdown();
+        println!("Empty breakdown: {:?}", empty_breakdown);
+
+        for pos in 0..num_positions {
+            if saved_keys[pos] != EMPTY_KEY {
+                cache.replace_key_no_update(pos, EMPTY_KEY, saved_keys[pos]);
+            }
+        }
+        cache.full_recompute();
+
+        let restored_score = cache.score();
+        let restored_breakdown = cache.score_breakdown();
+        assert_eq!(restored_score, original_score,
+            "Clear + refill should restore original score.\n original={} breakdown={:?}\nrestored={} breakdown={:?}",
+            original_score, original_breakdown, restored_score, restored_breakdown);
+    }
+
+    #[test]
+    fn direct_full_recompute_matches_use_layout() {
+        // Load layout with use_layout, then directly call full_recompute.
+        // Score should be identical (idempotent).
+        let (mut a, layout) = non_magic_fixture();
+        a.use_layout(&layout, &[]);
+        let before = a.score();
+        let before_breakdown = a.cache_mut().score_breakdown();
+
+        // Print trigram internals before
+        let stats_before = a.stats();
+        println!("BEFORE: inroll={:.3}% outroll={:.3}% alt={:.3}% redir={:.3}% ohIn={:.3}% ohOut={:.3}%",
+            stats_before.trigrams.inroll * 100.0,
+            stats_before.trigrams.outroll * 100.0,
+            stats_before.trigrams.alternate * 100.0,
+            stats_before.trigrams.redirect * 100.0,
+            stats_before.trigrams.onehandin * 100.0,
+            stats_before.trigrams.onehandout * 100.0,
+        );
+
+        a.cache_mut().full_recompute();
+        let after = a.score();
+        let after_breakdown = a.cache_mut().score_breakdown();
+
+        let stats_after = a.stats();
+        println!("AFTER:  inroll={:.3}% outroll={:.3}% alt={:.3}% redir={:.3}% ohIn={:.3}% ohOut={:.3}%",
+            stats_after.trigrams.inroll * 100.0,
+            stats_after.trigrams.outroll * 100.0,
+            stats_after.trigrams.alternate * 100.0,
+            stats_after.trigrams.redirect * 100.0,
+            stats_after.trigrams.onehandin * 100.0,
+            stats_after.trigrams.onehandout * 100.0,
+        );
+
+        assert_eq!(before, after,
+            "full_recompute on a valid layout should be idempotent.\n before={} breakdown={:?}\n after={} breakdown={:?}",
+            before, before_breakdown, after, after_breakdown);
     }
 }
