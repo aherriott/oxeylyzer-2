@@ -28,13 +28,21 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 
 
-def load_features(csv_path):
+def load_features(csv_path, exclude_score_components=True):
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} layouts × {len(df.columns)} columns")
 
     # Identify feature columns
     meta_cols = ["layout_name", "score"]
     feature_cols = [c for c in df.columns if c not in meta_cols]
+
+    # Optionally drop score-component features (they're literally parts of the score,
+    # so including them creates circular reasoning in PCA/FAMD).
+    score_component_cols = ["score_sfb", "score_stretch", "score_scissors",
+                           "score_trigram", "score_magic", "score_finger"]
+    if exclude_score_components:
+        feature_cols = [c for c in feature_cols if c not in score_component_cols]
+        print(f"  excluded {len(score_component_cols)} score-component features")
 
     # Separate categorical (finger assignments) from continuous
     categorical_cols = [c for c in feature_cols if c.endswith("_finger")]
@@ -178,7 +186,40 @@ def correlate_pcs_with_features(coords, df, continuous_cols, name_prefix="PC"):
             print(f"    r={corr:+.3f}  {feat}")
 
 
-def plot_interactive(df, pca_coords, famd_coords, umap_coords, output_html):
+def compute_axis_label(coords, df, axis_idx, continuous_cols, max_feats=3):
+    """Generate a human-readable label for an axis by finding the top-correlating features."""
+    if coords is None or axis_idx >= coords.shape[1]:
+        return f"Axis {axis_idx + 1}"
+
+    ax = coords[:, axis_idx]
+    key_features = continuous_cols + ["score"]
+    rows = []
+    for feat in key_features:
+        if feat not in df.columns:
+            continue
+        try:
+            v = df[feat].astype(float).values
+            if np.std(v) < 1e-9:
+                continue
+            corr = np.corrcoef(ax, v)[0, 1]
+            if not np.isnan(corr):
+                rows.append((feat, corr))
+        except (ValueError, TypeError):
+            continue
+
+    rows.sort(key=lambda x: -abs(x[1]))
+    top = rows[:max_feats]
+    if not top:
+        return f"Axis {axis_idx + 1}"
+
+    parts = []
+    for feat, corr in top:
+        direction = "+" if corr > 0 else "−"
+        parts.append(f"{direction}{feat} ({corr:+.2f})")
+    return f"PC{axis_idx + 1}: " + " / ".join(parts)
+
+
+def plot_interactive(df, pca_coords, famd_coords, umap_coords, output_html, continuous_cols=None):
     print(f"\n=== Building interactive plot ({output_html}) ===")
     try:
         import plotly.graph_objects as go
@@ -202,6 +243,14 @@ def plot_interactive(df, pca_coords, famd_coords, umap_coords, output_html):
 
     fig = make_subplots(rows=1, cols=len(plots), subplot_titles=titles,
                        horizontal_spacing=0.1)
+
+    # Compute axis labels based on top-correlating features
+    axis_labels = {}
+    if continuous_cols:
+        for plot_name, coords in plots:
+            x_label = compute_axis_label(coords, df, 0, continuous_cols)
+            y_label = compute_axis_label(coords, df, 1, continuous_cols)
+            axis_labels[plot_name] = (x_label, y_label)
 
     # Color by score (less negative = better)
     scores = df["score"].values
@@ -276,9 +325,18 @@ def plot_interactive(df, pca_coords, famd_coords, umap_coords, output_html):
 
     fig.update_layout(
         title=f"Layout Landscape Analysis ({len(df)} layouts)",
-        height=600,
-        width=400 * len(plots),
+        height=650,
+        width=500 * len(plots),
     )
+
+    # Apply per-subplot axis labels
+    for col_i, (plot_name, _coords) in enumerate(plots):
+        if plot_name in axis_labels:
+            x_label, y_label = axis_labels[plot_name]
+            # Plotly subplots use xaxis, xaxis2, xaxis3, etc.
+            axis_suffix = "" if col_i == 0 else str(col_i + 1)
+            fig.update_xaxes(title_text=x_label, row=1, col=col_i + 1)
+            fig.update_yaxes(title_text=y_label, row=1, col=col_i + 1)
 
     fig.write_html(output_html)
     print(f"  Saved: {output_html}")
@@ -315,7 +373,7 @@ def main():
     feature_importance_for_score(df, continuous_cols, categorical_cols)
 
     # Interactive plot
-    plot_interactive(df, pca_coords, famd_coords, umap_coords, args.output)
+    plot_interactive(df, pca_coords, famd_coords, umap_coords, args.output, continuous_cols)
 
     print("\nDone.")
 
