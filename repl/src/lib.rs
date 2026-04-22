@@ -944,21 +944,39 @@ impl Repl {
         // Collect feature rows from loaded layouts
         let mut rows: Vec<(String, i64, Vec<(String, String)>)> = Vec::new();
 
+        // Get template shape to filter out incompatible layouts (different boards)
+        let template_name = template.unwrap_or("my-layout");
+        let template_layout = self.layout(template_name)?.clone();
+        let template_shape = template_layout.shape.inner().to_vec();
+        let template_main_keys: usize = template_shape.iter().take(3).sum();
+        println!("Template '{}' shape: {:?} (main keys: {})",
+            template_name, template_shape, template_main_keys);
+
+        let mut skipped = 0;
         for name in &layout_names {
             let layout = match self.layout(name) {
                 Ok(l) => l.clone(),
                 Err(_) => continue,
             };
+            // Skip layouts whose shape is incompatible
+            let this_shape = layout.shape.inner();
+            let this_main_keys: usize = this_shape.iter().take(3).sum();
+            if this_main_keys != template_main_keys || this_shape.len() != template_shape.len() {
+                skipped += 1;
+                continue;
+            }
             self.a.use_layout(&layout, &[]);
             let features = self.compute_features();
             let score = self.a.score();
             rows.push((name.clone(), score, features));
         }
+        if skipped > 0 {
+            println!("Skipped {} layouts with incompatible shape", skipped);
+        }
         println!("Extracted features for {} loaded layouts", rows.len());
 
         // Optionally add random/greedy layouts for broader coverage
-        let template_name = template.unwrap_or("my-layout");
-        let template_layout = self.layout(template_name)?.clone();
+        // (template_layout already loaded above)
 
         // Auto-pin REPLACEMENT_CHAR
         let mut all_pins: Vec<usize> = Vec::new();
