@@ -166,6 +166,18 @@ xflags::xflags! {
             /// Characters to pin.
             optional -p, --pins pins: String
         }
+        /// Dump feature vectors for landscape analysis (PCA/FAMD/UMAP input).
+        /// Outputs CSV with one row per layout: name, score, all features.
+        cmd dumpfeatures df {
+            /// Output CSV path.
+            required output: String
+            /// Also generate N random + greedy-converged layouts for broader coverage.
+            optional -n, --random_greedy random_greedy: usize
+            /// Also generate N purely random (no greedy) layouts.
+            optional --random random_only: usize
+            /// Template layout to use when generating random starts.
+            optional --template template: String
+        }
         /// Quit the analyzer
         cmd q quit {}
         /// Measure landscape ruggedness: correlation between layout score and

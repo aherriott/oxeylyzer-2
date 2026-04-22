@@ -484,8 +484,6 @@ impl CachedLayout {
         let chars = &self.data.chars;
 
         // Finger use: sum character frequencies per finger.
-        // chars[key] = (json_pct * (raw_total / 100)) as i64, and char_total = raw_total / 100.
-        // Dividing gives json_pct (0-100 scale), so divide by 100 to get fraction (0-1 scale).
         let char_total_raw = char_total * 100.0;
         for (pos, &key) in self.keys.iter().enumerate() {
             if key != EMPTY_KEY && (key as usize) < chars.len() {
@@ -497,10 +495,93 @@ impl CachedLayout {
         self.sfb.stats(stats, bigram_total, skipgram_total);
         self.stretch.stats(stats, bigram_total);
         self.scissors.stats(stats, bigram_total, skipgram_total);
-        // trigram_total from AnalyzerData is raw_total / 100. Multiply by 100 to get
-        // the raw total, matching the scale of the integer frequencies stored in TrigramCache.
-        // (SFCache, StretchCache, ScissorsCache already do this internally.)
         self.trigram.stats(stats, self.data.trigram_total * 100.0);
+    }
+
+    /// Compute and return a complete Stats object for this layout.
+    pub fn compute_stats(&self) -> Stats {
+        let mut stats = Stats::default();
+        self.stats(&mut stats);
+        stats
+    }
+
+    /// Get the finger assigned to a position.
+    #[inline]
+    pub fn finger_at(&self, pos: usize) -> Finger {
+        self.fingers[pos]
+    }
+
+    /// Get the (row, column) for a position based on the layout shape.
+    /// Returns (row, col) as 0-indexed values.
+    pub fn pos_row_col(&self, pos: usize) -> (usize, usize) {
+        let shape = self.shape.inner();
+        let mut remaining = pos;
+        for (row_idx, &row_len) in shape.iter().enumerate() {
+            if remaining < row_len {
+                return (row_idx, remaining);
+            }
+            remaining -= row_len;
+        }
+        (0, 0)
+    }
+
+    /// Total character frequency on left vs right hand.
+    pub fn hand_frequencies(&self, data_chars: &[i64]) -> (i64, i64) {
+        let mut left = 0i64;
+        let mut right = 0i64;
+        for (pos, &key) in self.keys.iter().enumerate() {
+            if key == EMPTY_KEY || (key as usize) >= data_chars.len() { continue; }
+            let f = self.fingers[pos];
+            let freq = data_chars[key as usize];
+            if matches!(f, Finger::LP | Finger::LR | Finger::LM | Finger::LI | Finger::LT) {
+                left += freq;
+            } else {
+                right += freq;
+            }
+        }
+        (left, right)
+    }
+
+    /// Total character frequency on each hand for a specific set of chars.
+    pub fn hand_freq_for_chars(&self, data_chars: &[i64], target_chars: &[char]) -> (i64, i64) {
+        let mut left = 0i64;
+        let mut right = 0i64;
+        for &target in target_chars {
+            let key = self.data.char_mapping().get_u(target);
+            if key == EMPTY_KEY { continue; }
+            let key_u = key as usize;
+            if key_u >= data_chars.len() { continue; }
+            if let Some(pos) = self.get_pos(key) {
+                let f = self.fingers[pos];
+                let freq = data_chars[key_u];
+                if matches!(f, Finger::LP | Finger::LR | Finger::LM | Finger::LI | Finger::LT) {
+                    left += freq;
+                } else {
+                    right += freq;
+                }
+            }
+        }
+        (left, right)
+    }
+
+    /// Total character frequency on a specific row.
+    pub fn row_usage(&self, data_chars: &[i64], row: usize) -> i64 {
+        let mut total = 0i64;
+        for (pos, &key) in self.keys.iter().enumerate() {
+            if key == EMPTY_KEY || (key as usize) >= data_chars.len() { continue; }
+            let (r, _) = self.pos_row_col(pos);
+            if r == row {
+                total += data_chars[key as usize];
+            }
+        }
+        total
+    }
+
+    /// Count active (non-empty) magic rules.
+    pub fn magic_rule_count(&self) -> usize {
+        self.current_magic_rules.iter()
+            .filter(|(_, &output)| output != EMPTY_KEY)
+            .count()
     }
 
     // ==================== Mutation API ====================

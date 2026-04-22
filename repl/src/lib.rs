@@ -925,6 +925,142 @@ impl Repl {
         Ok(())
     }
 
+    /// Dump feature vectors for PCA/FAMD/UMAP analysis.
+    /// Each row: layout name, score, and ~90 features describing the layout.
+    fn dump_features_cmd(
+        &mut self,
+        output: &str,
+        random_greedy: Option<usize>,
+        random_only: Option<usize>,
+        template: Option<&str>,
+    ) -> Result<()> {
+        use oxeylyzer_core::optimization::{RolloutPolicy, OptStep};
+        use rayon::prelude::*;
+        use std::sync::Mutex;
+
+        let layout_names: Vec<String> = self.layout_names().into_iter().collect();
+        println!("Found {} loaded layouts", layout_names.len());
+
+        // Collect feature rows from loaded layouts
+        let mut rows: Vec<(String, i64, Vec<(String, String)>)> = Vec::new();
+
+        for name in &layout_names {
+            let layout = match self.layout(name) {
+                Ok(l) => l.clone(),
+                Err(_) => continue,
+            };
+            self.a.use_layout(&layout, &[]);
+            let features = self.compute_features();
+            let score = self.a.score();
+            rows.push((name.clone(), score, features));
+        }
+        println!("Extracted features for {} loaded layouts", rows.len());
+
+        // Optionally add random/greedy layouts for broader coverage
+        let template_name = template.unwrap_or("my-layout");
+        let template_layout = self.layout(template_name)?.clone();
+
+        // Auto-pin REPLACEMENT_CHAR
+        let mut all_pins: Vec<usize> = Vec::new();
+        for (i, &c) in template_layout.keys.iter().enumerate() {
+            if c == oxeylyzer_core::REPLACEMENT_CHAR {
+                all_pins.push(i);
+            }
+        }
+
+        if let Some(n) = random_only {
+            println!("Generating {} random layouts (no greedy)...", n);
+            let data = self.a.data().clone();
+            let weights = self.a.weights().clone();
+            let scale_factors = self.a.scale_factors().clone();
+
+            let random_results: Vec<_> = (0..n).into_par_iter().map(|i| {
+                let random_layout = template_layout.random_with_pins(&all_pins);
+                let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                    &random_layout, data.clone(), &weights, &scale_factors,
+                );
+                let score = cache.score();
+                let features = compute_features_from_cache(&mut cache, &[], &0.0);
+                (format!("random-{}", i), score, features)
+            }).collect();
+            rows.extend(random_results);
+        }
+
+        if let Some(n) = random_greedy {
+            println!("Generating {} random+greedy layouts...", n);
+            let data = self.a.data().clone();
+            let weights = self.a.weights().clone();
+            let scale_factors = self.a.scale_factors().clone();
+            let policy = RolloutPolicy { steps: vec![OptStep::Greedy] };
+
+            let done = Arc::new(Mutex::new(0usize));
+            let start = std::time::Instant::now();
+
+            let greedy_results: Vec<_> = (0..n).into_par_iter().map(|i| {
+                let random_layout = template_layout.random_with_pins(&all_pins);
+                let mut cache = oxeylyzer_core::cached_layout::CachedLayout::new(
+                    &random_layout, data.clone(), &weights, &scale_factors,
+                );
+                cache.optimize(&policy, &all_pins);
+                let score = cache.score();
+                let features = compute_features_from_cache(&mut cache, &[], &0.0);
+
+                if let Ok(mut d) = done.lock() {
+                    *d += 1;
+                    if *d % 10 == 0 {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        eprint!("\r  {}/{} greedy | {:.1}/s | {:.1}s   ", *d, n, *d as f64 / elapsed, elapsed);
+                    }
+                }
+
+                (format!("greedy-{}", i), score, features)
+            }).collect();
+            eprintln!();
+            rows.extend(greedy_results);
+        }
+
+        // Write CSV
+        if rows.is_empty() {
+            println!("No rows to write.");
+            return Ok(());
+        }
+
+        // Build header from first row
+        let first_features = &rows[0].2;
+        let mut header = vec!["layout_name".to_string(), "score".to_string()];
+        for (name, _) in first_features {
+            header.push(name.clone());
+        }
+
+        let mut csv_out = String::new();
+        csv_out.push_str(&header.join(","));
+        csv_out.push('\n');
+        for (name, score, features) in &rows {
+            csv_out.push_str(name);
+            csv_out.push(',');
+            csv_out.push_str(&score.to_string());
+            for (_, v) in features {
+                csv_out.push(',');
+                csv_out.push_str(v);
+            }
+            csv_out.push('\n');
+        }
+
+        std::fs::write(output, csv_out)?;
+        println!("Wrote {} rows × {} features to {}", rows.len(), header.len() - 2, output);
+
+        Ok(())
+    }
+
+    fn layout_names(&self) -> Vec<String> {
+        self.layouts.keys().cloned().collect()
+    }
+
+    fn compute_features(&mut self) -> Vec<(String, String)> {
+        let cache = self.a.cache_mut();
+        compute_features_from_cache(cache, &[], &0.0)
+    }
+
     fn ruggedness_cmd(&mut self, name: &str, num_layouts: Option<usize>, num_neighbors: Option<usize>, use_greedy: bool) -> Result<()> {
         use rayon::prelude::*;
         use std::sync::Mutex;
@@ -1328,6 +1464,7 @@ impl Repl {
             OxeylyzerCmd::Sa(s) => self.sa_cmd(&s.name, s.count, s.sa, s.sa_temp, s.sa_final, s.greedy, s.time, s.pins)?,
             OxeylyzerCmd::Bh(b) => self.basin_hopping_cmd(&b.name, b.swaps, b.temp, b.restart, b.cool, b.stale, b.time, b.iterations, b.pins)?,
             OxeylyzerCmd::Ruggedness(r) => self.ruggedness_cmd(&r.name, r.layouts, r.neighbors, r.greedy.unwrap_or(false))?,
+            OxeylyzerCmd::Dumpfeatures(d) => self.dump_features_cmd(&d.output, d.random_greedy, d.random, d.template.as_deref())?,
             OxeylyzerCmd::Q(_) => return Ok(ReplStatus::Quit),
         }
 
@@ -1399,6 +1536,102 @@ fn fmt_duration(secs: f64) -> String {
     else if s < 604800.0 { format!("{:.1}d", s / 86400.0) }
     else if s < 31536000.0 { format!("{:.1}w", s / 604800.0) }
     else { format!("{:.1}y", s / 31536000.0) }
+}
+
+/// Extract a feature vector from a CachedLayout for PCA/FAMD/UMAP analysis.
+#[cfg(not(target_arch = "wasm32"))]
+fn compute_features_from_cache(
+    cache: &mut oxeylyzer_core::cached_layout::CachedLayout,
+    _data_chars: &[i64],
+    _char_total: &f64,
+) -> Vec<(String, String)> {
+    let mut features: Vec<(String, String)> = Vec::new();
+
+    // ===== Outcome features (continuous) =====
+    let stats = cache.compute_stats();
+
+    features.push(("sfbs_pct".to_string(), format!("{:.5}", stats.sfbs * 100.0)));
+    features.push(("sfs_pct".to_string(), format!("{:.5}", stats.sfs * 100.0)));
+    features.push(("stretches".to_string(), format!("{:.5}", stats.stretches)));
+
+    features.push(("inroll_pct".to_string(), format!("{:.5}", stats.trigrams.inroll * 100.0)));
+    features.push(("outroll_pct".to_string(), format!("{:.5}", stats.trigrams.outroll * 100.0)));
+    features.push(("alternate_pct".to_string(), format!("{:.5}", stats.trigrams.alternate * 100.0)));
+    features.push(("redirect_pct".to_string(), format!("{:.5}", stats.trigrams.redirect * 100.0)));
+    features.push(("onehandin_pct".to_string(), format!("{:.5}", stats.trigrams.onehandin * 100.0)));
+    features.push(("onehandout_pct".to_string(), format!("{:.5}", stats.trigrams.onehandout * 100.0)));
+
+    let finger_labels = ["lp", "lr", "lm", "li", "lt", "rt", "ri", "rm", "rr", "rp"];
+    for (i, &fu) in stats.finger_use.iter().enumerate() {
+        features.push((format!("fuse_{}", finger_labels[i]), format!("{:.5}", fu)));
+    }
+    for (i, &fsfb) in stats.finger_sfbs.iter().enumerate() {
+        features.push((format!("fsfb_{}", finger_labels[i]), format!("{:.5}", fsfb)));
+    }
+
+    let (sfb, stretch, scissors, trigram, magic, finger) = cache.score_breakdown();
+    features.push(("score_sfb".to_string(), sfb.to_string()));
+    features.push(("score_stretch".to_string(), stretch.to_string()));
+    features.push(("score_scissors".to_string(), scissors.to_string()));
+    features.push(("score_trigram".to_string(), trigram.to_string()));
+    features.push(("score_magic".to_string(), magic.to_string()));
+    features.push(("score_finger".to_string(), finger.to_string()));
+
+    // ===== Structural features =====
+    let data = cache.data();
+    let data_chars = data.chars.clone();
+
+    // Get top 15 most frequent chars
+    let mut char_freqs: Vec<(usize, i64)> = data_chars.iter().enumerate().map(|(i, &f)| (i, f)).collect();
+    char_freqs.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_chars: Vec<usize> = char_freqs.into_iter().take(15).map(|(k, _)| k).collect();
+
+    let char_mapping = cache.char_mapping().clone();
+
+    for (rank, &key_id) in top_chars.iter().enumerate() {
+        let c = char_mapping.get_c(key_id);
+        let c_safe = if c.is_ascii_alphanumeric() { c.to_string() } else { format!("u{:04x}", c as u32) };
+        let pos = cache.get_pos(key_id);
+        let finger_str = if let Some(p) = pos {
+            let f = cache.finger_at(p);
+            finger_labels[f as usize].to_string()
+        } else {
+            "none".to_string()
+        };
+        features.push((format!("c{}_{}_finger", rank, c_safe), finger_str));
+
+        if let Some(p) = pos {
+            let (row, col) = cache.pos_row_col(p);
+            features.push((format!("c{}_{}_row", rank, c_safe), row.to_string()));
+            features.push((format!("c{}_{}_col", rank, c_safe), col.to_string()));
+        } else {
+            features.push((format!("c{}_{}_row", rank, c_safe), "-1".to_string()));
+            features.push((format!("c{}_{}_col", rank, c_safe), "-1".to_string()));
+        }
+    }
+
+    // Aggregates
+    let (left_freq, right_freq) = cache.hand_frequencies(&data_chars);
+    let total_hand = (left_freq + right_freq).max(1);
+    features.push(("left_hand_pct".to_string(), format!("{:.5}", left_freq as f64 / total_hand as f64 * 100.0)));
+    features.push(("hand_imbalance".to_string(), format!("{:.5}", (left_freq - right_freq).abs() as f64 / total_hand as f64 * 100.0)));
+
+    let char_total_raw = data.char_total * 100.0;
+    let home_row_pct = cache.row_usage(&data_chars, 1) as f64 / char_total_raw * 100.0;
+    let top_row_pct = cache.row_usage(&data_chars, 0) as f64 / char_total_raw * 100.0;
+    let bot_row_pct = cache.row_usage(&data_chars, 2) as f64 / char_total_raw * 100.0;
+    features.push(("home_row_pct".to_string(), format!("{:.5}", home_row_pct)));
+    features.push(("top_row_pct".to_string(), format!("{:.5}", top_row_pct)));
+    features.push(("bot_row_pct".to_string(), format!("{:.5}", bot_row_pct)));
+
+    let vowels = ['a', 'e', 'i', 'o', 'u'];
+    let (left_vowel, right_vowel) = cache.hand_freq_for_chars(&data_chars, &vowels);
+    let total_vowel = (left_vowel + right_vowel).max(1);
+    features.push(("vowels_left_pct".to_string(), format!("{:.5}", left_vowel as f64 / total_vowel as f64 * 100.0)));
+
+    features.push(("magic_rule_count".to_string(), cache.magic_rule_count().to_string()));
+
+    features
 }
 
 #[cfg(not(target_arch = "wasm32"))]
