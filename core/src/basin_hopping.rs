@@ -40,10 +40,11 @@ impl Default for BasinHoppingConfig {
     fn default() -> Self {
         Self {
             perturbation_swaps: 4,
-            initial_temp: 10.0,
+            // Typical basin-to-basin delta is ~30% of |score|. At T=0.1,
+            // exp(-0.3/0.1) = 5% acceptance of typical worsening.
+            initial_temp: 0.1,
             restart_temp: 1e-5,
-            // Slower cooling: at 0.9999, temp halves every ~6900 iterations.
-            // At ~10 iters/s, that's ~11 minutes — appropriate for long runs.
+            // At ~10 iter/s, 0.9999 halves temp every ~11 minutes.
             cooling_rate: 0.9999,
             restart_after_stale: 100,
         }
