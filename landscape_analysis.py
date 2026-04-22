@@ -186,8 +186,8 @@ def correlate_pcs_with_features(coords, df, continuous_cols, name_prefix="PC"):
             print(f"    r={corr:+.3f}  {feat}")
 
 
-def compute_axis_label(coords, df, axis_idx, continuous_cols, max_feats=3):
-    """Generate a human-readable label for an axis by finding the top-correlating features."""
+def compute_axis_label(coords, df, axis_idx, continuous_cols, max_feats=2):
+    """Generate a concise label for an axis using top correlating features."""
     if coords is None or axis_idx >= coords.shape[1]:
         return f"Axis {axis_idx + 1}"
 
@@ -210,13 +210,16 @@ def compute_axis_label(coords, df, axis_idx, continuous_cols, max_feats=3):
     rows.sort(key=lambda x: -abs(x[1]))
     top = rows[:max_feats]
     if not top:
-        return f"Axis {axis_idx + 1}"
+        return f"PC{axis_idx + 1}"
 
+    # Short labels: just feature names with +/- direction
     parts = []
     for feat, corr in top:
-        direction = "+" if corr > 0 else "−"
-        parts.append(f"{direction}{feat} ({corr:+.2f})")
-    return f"PC{axis_idx + 1}: " + " / ".join(parts)
+        # Shorten common feature names
+        short = feat.replace("_pct", "").replace("_", " ")
+        direction = "↑" if corr > 0 else "↓"
+        parts.append(f"{direction}{short}")
+    return f"PC{axis_idx + 1}: " + ", ".join(parts)
 
 
 def plot_interactive(df, pca_coords, famd_coords, umap_coords, output_html, continuous_cols=None):
