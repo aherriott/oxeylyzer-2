@@ -7,3 +7,4 @@
 cc 95bc464435ea94761cdfc9d7894453c014ca30132b39c66f01a5cd85179bd951 # shrinks to leader_idx = 0, output_idx = 1, magic_key_idx = 1, text_pattern = "abcabcabcabc"
 cc c7b1c89599349fb85e48fdcc9270bc43dbde438183d16a1eed90f21ee820ecdd # shrinks to operations = [KeySwap(0, 1)], text_pattern = "abcabcabcabc"
 cc 1b9ab0eef842cf90a3903a56e1dfcd5ba353f23cb3766dc24af566ba45936ef8 # shrinks to operations = [KeySwap(3, 0), MagicRule(2, 0, 0)], text_pattern = "abcabcabcabc"
+cc f553e415b5aa028e19a5c8bb749ada000a866c5c6f259ad516ec649dddd78d02 # shrinks to swaps = [(3, 2), (0, 1)], text_pattern = "abcabcabcabc"

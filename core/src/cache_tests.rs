@@ -209,11 +209,11 @@ mod tests {
         let stats = analyzer.stats();
 
         let sum: f64 = stats.finger_use.iter().sum();
-        let diff = (sum - 100.0).abs();
 
-        // Finger use is stored as percentages (0-100), should sum to ~100
-        // May be slightly less than 100 if some characters aren't on the layout
-        assert!(diff < 5.0, "Finger use should sum to ~100%: got {sum}");
+        // finger_use is a fraction (0..1), should sum to ~1.0 (may be slightly less
+        // if some characters aren't on the layout).
+        assert!((sum - 1.0).abs() < 0.05,
+            "Finger use should sum to ~1.0 (fraction): got {sum}");
     }
 
     #[test]

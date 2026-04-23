@@ -150,13 +150,15 @@ impl CachedLayout {
         let neighbors = self.build_unpinned_neighbors(pins);
         if neighbors.is_empty() { return; }
 
-        let mut best_score = self.score();
         loop {
+            // Re-read the real score each iteration. Using a running `best_score`
+            // based on speculative values accumulates delta-tracking drift and
+            // causes premature termination.
+            let baseline = self.score();
             let mut improved = false;
             for &neighbor in &neighbors {
                 let score = self.score_neighbor(neighbor);
-                if score > best_score {
-                    best_score = score;
+                if score > baseline {
                     self.apply_neighbor(neighbor);
                     improved = true;
                     break;
@@ -219,14 +221,13 @@ impl CachedLayout {
         let neighbors = self.build_unpinned_neighbors(pins);
         if neighbors.is_empty() { return false; }
 
-        let mut best_score = self.score();
         let mut any_improved = false;
         loop {
+            let baseline = self.score();
             let mut improved = false;
             for &neighbor in &neighbors {
                 let score = self.score_neighbor(neighbor);
-                if score > best_score {
-                    best_score = score;
+                if score > baseline {
                     self.apply_neighbor(neighbor);
                     improved = true;
                     any_improved = true;

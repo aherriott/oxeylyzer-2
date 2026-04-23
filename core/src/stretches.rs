@@ -384,9 +384,11 @@ impl StretchCache {
     ) -> i64 {
         let rule_key = (magic_key, leader);
 
-        let old_delta = if let Some(&(old_output, _stored_delta)) = self.active_rules.get(&rule_key) {
+        // Prefer the stored delta (kept current by update_for_keyswap after swaps).
+        // Fall back to recomputing only if stored delta is absent.
+        let old_delta = if let Some(&(old_output, stored_delta)) = self.active_rules.get(&rule_key) {
             if old_output == output { return 0; }
-            self.compute_rule_delta(leader, old_output, magic_key, keys, key_positions, bg_freq, tg_freq)
+            stored_delta
         } else {
             0
         };
@@ -413,5 +415,41 @@ impl StretchCache {
     pub fn reset_magic_deltas(&mut self) {
         self.active_rules.clear();
         self.magic_rule_score_delta = 0;
+    }
+
+    /// Incremental magic-rule update after a keyswap. See TrigramCache version
+    /// for rationale. Assumes `key_positions` is already updated for the swap.
+    pub fn update_for_keyswap(
+        &mut self,
+        key_a: CacheKey,
+        key_b: CacheKey,
+        keys: &[CacheKey],
+        key_positions: &[Option<CachePos>],
+        bg_freq: &[i64],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) {
+        if self.active_rules.is_empty() {
+            return;
+        }
+        let mut net_change: i64 = 0;
+        let affected: Vec<((CacheKey, CacheKey), CacheKey, i64)> = self
+            .active_rules
+            .iter()
+            .filter(|(&(magic_key, leader), &(output, _stored))| {
+                leader == key_a || leader == key_b
+                    || output == key_a || output == key_b
+                    || magic_key == key_a || magic_key == key_b
+            })
+            .map(|(&k, &(output, stored))| (k, output, stored))
+            .collect();
+
+        for ((magic_key, leader), output, old_stored) in affected {
+            let new_delta = self.compute_rule_delta(
+                leader, output, magic_key, keys, key_positions, bg_freq, tg_freq,
+            );
+            net_change += new_delta - old_stored;
+            self.active_rules.insert((magic_key, leader), (output, new_delta));
+        }
+        self.magic_rule_score_delta += net_change;
     }
 }

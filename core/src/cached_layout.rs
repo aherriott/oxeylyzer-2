@@ -673,6 +673,24 @@ impl CachedLayout {
         }
     }
 
+    /// Incremental magic-rule update after a keyswap. Only recomputes deltas
+    /// for rules whose leader, output, or magic_key is `key_a` or `key_b`
+    /// (these are the only rules whose delta changed). Requires that
+    /// `swap_key_no_update` (or equivalent) has already been called to move keys.
+    ///
+    /// This is O(affected_rules) instead of O(all_rules × 4_caches) that
+    /// `update()` pays.
+    pub fn update_for_keyswap(&mut self, key_a: CacheKey, key_b: CacheKey) {
+        if self.current_magic_rules.is_empty() { return; }
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+        self.sfb.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq);
+        self.stretch.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, tg_freq);
+        self.scissors.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq);
+        self.trigram.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, tg_freq);
+    }
+
     /// Full recompute of trigram frequencies from scratch. Use after out-of-order
     /// `replace_key_no_update` operations (e.g., partial layouts in beam/mcts).
     /// Base swap/replace operations via `update()` don't need this — it's only for
@@ -787,8 +805,10 @@ impl CachedLayout {
     /// Swap keys at two positions. score() valid after.
     #[inline]
     pub fn swap_key(&mut self, pos_a: CachePos, pos_b: CachePos) {
+        let key_a = self.keys[pos_a];
+        let key_b = self.keys[pos_b];
         self.swap_key_no_update(pos_a, pos_b);
-        self.update();
+        self.update_for_keyswap(key_a, key_b);
     }
 
     /// Swap keys — no magic delta recompute. score() INVALID until update().

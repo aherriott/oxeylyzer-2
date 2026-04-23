@@ -167,6 +167,12 @@ pub struct TrigramCache {
     /// This is added to the base score (computed from frequencies) to get the total score.
     magic_rule_score_delta: i64,
 
+    /// Cumulative score delta from key swaps since the last full frequency recompute.
+    /// `key_swap` cannot easily update per-type frequencies (it only has the total
+    /// weighted delta), so it accumulates into this field. Survives `reset_magic_deltas`
+    /// and `update()`, cleared only by `recompute_frequencies`.
+    swap_score_delta: i64,
+
     /// Pre-computed rule deltas for O(1) `add_rule` speculative scoring.
     /// Maps (leader, output, magic_key) -> score delta.
     rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
@@ -286,6 +292,7 @@ impl TrigramCache {
             active_rules: HashMap::default(),
             // Initialize magic rule score delta to zero
             magic_rule_score_delta: 0,
+            swap_score_delta: 0,
             // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
             rule_delta: HashMap::default(),
         }
@@ -381,7 +388,8 @@ impl TrigramCache {
     /// Recompute per-type frequency totals from scratch using current key positions.
     /// Fixes drift from `replace_key_fast` when keys are cleared out of order.
     /// NOTE: Also resets `magic_rule_score_delta` since callers are expected to
-    /// re-apply magic rules via update() afterward.
+    /// re-apply magic rules via update() afterward. Also clears `swap_score_delta`
+    /// since the per-type frequencies now reflect all swaps.
     pub fn recompute_frequencies(&mut self, keys: &[usize], tg_flat: &[i64]) {
         self.inroll_freq = 0;
         self.outroll_freq = 0;
@@ -390,6 +398,7 @@ impl TrigramCache {
         self.onehandin_freq = 0;
         self.onehandout_freq = 0;
         self.magic_rule_score_delta = 0;
+        self.swap_score_delta = 0;
 
         let nk = self.num_keys;
         let nk2 = nk * nk;
@@ -677,13 +686,14 @@ impl TrigramCache {
     ) -> i64 {
         let rule_key = (magic_key, leader);
 
-        // Check if there's an existing rule for this (magic_key, leader) pair
-        // Always recompute old_delta fresh — stored deltas go stale as keys move
-        let old_delta = if let Some(&(old_output, _stored_delta)) = self.active_rules.get(&rule_key) {
+        // Check if there's an existing rule for this (magic_key, leader) pair.
+        // Prefer the stored delta (kept current by update_for_keyswap after swaps).
+        // Fall back to recomputing only if stored delta is absent.
+        let old_delta = if let Some(&(old_output, stored_delta)) = self.active_rules.get(&rule_key) {
             if old_output == output {
                 return 0;
             }
-            self.compute_rule_delta(leader, old_output, magic_key, keys, key_positions, tg_freq)
+            stored_delta
         } else {
             0
         };
@@ -718,6 +728,53 @@ impl TrigramCache {
     pub fn reset_magic_deltas(&mut self) {
         self.active_rules.clear();
         self.magic_rule_score_delta = 0;
+    }
+
+    /// Incremental magic-rule update after a keyswap.
+    ///
+    /// A keyswap between positions holding `key_a` and `key_b` only affects rules
+    /// whose leader, output, or magic_key equals `key_a` or `key_b` (because only
+    /// those rules' position-dependent deltas changed). All other stored rule deltas
+    /// remain correct.
+    ///
+    /// For each affected rule: subtract stored delta, recompute with current
+    /// key_positions, store new delta, accumulate net change into
+    /// `magic_rule_score_delta`.
+    ///
+    /// Callers MUST have already updated `key_positions` to reflect the swap before
+    /// calling this function.
+    pub fn update_for_keyswap(
+        &mut self,
+        key_a: CacheKey,
+        key_b: CacheKey,
+        keys: &[CacheKey],
+        key_positions: &[Option<CachePos>],
+        tg_freq: &[Vec<Vec<i64>>],
+    ) {
+        if self.active_rules.is_empty() {
+            return;
+        }
+        let mut net_change: i64 = 0;
+        let affected: Vec<((CacheKey, CacheKey), CacheKey, i64)> = self
+            .active_rules
+            .iter()
+            .filter(|(&(magic_key, leader), &(output, _stored))| {
+                leader == key_a || leader == key_b
+                    || output == key_a || output == key_b
+                    || magic_key == key_a || magic_key == key_b
+            })
+            .map(|(&k, &(output, stored))| (k, output, stored))
+            .collect();
+
+        for ((magic_key, leader), output, old_stored) in affected {
+            let new_delta = self.compute_rule_delta(
+                leader, output, magic_key, keys, key_positions, tg_freq,
+            );
+            net_change += new_delta - old_stored;
+            self.active_rules.insert((magic_key, leader), (output, new_delta));
+        }
+
+        self.magic_rule_score_delta += net_change;
     }
 
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
@@ -1392,6 +1449,7 @@ impl TrigramCache {
             + self.onehandout_freq * self.onehandout_weight
             - self.max_trigram_weight * total_freq
             + self.magic_rule_score_delta
+            + self.swap_score_delta
     }
 
     pub fn combo_counts(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
@@ -2015,7 +2073,8 @@ impl TrigramCache {
     #[inline]
     /// Swap keys at two positions. Mutates running totals.
     /// Uses flat trigram array for cache-friendly access.
-    /// Does NOT update per-type frequency tracking (use key_swap for that).
+    /// Does NOT update per-type frequency tracking (use `key_swap_full` for that,
+    /// or call `recompute_frequencies` later to rebuild per-type stats).
     pub fn key_swap(
         &mut self,
         pos_a: usize,
@@ -2033,17 +2092,9 @@ impl TrigramCache {
         let delta_b = self.compute_replace_delta_flat(pos_b, key_b, key_a, keys, Some(pos_a), tg_flat);
         let delta_both = self.compute_swap_both_delta_flat(pos_a, pos_b, key_a, key_b, keys, tg_flat);
 
-        // We only have the weighted score delta, not per-type frequencies.
-        // Distribute the total delta to inroll_freq as a proxy — the exact per-type
-        // breakdown doesn't matter for score() correctness, only for stats().
-        // For depth-N where we only need score(), this is fine.
-        // For stats accuracy, use key_swap_full which tracks per-type frequencies.
-        let total_delta = delta_a + delta_b + delta_both;
-
-        // Update the score by reverse-engineering the frequency delta.
-        // Since we can't easily split the weighted delta back into per-type frequencies,
-        // we'll track the total weighted delta separately.
-        self.magic_rule_score_delta += total_delta;
+        // Total weighted score delta for this swap. Accumulate into swap_score_delta
+        // (survives update() resets; only cleared by recompute_frequencies).
+        self.swap_score_delta += delta_a + delta_b + delta_both;
     }
 
     /// Swap keys with full per-type frequency tracking. Slower but accurate for stats.
