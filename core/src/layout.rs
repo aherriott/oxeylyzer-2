@@ -109,7 +109,7 @@ impl Layout {
             .map(Into::into)?;
 
         // Populate magic rules that From<Dof> couldn't access
-        for (magic_char, magic_key) in &mut layout.magic {
+        for (_magic_char, magic_key) in &mut layout.magic {
             if let Some(rules) = raw_magic.get(&magic_key.label().to_string()) {
                 for (leader, output) in rules {
                     magic_key.add_rule(leader, output);

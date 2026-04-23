@@ -678,14 +678,6 @@ impl CachedLayout {
         }
     }
 
-    /// Apply a neighbor. score() INVALID until update().
-    pub fn apply_neighbor_no_update(&mut self, neighbor: Neighbor) {
-        match neighbor {
-            Neighbor::KeySwap(PosPair(a, b)) => self.swap_key_no_update(a, b),
-            Neighbor::MagicRule(rule) => self.replace_rule_no_update(rule.magic_key, rule.leader, rule.output),
-        }
-    }
-
     /// Recompute magic deltas. Call after _no_update mutations to make score() valid.
     pub fn update(&mut self) {
         // Always reset magic deltas. If all rules have just been cleared, this
@@ -706,24 +698,6 @@ impl CachedLayout {
             self.scissors.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
             self.trigram.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, tg_freq, true);
         }
-    }
-
-    /// Incremental magic-rule update after a keyswap. Only recomputes deltas
-    /// for rules whose leader, output, or magic_key is `key_a` or `key_b`
-    /// (these are the only rules whose delta changed). Requires that
-    /// `swap_key_no_update` (or equivalent) has already been called to move keys.
-    ///
-    /// This is O(affected_rules) instead of O(all_rules × 4_caches) that
-    /// `update()` pays.
-    pub fn update_for_keyswap(&mut self, key_a: CacheKey, key_b: CacheKey) {
-        if self.current_magic_rules.is_empty() { return; }
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
-        self.sfb.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq);
-        self.stretch.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, tg_freq);
-        self.scissors.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq);
-        self.trigram.update_for_keyswap(key_a, key_b, &self.keys, &self.key_positions, tg_freq);
     }
 
     /// Full recompute of trigram frequencies from scratch. Use after out-of-order
@@ -2574,17 +2548,6 @@ mod pbt_total_score_preservation {
                 let magic_key = magic_keys[*magic_key_idx % magic_keys.len()];
                 cache.replace_rule(magic_key, leader, output);
             }
-        }
-    }
-
-    /// Helper to get the reverse of an operation.
-    fn get_reverse_operation(op: &Operation) -> Operation {
-        match op {
-            // Key swap is its own reverse
-            Operation::KeySwap(a, b) => Operation::KeySwap(*a, *b),
-            // Magic rule reverse needs to be computed from current state
-            // We'll handle this specially in the test
-            Operation::MagicRule(l, o, m) => Operation::MagicRule(*l, *o, *m),
         }
     }
 

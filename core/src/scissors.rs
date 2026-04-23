@@ -72,16 +72,6 @@ impl ScissorsDelta {
             half_scissors_skipgram_freq: a.half_scissors_skipgram_freq + b.half_scissors_skipgram_freq,
         }
     }
-
-    /// Compute the weighted score from this delta.
-    ///
-    /// Multiplies each total by its corresponding weight and sums them.
-    fn weighted_score(&self, cache: &ScissorsCache) -> i64 {
-        self.full_scissors_bigram_total * cache.full_scissors_weight
-            + self.full_scissors_skipgram_total * cache.full_scissors_skip_weight
-            + self.half_scissors_bigram_total * cache.half_scissors_weight
-            + self.half_scissors_skipgram_total * cache.half_scissors_skip_weight
-    }
 }
 
 /// Determine if f1 prefers being higher than f2 based on finger length and arm angle.
@@ -960,7 +950,7 @@ impl ScissorsCache {
         _keys: &[CacheKey],
         key_positions: &[Option<CachePos>],
         bg_freq: &[i64],
-        sg_freq: &[i64],
+        _sg_freq: &[i64],
         tg_freq: &[Vec<Vec<i64>>],
     ) -> i64 {
         let num_keys = self.num_keys;
@@ -1220,43 +1210,6 @@ impl ScissorsCache {
     pub fn reset_magic_deltas(&mut self) {
         self.active_rules.clear();
         self.magic_rule_score_delta = 0;
-    }
-
-    /// Incremental magic-rule update after a keyswap. See TrigramCache version
-    /// for rationale. Assumes `key_positions` is already updated for the swap.
-    pub fn update_for_keyswap(
-        &mut self,
-        key_a: CacheKey,
-        key_b: CacheKey,
-        keys: &[CacheKey],
-        key_positions: &[Option<CachePos>],
-        bg_freq: &[i64],
-        sg_freq: &[i64],
-        tg_freq: &[Vec<Vec<i64>>],
-    ) {
-        if self.active_rules.is_empty() {
-            return;
-        }
-        let mut net_change: i64 = 0;
-        let affected: Vec<((CacheKey, CacheKey), CacheKey, i64)> = self
-            .active_rules
-            .iter()
-            .filter(|(&(magic_key, leader), &(output, _stored))| {
-                leader == key_a || leader == key_b
-                    || output == key_a || output == key_b
-                    || magic_key == key_a || magic_key == key_b
-            })
-            .map(|(&k, &(output, stored))| (k, output, stored))
-            .collect();
-
-        for ((magic_key, leader), output, old_stored) in affected {
-            let new_delta = self.compute_rule_delta(
-                leader, output, magic_key, keys, key_positions, bg_freq, sg_freq, tg_freq,
-            );
-            net_change += new_delta - old_stored;
-            self.active_rules.insert((magic_key, leader), (output, new_delta));
-        }
-        self.magic_rule_score_delta += net_change;
     }
 }
 
@@ -2594,38 +2547,6 @@ mod tests {
         assert_eq!(combined.half_scissors_bigram_freq, 10);
         assert_eq!(combined.half_scissors_skipgram_total, 30);
         assert_eq!(combined.half_scissors_skipgram_freq, 12);
-    }
-
-    #[test]
-    fn test_scissors_delta_weighted_score() {
-        // Test that ScissorsDelta::weighted_score correctly computes weighted score
-        let keyboard = vec![
-            key_at_row(0.0),
-            key_at_row(2.0),
-        ];
-        let fingers = vec![LI, LM];
-
-        let mut cache = ScissorsCache::new(&keyboard, &fingers, 2);
-        cache.set_weights(&weights_with_scissors(-10, -5, -3, -2));
-
-        let delta = super::ScissorsDelta {
-            full_scissors_bigram_total: 100,
-            full_scissors_bigram_freq: 0,  // freq doesn't affect weighted_score
-            full_scissors_skipgram_total: 50,
-            full_scissors_skipgram_freq: 0,
-            half_scissors_bigram_total: 25,
-            half_scissors_bigram_freq: 0,
-            half_scissors_skipgram_total: 10,
-            half_scissors_skipgram_freq: 0,
-        };
-
-        let weighted = delta.weighted_score(&cache);
-
-        // Weights negated in set_weights: -(-10)=10, -(-5)=5, -(-3)=3, -(-2)=2
-        // Expected: 100 * 10 + 50 * 3 + 25 * 5 + 10 * 2
-        //         = 1000 + 150 + 125 + 20 = 1295
-        assert_eq!(weighted, 1295,
-            "Weighted score should be 1295");
     }
 
     // ==========================================

@@ -6,8 +6,8 @@ use crate::{analyze::Analyzer, layout::Layout};
 impl Analyzer {
     pub fn annealing_improve(
         &mut self,
-        layout: Layout,
-        pins: &[usize],
+        _layout: Layout,
+        _pins: &[usize],
         initial_temperature: f64,
         final_temperature: f64,
         max_iterations: usize,

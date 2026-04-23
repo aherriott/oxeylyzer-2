@@ -168,22 +168,6 @@ impl Analyzer {
             .score()
     }
 
-    /// Apply a neighbor and update weighted_score arrays.
-    pub fn apply_neighbor_and_update(&mut self, neighbor: Neighbor) {
-        self.cache
-            .as_mut()
-            .expect("Analyzer has no Layout set")
-            .apply_neighbor(neighbor)
-    }
-
-    /// Rebuild weighted_score arrays from current state.
-    pub fn update_scores(&mut self) {
-        self.cache
-            .as_mut()
-            .expect("Analyzer has no Layout set")
-            .update()
-    }
-
     /*
      **************************************
      *              Stats
