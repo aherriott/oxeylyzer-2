@@ -214,6 +214,14 @@ pub struct CachedLayout {
     magic_bg_delta: Vec<i64>,        // bg_delta[a*nk+b] = effective - raw
     magic_sg_delta: Vec<i64>,        // sg_delta[a*nk+b] = effective - raw
     magic_tg_delta: Vec<i64>,        // tg_delta[a*nk*nk+b*nk+c] = effective - raw
+    /// Pre-computed magic score delta for each position swap.
+    /// magic_swap_delta[a * num_positions + b] = change in total magic contribution
+    /// when swapping positions a and b. Computed once per update(), used O(1) per
+    /// score_neighbor(KeySwap).
+    magic_swap_delta: Vec<i64>,
+    /// Sparse index of non-zero tg_delta entries: (key_a, key_b, key_c, delta).
+    /// Built once per update(), used by precompute_magic_swap_deltas.
+    magic_tg_delta_sparse: Vec<(CacheKey, CacheKey, CacheKey, i64)>,
 }
 
 impl Default for CachedLayout {
@@ -245,6 +253,8 @@ impl Default for CachedLayout {
             magic_bg_delta: Vec::new(),
             magic_sg_delta: Vec::new(),
             magic_tg_delta: Vec::new(),
+            magic_swap_delta: Vec::new(),
+            magic_tg_delta_sparse: Vec::new(),
         }
     }
 }
@@ -372,6 +382,8 @@ impl CachedLayout {
             magic_bg_delta: vec![0; num_keys * num_keys],
             magic_sg_delta: vec![0; num_keys * num_keys],
             magic_tg_delta: vec![0; num_keys * num_keys * num_keys],
+            magic_swap_delta: vec![0; len * len],
+            magic_tg_delta_sparse: Vec::new(),
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -482,6 +494,29 @@ impl CachedLayout {
     pub fn score_breakdown(&self) -> (i64, i64, i64, i64, i64, i64) {
         (self.sfb.score(), self.stretch.score(), self.scissors.score(), self.trigram.score(),
          self.magic_penalty(), self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale)
+    }
+
+    /// Accessors for per-analyzer magic deltas (for testing).
+    pub fn sfb_magic_delta(&self) -> i64 { self.sfb.magic_delta() }
+    pub fn stretch_magic_delta(&self) -> i64 { self.stretch.magic_delta() }
+    pub fn scissors_magic_delta(&self) -> i64 { self.scissors.magic_delta() }
+    pub fn trigram_magic_delta(&self) -> i64 { self.trigram.magic_delta() }
+    pub fn magic_swap_delta_at(&self, a: usize, b: usize) -> i64 {
+        self.magic_swap_delta[a * self.num_positions + b]
+    }
+
+    /// Per-analyzer speculative magic delta for swap (for testing).
+    pub fn sfb_speculative_swap(&self, key_a: usize, key_b: usize, pos_a: usize, pos_b: usize) -> i64 {
+        self.sfb.speculative_magic_delta_for_swap(key_a, key_b, pos_a, pos_b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions)
+    }
+    pub fn stretch_speculative_swap(&self, key_a: usize, key_b: usize, pos_a: usize, pos_b: usize) -> i64 {
+        self.stretch.speculative_magic_delta_for_swap(key_a, key_b, pos_a, pos_b, &self.magic_bg_delta, &self.key_positions)
+    }
+    pub fn scissors_speculative_swap(&self, key_a: usize, key_b: usize, pos_a: usize, pos_b: usize) -> i64 {
+        self.scissors.speculative_magic_delta_for_swap(key_a, key_b, pos_a, pos_b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions)
+    }
+    pub fn trigram_speculative_swap(&self, key_a: usize, key_b: usize, pos_a: usize, pos_b: usize) -> i64 {
+        self.trigram.speculative_magic_delta_for_swap(key_a, key_b, pos_a, pos_b, &self.magic_tg_delta, &self.key_positions)
     }
 
     /// Penalty for active magic rules. Repeat rules (leader→same key) penalized separately.
@@ -619,7 +654,7 @@ impl CachedLayout {
     // score_neighbor: speculative scoring without permanent state change.
 
     /// Speculative score for a neighbor. No permanent state change.
-    pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
+    pub fn score_neighbor(&self, neighbor: Neighbor) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
                 let key_a = self.keys[a];
@@ -628,10 +663,11 @@ impl CachedLayout {
                 let sg_freq = self.magic.sg_freq_flat();
                 let tg_flat = self.magic.tg_freq_flat();
 
-                // Base analyzer scores (without magic delta) use fast speculative path
-                let sfb_base = self.sfb.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-                let stretch_base = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
-                let scissors_base = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                // Base analyzer scores use fast speculative path.
+                // score_swap() returns base + current magic_rule_score_delta.
+                let sfb = self.sfb.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                let stretch = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
+                let scissors = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
 
                 let tg_delta_a = self.trigram.compute_replace_delta_flat_typed(a, key_a, key_b, &self.keys, Some(b), tg_flat);
                 let tg_delta_b = self.trigram.compute_replace_delta_flat_typed(b, key_b, key_a, &self.keys, Some(a), tg_flat);
@@ -639,27 +675,10 @@ impl CachedLayout {
                 let tg_delta = tg_delta_a.combine(&tg_delta_b).combine(&tg_delta_both);
                 let trigram = self.trigram.score() + self.trigram.weighted_score_of_delta(&tg_delta);
 
-                // If magic rules are active, compute speculative magic deltas for
-                // each analyzer. The cached bg/sg/tg deltas don't change (they depend
-                // on rules, not positions), but the weight functions change because
-                // key_a and key_b swap positions.
-                let (sfb, stretch, scissors, trigram_final) = if !self.current_magic_rules.is_empty() {
-                    let sfb_magic = self.sfb.speculative_magic_delta_for_swap(
-                        key_a, key_b, a, b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
-                    let stretch_magic = self.stretch.speculative_magic_delta_for_swap(
-                        key_a, key_b, a, b, &self.magic_bg_delta, &self.key_positions);
-                    let scissors_magic = self.scissors.speculative_magic_delta_for_swap(
-                        key_a, key_b, a, b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
-                    let trigram_magic = self.trigram.speculative_magic_delta_for_swap(
-                        key_a, key_b, a, b, &self.magic_tg_delta, &self.key_positions);
-                    // score_swap returns base + current magic delta. Replace with speculative.
-                    (sfb_base - self.sfb.magic_delta() + sfb_magic,
-                     stretch_base - self.stretch.magic_delta() + stretch_magic,
-                     scissors_base - self.scissors.magic_delta() + scissors_magic,
-                     trigram - self.trigram.magic_delta() + trigram_magic)
-                } else {
-                    (sfb_base, stretch_base, scissors_base, trigram)
-                };
+                // Pre-computed magic swap delta: the CHANGE in total magic contribution
+                // when swapping positions a and b. score_swap() already includes the
+                // CURRENT magic delta, so adding the change gives the correct new total.
+                let magic_swap = self.magic_swap_delta[a * self.num_positions + b];
 
                 let fu_delta = if self.finger_usage_weight != 0 {
                     let fi_a = self.fingers[a] as usize;
@@ -673,7 +692,7 @@ impl CachedLayout {
                     } else { 0 }
                 } else { 0 };
 
-                sfb + stretch + scissors + trigram_final + self.magic_penalty()
+                sfb + stretch + scissors + trigram + magic_swap + self.magic_penalty()
                     + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
@@ -875,6 +894,10 @@ impl CachedLayout {
             self.magic_sg_delta.resize(nk * nk, 0);
             self.magic_tg_delta.clear();
             self.magic_tg_delta.resize(nk * nk * nk, 0);
+            self.magic_tg_delta_sparse.clear();
+            let np = self.num_positions;
+            self.magic_swap_delta.clear();
+            self.magic_swap_delta.resize(np * np, 0);
             return;
         }
 
@@ -950,6 +973,98 @@ impl CachedLayout {
             }
         }
         self.trigram.apply_magic_tg_deltas(&self.magic_tg_delta, &self.key_positions);
+
+        // Build sparse index of non-zero tg_delta entries.
+        self.magic_tg_delta_sparse.clear();
+        let nk2 = nk * nk;
+        for a in 0..nk {
+            for b in 0..nk {
+                let base = a * nk2 + b * nk;
+                for c in 0..nk {
+                    let d = self.magic_tg_delta[base + c];
+                    if d != 0 {
+                        self.magic_tg_delta_sparse.push((a, b, c, d));
+                    }
+                }
+            }
+        }
+
+        // Pre-compute magic swap delta table for O(1) KeySwap speculative scoring.
+        self.precompute_magic_swap_deltas();
+    }
+
+    /// Pre-compute the magic score delta for every position swap.
+    /// After this, magic_swap_delta[a * np + b] contains the change in total
+    /// magic contribution (across all 4 analyzers) when swapping positions a and b.
+    fn precompute_magic_swap_deltas(&mut self) {
+        let np = self.num_positions;
+        self.magic_swap_delta.clear();
+        self.magic_swap_delta.resize(np * np, 0);
+
+        if self.current_magic_rules.is_empty() { return; }
+
+        let current_total = self.sfb.magic_delta()
+            + self.stretch.magic_delta()
+            + self.scissors.magic_delta()
+            + self.trigram.magic_delta();
+
+        for pos_a in 0..np {
+            let key_a = self.keys[pos_a];
+            if key_a == EMPTY_KEY { continue; }
+
+            for pos_b in (pos_a + 1)..np {
+                let key_b = self.keys[pos_b];
+                if key_b == EMPTY_KEY { continue; }
+
+                // SFB, stretch, scissors: O(nk) each via speculative methods
+                let new_sfb = self.sfb.speculative_magic_delta_for_swap(
+                    key_a, key_b, pos_a, pos_b,
+                    &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions,
+                );
+                let new_stretch = self.stretch.speculative_magic_delta_for_swap(
+                    key_a, key_b, pos_a, pos_b,
+                    &self.magic_bg_delta, &self.key_positions,
+                );
+                let new_scissors = self.scissors.speculative_magic_delta_for_swap(
+                    key_a, key_b, pos_a, pos_b,
+                    &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions,
+                );
+
+                // Trigram: iterate sparse tg_delta entries involving key_a or key_b
+                let np_tg = self.trigram.num_positions();
+                let mut new_trigram = self.trigram.magic_delta();
+                for &(a, b, c, d) in &self.magic_tg_delta_sparse {
+                    if !(a == key_a || a == key_b || b == key_a || b == key_b
+                         || c == key_a || c == key_b) { continue; }
+
+                    let old_pa = match self.key_positions.get(a).copied().flatten() {
+                        Some(p) if p < np_tg => p, _ => continue,
+                    };
+                    let old_pb = match self.key_positions.get(b).copied().flatten() {
+                        Some(p) if p < np_tg => p, _ => continue,
+                    };
+                    let old_pc = match self.key_positions.get(c).copied().flatten() {
+                        Some(p) if p < np_tg => p, _ => continue,
+                    };
+
+                    let new_pa = if a == key_a { pos_b } else if a == key_b { pos_a } else { old_pa };
+                    let new_pb = if b == key_a { pos_b } else if b == key_b { pos_a } else { old_pb };
+                    let new_pc = if c == key_a { pos_b } else if c == key_b { pos_a } else { old_pc };
+
+                    let old_w = self.trigram.weight_at_positions(old_pa, old_pb, old_pc);
+                    let new_w = self.trigram.weight_at_positions(new_pa, new_pb, new_pc);
+                    if old_w != new_w {
+                        new_trigram += d * (new_w - old_w);
+                    }
+                }
+
+                let new_total = new_sfb + new_stretch + new_scissors + new_trigram;
+                let change = new_total - current_total;
+
+                self.magic_swap_delta[pos_a * np + pos_b] = change;
+                self.magic_swap_delta[pos_b * np + pos_a] = change;
+            }
+        }
     }
 
     /// Full recompute of trigram frequencies from scratch. Use after out-of-order

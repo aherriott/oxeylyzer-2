@@ -76,4 +76,46 @@ mod tests {
         println!("\n=== score()={score}, compute_score()={computed} ===");
         assert_eq!(score, computed, "compute_score must match score()");
     }
+
+    #[test]
+    fn profile_magic_greedy_breakdown() {
+        let data = crate::data::Data::load("../data/english.json").expect("data");
+        let weights = dummy_weights();
+        let layout = Layout::load("../layouts/magic-one.dof").expect("layout");
+        let scale_factors = weights.compute_scale_factors(&data);
+
+        let random = layout.random_with_pins(&[]);
+        let mut cache = CachedLayout::new(&random, data, &weights, &scale_factors);
+
+        let neighbors = cache.neighbors();
+        let swaps: Vec<_> = neighbors.iter().filter(|n| matches!(n, Neighbor::KeySwap(_))).copied().collect();
+        let magics: Vec<_> = neighbors.iter().filter(|n| matches!(n, Neighbor::MagicRule(_))).copied().collect();
+        println!("\n=== {} swap neighbors, {} magic neighbors ===", swaps.len(), magics.len());
+
+        // Profile score_neighbor for swaps
+        let n = 100;
+        let t = Instant::now();
+        for _ in 0..n { for &s in &swaps { std::hint::black_box(cache.score_neighbor(s)); } }
+        let swap_ns = t.elapsed().as_nanos() / (n * swaps.len()) as u128;
+        println!("score_neighbor(KeySwap): {}ns/call ({} calls)", swap_ns, swaps.len());
+
+        // Profile score_neighbor for magic rules
+        let t = Instant::now();
+        for _ in 0..n { for &m in &magics { std::hint::black_box(cache.score_neighbor(m)); } }
+        let magic_ns = t.elapsed().as_nanos() / (n * magics.len()) as u128;
+        println!("score_neighbor(MagicRule): {}ns/call ({} calls)", magic_ns, magics.len());
+
+        // Profile update() (called once per apply_neighbor)
+        let t = Instant::now();
+        for _ in 0..1000 { cache.update(); }
+        let update_ns = t.elapsed().as_nanos() / 1000;
+        println!("update(): {}ns/call", update_ns);
+
+        // Estimated iteration cost
+        let swap_total = swap_ns * swaps.len() as u128;
+        let magic_total = magic_ns * magics.len() as u128;
+        let iter_total = swap_total + magic_total + update_ns;
+        println!("Estimated iteration: {}µs (swaps: {}µs, magic: {}µs, update: {}µs)",
+            iter_total / 1000, swap_total / 1000, magic_total / 1000, update_ns / 1000);
+    }
 }
