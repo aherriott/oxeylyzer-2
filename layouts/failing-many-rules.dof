@@ -1,0 +1,45 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "j k r b g  u y n o h",
+      "s m l v ,  d &mag . e q",
+      "i t w c f  x ' p z a"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "'": "p",
+      ",": ",",
+      ".": "f",
+      "a": "s",
+      "b": "h",
+      "c": "h",
+      "d": "t",
+      "e": "s",
+      "f": ",",
+      "g": "v",
+      "h": "a",
+      "i": "s",
+      "j": "i",
+      "k": "l",
+      "l": ".",
+      "m": "p",
+      "n": ".",
+      "o": "d",
+      "p": "d",
+      "q": "r",
+      "r": "w",
+      "s": "i",
+      "t": "h",
+      "u": "x",
+      "v": "n",
+      "w": "h",
+      "x": "q",
+      "y": "u",
+      "z": "l"
+    }
+  },
+  "name": "failing-layout"
+}

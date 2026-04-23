@@ -32,6 +32,9 @@ mod cache_tests;
 #[cfg(test)]
 mod api_tests;
 
+#[cfg(test)]
+mod score_sign_test;
+
 pub mod prelude {
     pub use super::{
         analyze::Analyzer,
