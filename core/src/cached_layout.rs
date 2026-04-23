@@ -679,25 +679,121 @@ impl CachedLayout {
     }
 
     /// Recompute magic deltas. Call after _no_update mutations to make score() valid.
+    ///
+    /// Computes effective bigram/skipgram/trigram frequency shifts from ALL active
+    /// rules simultaneously, avoiding the double-counting bug that occurs when
+    /// per-rule deltas are summed independently. Each rule `(M, A)→B` transforms:
+    ///   - Bigram A→B becomes A→M (full steal)
+    ///   - Trigram A→B→C: bigram B→C becomes M→C (partial steal)
+    ///   - Trigram Z→A→B: skipgram Z→B becomes Z→M (skipgram steal)
+    ///
+    /// When two rules overlap (e.g., rule1 steals A→B affecting B→C, rule2 steals
+    /// B→C), the effective tables correctly reflect that rule1's partial steal
+    /// reduces the count available for rule2's full steal.
     pub fn update(&mut self) {
-        // Always reset magic deltas. If all rules have just been cleared, this
-        // wipes stale contributions from previously-active rules. If rules exist,
-        // they'll be re-added below.
         self.sfb.reset_magic_deltas();
         self.stretch.reset_magic_deltas();
         self.scissors.reset_magic_deltas();
         self.trigram.reset_magic_deltas();
         if self.current_magic_rules.is_empty() { return; }
+
+        let nk = self.magic.num_keys;
         let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
         let tg_freq = self.magic.tg_freq();
+
+        // Build a lookup: for each (leader, output) pair, what magic_key steals it?
+        // This is the inverse of current_magic_rules keyed by (leader, output).
+        let mut rule_lookup: Vec<Option<CacheKey>> = vec![None; nk * nk];
         for (&(magic_key, leader), &output) in &self.current_magic_rules {
-            if output == EMPTY_KEY { continue; }
-            self.sfb.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
-            self.stretch.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, tg_freq, true);
-            self.scissors.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
-            self.trigram.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, tg_freq, true);
+            if output == EMPTY_KEY || leader >= nk || output >= nk { continue; }
+            rule_lookup[leader * nk + output] = Some(magic_key);
         }
+
+        // Compute effective bigram and skipgram frequency deltas.
+        // delta[a*nk+b] = effective_freq[a][b] - raw_freq[a][b]
+        let mut bg_delta: Vec<i64> = vec![0; nk * nk];
+        let mut sg_delta: Vec<i64> = vec![0; nk * nk];
+
+        for (&(magic_key, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY || leader >= nk || output >= nk || magic_key >= nk {
+                continue;
+            }
+
+            // Part 1: Full steal — bigram (leader→output) becomes (leader→magic)
+            let full_freq = bg_freq[leader * nk + output];
+            if full_freq != 0 {
+                bg_delta[leader * nk + output] -= full_freq;
+                bg_delta[leader * nk + magic_key] += full_freq;
+            }
+
+            // Part 2: Partial steal — trigram (leader→output→C) redirects
+            // bigram (output→C) to (magic→C), but ONLY for the portion of
+            // (output→C) that comes from trigrams starting with this leader.
+            // If another rule ALSO does a full steal of (output→C), that rule
+            // claims all of bg_freq[output][C]. We must not double-count:
+            // the partial steal only applies to trigram-context occurrences
+            // that aren't already claimed by another rule's full steal.
+            for c in 0..nk {
+                let tg_count = tg_freq[leader][output][c];
+                if tg_count == 0 { continue; }
+
+                // Check if another rule does a full steal of (output→C).
+                // If so, that rule already redirected ALL of bg[output][C]
+                // including the tg[leader][output][C] portion. Skip.
+                if rule_lookup[output * nk + c].is_some() {
+                    continue;
+                }
+
+                bg_delta[output * nk + c] -= tg_count;
+                bg_delta[magic_key * nk + c] += tg_count;
+            }
+
+            // Part 3: Skipgram steal — trigram (Z→leader→output) redirects
+            // skipgram (Z→output) to (Z→magic). Same dedup logic.
+            for z in 0..nk {
+                let tg_count = tg_freq[z][leader][output];
+                if tg_count == 0 { continue; }
+
+                // Check if another rule does a full steal of (Z→output).
+                // If so, that rule already redirected ALL of sg[Z][output]
+                // including this portion. Skip.
+                // Note: a full steal of (Z→output) means rule (_, Z)→output.
+                if rule_lookup[z * nk + output].is_some() {
+                    continue;
+                }
+
+                sg_delta[z * nk + output] -= tg_count;
+                sg_delta[z * nk + magic_key] += tg_count;
+            }
+        }
+
+        // Apply deltas to each analyzer using their position-based weight functions.
+        self.sfb.apply_magic_freq_deltas(&bg_delta, &sg_delta, &self.key_positions);
+        self.stretch.apply_magic_freq_deltas(&bg_delta, &self.key_positions);
+        self.scissors.apply_magic_freq_deltas(&bg_delta, &sg_delta, &self.key_positions);
+
+        // Trigram analyzer: compute effective trigram deltas and apply.
+        let mut tg_delta: Vec<i64> = vec![0; nk * nk * nk];
+        for (&(magic_key, leader), &output) in &self.current_magic_rules {
+            if output == EMPTY_KEY || leader >= nk || output >= nk || magic_key >= nk {
+                continue;
+            }
+            // Z→A→B becomes Z→A→M
+            for z in 0..nk {
+                let freq = tg_freq[z][leader][output];
+                if freq == 0 { continue; }
+                tg_delta[z * nk * nk + leader * nk + output] -= freq;
+                tg_delta[z * nk * nk + leader * nk + magic_key] += freq;
+            }
+            // A→B→C becomes A→M→C
+            for c in 0..nk {
+                let freq = tg_freq[leader][output][c];
+                if freq == 0 { continue; }
+                tg_delta[leader * nk * nk + output * nk + c] -= freq;
+                tg_delta[leader * nk * nk + magic_key * nk + c] += freq;
+            }
+        }
+        self.trigram.apply_magic_tg_deltas(&tg_delta, &self.key_positions);
     }
 
     /// Full recompute of trigram frequencies from scratch. Use after out-of-order

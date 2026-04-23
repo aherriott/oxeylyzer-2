@@ -1211,6 +1211,39 @@ impl ScissorsCache {
         self.active_rules.clear();
         self.magic_rule_score_delta = 0;
     }
+
+    /// Compute magic_rule_score_delta from pre-computed bigram/skipgram frequency deltas.
+    pub fn apply_magic_freq_deltas(
+        &mut self,
+        bg_delta: &[i64],
+        sg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) {
+        let nk = self.num_keys;
+        let mut total: i64 = 0;
+        for a in 0..nk {
+            let pos_a = match key_positions.get(a).copied().flatten() {
+                Some(p) => p,
+                None => continue,
+            };
+            for b in 0..nk {
+                let bg_d = bg_delta[a * nk + b];
+                let sg_d = sg_delta[a * nk + b];
+                if bg_d == 0 && sg_d == 0 { continue; }
+                let pos_b = match key_positions.get(b).copied().flatten() {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if bg_d != 0 {
+                    total += bg_d * self.scissors_bigram_weight(pos_a, pos_b);
+                }
+                if sg_d != 0 {
+                    total += sg_d * self.scissors_skipgram_weight(pos_a, pos_b);
+                }
+            }
+        }
+        self.magic_rule_score_delta = total;
+    }
 }
 
 #[cfg(test)]

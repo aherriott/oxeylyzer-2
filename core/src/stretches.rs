@@ -415,4 +415,31 @@ impl StretchCache {
         self.active_rules.clear();
         self.magic_rule_score_delta = 0;
     }
+
+    /// Compute magic_rule_score_delta from pre-computed bigram frequency deltas.
+    /// Stretches only use bigrams (no skipgrams).
+    pub fn apply_magic_freq_deltas(
+        &mut self,
+        bg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) {
+        let nk = self.num_keys;
+        let mut total: i64 = 0;
+        for a in 0..nk {
+            let pos_a = match key_positions.get(a).copied().flatten() {
+                Some(p) => p,
+                None => continue,
+            };
+            for b in 0..nk {
+                let d = bg_delta[a * nk + b];
+                if d == 0 { continue; }
+                let pos_b = match key_positions.get(b).copied().flatten() {
+                    Some(p) => p,
+                    None => continue,
+                };
+                total += d * self.stretch_bigram_weight(pos_a, pos_b);
+            }
+        }
+        self.magic_rule_score_delta = total;
+    }
 }

@@ -720,6 +720,53 @@ impl TrigramCache {
         self.magic_rule_score_delta = 0;
     }
 
+    /// Compute magic_rule_score_delta from pre-computed trigram frequency deltas.
+    /// tg_delta[a*nk*nk + b*nk + c] = effective_tg[a][b][c] - raw_tg[a][b][c].
+    pub fn apply_magic_tg_deltas(
+        &mut self,
+        tg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let mut total: i64 = 0;
+
+        // For each key triple (a, b, c) with non-zero delta, look up positions
+        // and compute the trigram type weight.
+        for a in 0..nk {
+            let pos_a = match key_positions.get(a).copied().flatten() {
+                Some(p) if p < self.num_positions => p,
+                _ => continue,
+            };
+            let fa = self.fingers[pos_a];
+
+            for b in 0..nk {
+                let pos_b = match key_positions.get(b).copied().flatten() {
+                    Some(p) if p < self.num_positions => p,
+                    _ => continue,
+                };
+                let fb = self.fingers[pos_b];
+
+                for c in 0..nk {
+                    let d = tg_delta[a * nk2 + b * nk + c];
+                    if d == 0 { continue; }
+
+                    let pos_c = match key_positions.get(c).copied().flatten() {
+                        Some(p) if p < self.num_positions => p,
+                        _ => continue,
+                    };
+                    let fc = self.fingers[pos_c];
+
+                    let ttype = TRIGRAMS[fa * 100 + fb * 10 + fc];
+                    let w = self.get_weight(ttype);
+                    total += d * w;
+                }
+            }
+        }
+
+        self.magic_rule_score_delta = total;
+    }
+
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
     ///
     /// For each position and hypothetical key, computes the total weighted score
