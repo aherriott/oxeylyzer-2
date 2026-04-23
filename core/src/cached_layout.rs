@@ -692,9 +692,14 @@ impl CachedLayout {
 
     /// Speculative score for changing one magic rule. No state mutation.
     ///
-    /// Rebuilds the full magic delta arrays for the hypothetical rule set
-    /// (current rules with one change) and scores them. This is equivalent
-    /// to what update() computes but without mutating any state.
+    /// Computes the exact score delta from changing rule (magic_key, leader)
+    /// from old_output to new_output by:
+    /// 1. Subtracting the old rule's contribution to each analyzer
+    /// 2. Adding the new rule's contribution
+    /// 3. Accounting for dedup changes (other rules' partial steals may
+    ///    become active/inactive when this rule changes)
+    ///
+    /// O(rules × nk) — much cheaper than rebuilding full delta arrays.
     fn score_magic_rule_speculative(&self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) -> i64 {
         let nk = self.magic.num_keys;
         let bg_freq = self.magic.bg_freq_flat();
@@ -702,140 +707,132 @@ impl CachedLayout {
         let key = (magic_key, leader);
         let old_output = self.current_magic_rules.get(&key).copied().unwrap_or(EMPTY_KEY);
 
-        // Early return if no change
         if old_output == new_output { return self.score(); }
 
         // Build hypothetical rule set
-        let mut hyp_rules: Vec<(CacheKey, CacheKey, CacheKey)> = Vec::new(); // (magic, leader, output)
+        let mut hyp_rules: Vec<(CacheKey, CacheKey, CacheKey)> = Vec::with_capacity(self.current_magic_rules.len());
         for (&(mk, l), &o) in &self.current_magic_rules {
             if o == EMPTY_KEY { continue; }
-            if mk == magic_key && l == leader { continue; } // skip the rule we're changing
-            // Handle conflict: if new rule would conflict, skip the conflicting rule
-            if new_output != EMPTY_KEY && l == leader && o == new_output && mk != magic_key {
-                continue;
-            }
+            if mk == magic_key && l == leader { continue; }
+            if new_output != EMPTY_KEY && l == leader && o == new_output && mk != magic_key { continue; }
             hyp_rules.push((mk, l, o));
         }
         if new_output != EMPTY_KEY && new_output < nk {
             hyp_rules.push((magic_key, leader, new_output));
         }
 
-        // Build rule_lookup for dedup
-        let mut rule_lookup: Vec<Option<CacheKey>> = vec![None; nk * nk];
-        for &(mk, l, o) in &hyp_rules {
-            if l >= nk || o >= nk { continue; }
-            rule_lookup[l * nk + o] = Some(mk);
+        // Build rule_lookup for hypothetical set
+        let mut rule_lookup: Vec<bool> = vec![false; nk * nk];
+        for &(_mk, l, o) in &hyp_rules {
+            if l < nk && o < nk { rule_lookup[l * nk + o] = true; }
         }
 
-        // Compute bg/sg deltas (same logic as update())
-        let mut bg_delta: Vec<i64> = vec![0; nk * nk];
-        let mut sg_delta: Vec<i64> = vec![0; nk * nk];
-
-        for &(mk, l, o) in &hyp_rules {
-            if l >= nk || o >= nk || mk >= nk { continue; }
-
-            let full_freq = bg_freq[l * nk + o];
-            if full_freq != 0 {
-                bg_delta[l * nk + o] -= full_freq;
-                bg_delta[l * nk + mk] += full_freq;
-            }
-
-            for c in 0..nk {
-                let tg_count = tg_freq[l][o][c];
-                if tg_count == 0 { continue; }
-                if rule_lookup[o * nk + c].is_some() { continue; }
-                bg_delta[o * nk + c] -= tg_count;
-                bg_delta[mk * nk + c] += tg_count;
-            }
-
-            for z in 0..nk {
-                let tg_count = tg_freq[z][l][o];
-                if tg_count == 0 { continue; }
-                if rule_lookup[z * nk + o].is_some() { continue; }
-                sg_delta[z * nk + o] -= tg_count;
-                sg_delta[z * nk + mk] += tg_count;
-            }
-        }
-
-        // Compute tg deltas
-        let nk2 = nk * nk;
-        let mut tg_delta: Vec<i64> = vec![0; nk * nk2];
-        for &(mk, l, o) in &hyp_rules {
-            if l >= nk || o >= nk || mk >= nk { continue; }
-            for z in 0..nk {
-                let freq = tg_freq[z][l][o];
-                if freq == 0 { continue; }
-                tg_delta[z * nk2 + l * nk + o] -= freq;
-                tg_delta[z * nk2 + l * nk + mk] += freq;
-            }
-            for c in 0..nk {
-                let freq = tg_freq[l][o][c];
-                if freq == 0 { continue; }
-                tg_delta[l * nk2 + o * nk + c] -= freq;
-                tg_delta[l * nk2 + mk * nk + c] += freq;
-            }
-        }
-
-        // Score the hypothetical deltas against each analyzer's weight functions
+        // Score the hypothetical set directly (same logic as update + apply_magic_freq_deltas
+        // but computing the final score in one pass without intermediate arrays).
         let mut sfb_magic: i64 = 0;
         let mut stretch_magic: i64 = 0;
         let mut scissors_magic: i64 = 0;
+        let mut trigram_magic: i64 = 0;
+        let np = self.trigram.num_positions();
 
-        for a in 0..nk {
-            let pos_a = match self.key_positions.get(a).copied().flatten() {
-                Some(p) => p,
-                None => continue,
-            };
-            for b in 0..nk {
-                let bg_d = bg_delta[a * nk + b];
-                let sg_d = sg_delta[a * nk + b];
-                if bg_d == 0 && sg_d == 0 { continue; }
-                let pos_b = match self.key_positions.get(b).copied().flatten() {
-                    Some(p) => p,
-                    None => continue,
-                };
-                if bg_d != 0 {
-                    sfb_magic += bg_d * self.sfb.sf_bigram_weight_pub(pos_a, pos_b);
-                    stretch_magic += bg_d * self.stretch.stretch_bigram_weight_pub(pos_a, pos_b);
-                    scissors_magic += bg_d * self.scissors.scissors_bigram_weight_pub(pos_a, pos_b);
+        for &(mk, l, o) in &hyp_rules {
+            if l >= nk || o >= nk || mk >= nk { continue; }
+
+            let pos_l = self.key_positions.get(l).copied().flatten();
+            let pos_o = self.key_positions.get(o).copied().flatten();
+            let pos_m = self.key_positions.get(mk).copied().flatten();
+
+            // Part 1: Full steal — bigram (l→o) becomes (l→mk)
+            let full_freq = bg_freq[l * nk + o];
+            if full_freq != 0 {
+                if let (Some(pl), Some(po)) = (pos_l, pos_o) {
+                    sfb_magic -= full_freq * self.sfb.sf_bigram_weight_pub(pl, po);
+                    stretch_magic -= full_freq * self.stretch.stretch_bigram_weight_pub(pl, po);
+                    scissors_magic -= full_freq * self.scissors.scissors_bigram_weight_pub(pl, po);
                 }
-                if sg_d != 0 {
-                    sfb_magic += sg_d * self.sfb.sf_skipgram_weight_pub(pos_a, pos_b);
-                    scissors_magic += sg_d * self.scissors.scissors_skipgram_weight_pub(pos_a, pos_b);
+                if let (Some(pl), Some(pm)) = (pos_l, pos_m) {
+                    sfb_magic += full_freq * self.sfb.sf_bigram_weight_pub(pl, pm);
+                    stretch_magic += full_freq * self.stretch.stretch_bigram_weight_pub(pl, pm);
+                    scissors_magic += full_freq * self.scissors.scissors_bigram_weight_pub(pl, pm);
                 }
             }
-        }
 
-        // Trigram magic delta
-        let np = self.trigram.num_positions();
-        let mut trigram_magic: i64 = 0;
-        for a in 0..nk {
-            let pos_a = match self.key_positions.get(a).copied().flatten() {
-                Some(p) if p < np => p,
-                _ => continue,
-            };
-            for b in 0..nk {
-                let pos_b = match self.key_positions.get(b).copied().flatten() {
-                    Some(p) if p < np => p,
-                    _ => continue,
-                };
-                for c in 0..nk {
-                    let d = tg_delta[a * nk2 + b * nk + c];
-                    if d == 0 { continue; }
-                    let pos_c = match self.key_positions.get(c).copied().flatten() {
-                        Some(p) if p < np => p,
-                        _ => continue,
-                    };
-                    trigram_magic += d * self.trigram.weight_at_positions(pos_a, pos_b, pos_c);
+            // Part 2: Partial steal — trigram (l→o→C): bg (o→C) becomes (mk→C)
+            for c in 0..nk {
+                let tg_count = tg_freq[l][o][c];
+                if tg_count == 0 { continue; }
+                if rule_lookup[o * nk + c] { continue; } // dedup: another rule fully steals o→C
+
+                let pos_c = self.key_positions.get(c).copied().flatten();
+                if let (Some(po), Some(pc)) = (pos_o, pos_c) {
+                    sfb_magic -= tg_count * self.sfb.sf_bigram_weight_pub(po, pc);
+                    stretch_magic -= tg_count * self.stretch.stretch_bigram_weight_pub(po, pc);
+                    scissors_magic -= tg_count * self.scissors.scissors_bigram_weight_pub(po, pc);
+                }
+                if let (Some(pm), Some(pc)) = (pos_m, pos_c) {
+                    sfb_magic += tg_count * self.sfb.sf_bigram_weight_pub(pm, pc);
+                    stretch_magic += tg_count * self.stretch.stretch_bigram_weight_pub(pm, pc);
+                    scissors_magic += tg_count * self.scissors.scissors_bigram_weight_pub(pm, pc);
+                }
+            }
+
+            // Part 3: Skipgram steal — trigram (Z→l→o): sg (Z→o) becomes (Z→mk)
+            for z in 0..nk {
+                let tg_count = tg_freq[z][l][o];
+                if tg_count == 0 { continue; }
+                if rule_lookup[z * nk + o] { continue; }
+
+                let pos_z = self.key_positions.get(z).copied().flatten();
+                if let (Some(pz), Some(po)) = (pos_z, pos_o) {
+                    sfb_magic -= tg_count * self.sfb.sf_skipgram_weight_pub(pz, po);
+                    scissors_magic -= tg_count * self.scissors.scissors_skipgram_weight_pub(pz, po);
+                }
+                if let (Some(pz), Some(pm)) = (pos_z, pos_m) {
+                    sfb_magic += tg_count * self.sfb.sf_skipgram_weight_pub(pz, pm);
+                    scissors_magic += tg_count * self.scissors.scissors_skipgram_weight_pub(pz, pm);
+                }
+            }
+
+            // Trigram deltas: Z→l→o becomes Z→l→mk, l→o→C becomes l→mk→C
+            if let Some(pl) = pos_l {
+                if pl < np {
+                    for z in 0..nk {
+                        let freq = tg_freq[z][l][o];
+                        if freq == 0 { continue; }
+                        let pz = match self.key_positions.get(z).copied().flatten() {
+                            Some(p) if p < np => p,
+                            _ => continue,
+                        };
+                        if let Some(po) = pos_o { if po < np {
+                            trigram_magic -= freq * self.trigram.weight_at_positions(pz, pl, po);
+                        }}
+                        if let Some(pm) = pos_m { if pm < np {
+                            trigram_magic += freq * self.trigram.weight_at_positions(pz, pl, pm);
+                        }}
+                    }
+                    for c in 0..nk {
+                        let freq = tg_freq[l][o][c];
+                        if freq == 0 { continue; }
+                        let pc = match self.key_positions.get(c).copied().flatten() {
+                            Some(p) if p < np => p,
+                            _ => continue,
+                        };
+                        if let Some(po) = pos_o { if po < np {
+                            trigram_magic -= freq * self.trigram.weight_at_positions(pl, po, pc);
+                        }}
+                        if let Some(pm) = pos_m { if pm < np {
+                            trigram_magic += freq * self.trigram.weight_at_positions(pl, pm, pc);
+                        }}
+                    }
                 }
             }
         }
 
         // Base scores (without magic) + hypothetical magic deltas
-        let base_sfb = self.sfb.score() - self.sfb.magic_delta();
-        let base_stretch = self.stretch.score() - self.stretch.magic_delta();
-        let base_scissors = self.scissors.score() - self.scissors.magic_delta();
-        let base_trigram = self.trigram.score() - self.trigram.magic_delta();
+        let base = (self.sfb.score() - self.sfb.magic_delta())
+            + (self.stretch.score() - self.stretch.magic_delta())
+            + (self.scissors.score() - self.scissors.magic_delta())
+            + (self.trigram.score() - self.trigram.magic_delta());
 
         // Magic penalty for hypothetical rules
         let mut regular = 0i64;
@@ -847,11 +844,7 @@ impl CachedLayout {
 
         let fu = self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale;
 
-        base_sfb + sfb_magic
-            + base_stretch + stretch_magic
-            + base_scissors + scissors_magic
-            + base_trigram + trigram_magic
-            + hyp_penalty + fu
+        base + sfb_magic + stretch_magic + scissors_magic + trigram_magic + hyp_penalty + fu
     }
 
     /// Recompute magic deltas. Call after _no_update mutations to make score() valid.
