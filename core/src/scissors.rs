@@ -703,6 +703,11 @@ impl ScissorsCache {
             + self.magic_rule_score_delta
     }
 
+    #[inline]
+    pub fn magic_delta(&self) -> i64 {
+        self.magic_rule_score_delta
+    }
+
     /// Populate statistics with normalized scissor frequencies.
     ///
     /// Computes normalized frequencies for each scissor type by dividing the
@@ -1243,6 +1248,60 @@ impl ScissorsCache {
             }
         }
         self.magic_rule_score_delta = total;
+    }
+
+    /// Speculative magic delta after swapping keys at two positions.
+    pub fn speculative_magic_delta_for_swap(
+        &self,
+        key_a: CacheKey,
+        key_b: CacheKey,
+        pos_a: CachePos,
+        pos_b: CachePos,
+        bg_delta: &[i64],
+        sg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let mut delta = self.magic_rule_score_delta;
+
+        for x in 0..nk {
+            if x == key_a || x == key_b { continue; }
+            let pos_x = match key_positions.get(x).copied().flatten() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let bg_d = bg_delta[key_a * nk + x];
+            let sg_d = sg_delta[key_a * nk + x];
+            if bg_d != 0 { delta += bg_d * (self.scissors_bigram_weight(pos_b, pos_x) - self.scissors_bigram_weight(pos_a, pos_x)); }
+            if sg_d != 0 { delta += sg_d * (self.scissors_skipgram_weight(pos_b, pos_x) - self.scissors_skipgram_weight(pos_a, pos_x)); }
+
+            let bg_d = bg_delta[x * nk + key_a];
+            let sg_d = sg_delta[x * nk + key_a];
+            if bg_d != 0 { delta += bg_d * (self.scissors_bigram_weight(pos_x, pos_b) - self.scissors_bigram_weight(pos_x, pos_a)); }
+            if sg_d != 0 { delta += sg_d * (self.scissors_skipgram_weight(pos_x, pos_b) - self.scissors_skipgram_weight(pos_x, pos_a)); }
+
+            let bg_d = bg_delta[key_b * nk + x];
+            let sg_d = sg_delta[key_b * nk + x];
+            if bg_d != 0 { delta += bg_d * (self.scissors_bigram_weight(pos_a, pos_x) - self.scissors_bigram_weight(pos_b, pos_x)); }
+            if sg_d != 0 { delta += sg_d * (self.scissors_skipgram_weight(pos_a, pos_x) - self.scissors_skipgram_weight(pos_b, pos_x)); }
+
+            let bg_d = bg_delta[x * nk + key_b];
+            let sg_d = sg_delta[x * nk + key_b];
+            if bg_d != 0 { delta += bg_d * (self.scissors_bigram_weight(pos_x, pos_a) - self.scissors_bigram_weight(pos_x, pos_b)); }
+            if sg_d != 0 { delta += sg_d * (self.scissors_skipgram_weight(pos_x, pos_a) - self.scissors_skipgram_weight(pos_x, pos_b)); }
+        }
+
+        let bg_ab = bg_delta[key_a * nk + key_b];
+        let sg_ab = sg_delta[key_a * nk + key_b];
+        if bg_ab != 0 { delta += bg_ab * (self.scissors_bigram_weight(pos_b, pos_a) - self.scissors_bigram_weight(pos_a, pos_b)); }
+        if sg_ab != 0 { delta += sg_ab * (self.scissors_skipgram_weight(pos_b, pos_a) - self.scissors_skipgram_weight(pos_a, pos_b)); }
+        let bg_ba = bg_delta[key_b * nk + key_a];
+        let sg_ba = sg_delta[key_b * nk + key_a];
+        if bg_ba != 0 { delta += bg_ba * (self.scissors_bigram_weight(pos_a, pos_b) - self.scissors_bigram_weight(pos_b, pos_a)); }
+        if sg_ba != 0 { delta += sg_ba * (self.scissors_skipgram_weight(pos_a, pos_b) - self.scissors_skipgram_weight(pos_b, pos_a)); }
+
+        delta
     }
 }
 

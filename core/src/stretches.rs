@@ -124,6 +124,11 @@ impl StretchCache {
     }
 
     #[inline]
+    pub fn magic_delta(&self) -> i64 {
+        self.magic_rule_score_delta
+    }
+
+    #[inline]
     pub fn pairs_for_pos(&self, pos: usize) -> &[StretchPair] {
         &self.stretch_pairs_per_key[pos]
     }
@@ -441,5 +446,43 @@ impl StretchCache {
             }
         }
         self.magic_rule_score_delta = total;
+    }
+
+    /// Speculative magic delta after swapping keys at two positions.
+    pub fn speculative_magic_delta_for_swap(
+        &self,
+        key_a: CacheKey,
+        key_b: CacheKey,
+        pos_a: CachePos,
+        pos_b: CachePos,
+        bg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let mut delta = self.magic_rule_score_delta;
+
+        for x in 0..nk {
+            if x == key_a || x == key_b { continue; }
+            let pos_x = match key_positions.get(x).copied().flatten() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let d = bg_delta[key_a * nk + x];
+            if d != 0 { delta += d * (self.stretch_bigram_weight(pos_b, pos_x) - self.stretch_bigram_weight(pos_a, pos_x)); }
+            let d = bg_delta[x * nk + key_a];
+            if d != 0 { delta += d * (self.stretch_bigram_weight(pos_x, pos_b) - self.stretch_bigram_weight(pos_x, pos_a)); }
+            let d = bg_delta[key_b * nk + x];
+            if d != 0 { delta += d * (self.stretch_bigram_weight(pos_a, pos_x) - self.stretch_bigram_weight(pos_b, pos_x)); }
+            let d = bg_delta[x * nk + key_b];
+            if d != 0 { delta += d * (self.stretch_bigram_weight(pos_x, pos_a) - self.stretch_bigram_weight(pos_x, pos_b)); }
+        }
+
+        let d = bg_delta[key_a * nk + key_b];
+        if d != 0 { delta += d * (self.stretch_bigram_weight(pos_b, pos_a) - self.stretch_bigram_weight(pos_a, pos_b)); }
+        let d = bg_delta[key_b * nk + key_a];
+        if d != 0 { delta += d * (self.stretch_bigram_weight(pos_a, pos_b) - self.stretch_bigram_weight(pos_b, pos_a)); }
+
+        delta
     }
 }

@@ -767,6 +767,74 @@ impl TrigramCache {
         self.magic_rule_score_delta = total;
     }
 
+    /// Speculative magic delta after swapping keys at two positions.
+    /// Iterates only triples involving key_a or key_b in the tg_delta array.
+    pub fn speculative_magic_delta_for_swap(
+        &self,
+        key_a: CacheKey,
+        key_b: CacheKey,
+        pos_a: CachePos,
+        pos_b: CachePos,
+        tg_delta: &[i64],
+        key_positions: &[Option<CachePos>],
+    ) -> i64 {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let np = self.num_positions;
+        let mut delta = self.magic_rule_score_delta;
+
+        // For each triple (a, b, c) where tg_delta != 0 and at least one of
+        // {a, b, c} is key_a or key_b, compute the weight change.
+        // We iterate the full nk³ space but skip zeros early.
+        // In practice tg_delta is very sparse (only entries touched by rules).
+        for a in 0..nk {
+            let old_pa = key_positions.get(a).copied().flatten();
+            for b in 0..nk {
+                let base = a * nk2 + b * nk;
+                let old_pb = key_positions.get(b).copied().flatten();
+                for c in 0..nk {
+                    let d = tg_delta[base + c];
+                    if d == 0 { continue; }
+
+                    // Only process if at least one of a,b,c is key_a or key_b
+                    let involves_swap = a == key_a || a == key_b
+                        || b == key_a || b == key_b
+                        || c == key_a || c == key_b;
+                    if !involves_swap { continue; }
+
+                    let old_pc = key_positions.get(c).copied().flatten();
+
+                    // Old positions
+                    let (opa, opb, opc) = match (old_pa, old_pb, old_pc) {
+                        (Some(pa), Some(pb), Some(pc)) if pa < np && pb < np && pc < np => (pa, pb, pc),
+                        _ => continue,
+                    };
+
+                    // New positions (apply swap)
+                    let swap = |k: usize, p: usize| -> usize {
+                        if k == key_a { pos_b } else if k == key_b { pos_a } else { p }
+                    };
+                    let npa = swap(a, opa);
+                    let npb = swap(b, opb);
+                    let npc = swap(c, opc);
+
+                    let old_w = self.get_weight(TRIGRAMS[self.fingers[opa] * 100 + self.fingers[opb] * 10 + self.fingers[opc]]);
+                    let new_w = self.get_weight(TRIGRAMS[self.fingers[npa] * 100 + self.fingers[npb] * 10 + self.fingers[npc]]);
+                    if old_w != new_w {
+                        delta += d * (new_w - old_w);
+                    }
+                }
+            }
+        }
+
+        delta
+    }
+
+    #[inline]
+    pub fn magic_delta(&self) -> i64 {
+        self.magic_rule_score_delta
+    }
+
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
     ///
     /// For each position and hypothetical key, computes the total weighted score

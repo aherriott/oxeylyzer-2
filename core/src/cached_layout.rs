@@ -209,6 +209,11 @@ pub struct CachedLayout {
     finger_usage_score: i64,         // running total: -Σ char_freq[key] × finger_weight
     finger_usage_scale: i64,         // auto-computed normalization factor
     magic_penalty_scale: i64,        // auto-computed: penalty=1 costs ~1 rule's worth
+    /// Cached frequency deltas from active magic rules (computed by update()).
+    /// Used for O(1) speculative KeySwap scoring with active magic rules.
+    magic_bg_delta: Vec<i64>,        // bg_delta[a*nk+b] = effective - raw
+    magic_sg_delta: Vec<i64>,        // sg_delta[a*nk+b] = effective - raw
+    magic_tg_delta: Vec<i64>,        // tg_delta[a*nk*nk+b*nk+c] = effective - raw
 }
 
 impl Default for CachedLayout {
@@ -237,6 +242,9 @@ impl Default for CachedLayout {
             finger_usage_score: 0,
             finger_usage_scale: 1,
             magic_penalty_scale: 1,
+            magic_bg_delta: Vec::new(),
+            magic_sg_delta: Vec::new(),
+            magic_tg_delta: Vec::new(),
         }
     }
 }
@@ -361,6 +369,9 @@ impl CachedLayout {
             finger_usage_score: 0,
             finger_usage_scale: 1,
             magic_penalty_scale: scale_factors.magic_penalty_scale,
+            magic_bg_delta: vec![0; num_keys * num_keys],
+            magic_sg_delta: vec![0; num_keys * num_keys],
+            magic_tg_delta: vec![0; num_keys * num_keys * num_keys],
         };
 
         for (pos, &key_char) in layout.keys.iter().enumerate() {
@@ -611,35 +622,44 @@ impl CachedLayout {
     pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
-                // When magic rules are active, a keyswap changes the magic-rule
-                // contribution (rules re-map different trigrams depending on key
-                // positions). The fast speculative path below doesn't account for
-                // this. Fall back to apply-score-revert when rules exist.
-                if !self.current_magic_rules.is_empty() {
-                    self.swap_key(a, b);
-                    let s = self.score();
-                    self.swap_key(a, b);
-                    return s;
-                }
-
                 let key_a = self.keys[a];
                 let key_b = self.keys[b];
                 let bg_freq = self.magic.bg_freq_flat();
                 let sg_freq = self.magic.sg_freq_flat();
                 let tg_flat = self.magic.tg_freq_flat();
 
-                let sfb = self.sfb.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
-                let stretch = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
-                let scissors = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                // Base analyzer scores (without magic delta) use fast speculative path
+                let sfb_base = self.sfb.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
+                let stretch_base = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
+                let scissors_base = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
 
-                // Compute typed per-type frequency deltas. We need the per-type breakdown
-                // (not just the weighted sum) because score() applies an offset of
-                // -max_trigram_weight * total_freq, which depends on the per-type totals.
                 let tg_delta_a = self.trigram.compute_replace_delta_flat_typed(a, key_a, key_b, &self.keys, Some(b), tg_flat);
                 let tg_delta_b = self.trigram.compute_replace_delta_flat_typed(b, key_b, key_a, &self.keys, Some(a), tg_flat);
                 let tg_delta_both = self.trigram.compute_swap_both_delta_flat_typed(a, b, key_a, key_b, &self.keys, tg_flat);
                 let tg_delta = tg_delta_a.combine(&tg_delta_b).combine(&tg_delta_both);
                 let trigram = self.trigram.score() + self.trigram.weighted_score_of_delta(&tg_delta);
+
+                // If magic rules are active, compute speculative magic deltas for
+                // each analyzer. The cached bg/sg/tg deltas don't change (they depend
+                // on rules, not positions), but the weight functions change because
+                // key_a and key_b swap positions.
+                let (sfb, stretch, scissors, trigram_final) = if !self.current_magic_rules.is_empty() {
+                    let sfb_magic = self.sfb.speculative_magic_delta_for_swap(
+                        key_a, key_b, a, b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
+                    let stretch_magic = self.stretch.speculative_magic_delta_for_swap(
+                        key_a, key_b, a, b, &self.magic_bg_delta, &self.key_positions);
+                    let scissors_magic = self.scissors.speculative_magic_delta_for_swap(
+                        key_a, key_b, a, b, &self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
+                    let trigram_magic = self.trigram.speculative_magic_delta_for_swap(
+                        key_a, key_b, a, b, &self.magic_tg_delta, &self.key_positions);
+                    // score_swap returns base + current magic delta. Replace with speculative.
+                    (sfb_base - self.sfb.magic_delta() + sfb_magic,
+                     stretch_base - self.stretch.magic_delta() + stretch_magic,
+                     scissors_base - self.scissors.magic_delta() + scissors_magic,
+                     trigram - self.trigram.magic_delta() + trigram_magic)
+                } else {
+                    (sfb_base, stretch_base, scissors_base, trigram)
+                };
 
                 let fu_delta = if self.finger_usage_weight != 0 {
                     let fi_a = self.fingers[a] as usize;
@@ -653,7 +673,7 @@ impl CachedLayout {
                     } else { 0 }
                 } else { 0 };
 
-                sfb + stretch + scissors + trigram + self.magic_penalty()
+                sfb + stretch + scissors + trigram_final + self.magic_penalty()
                     + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
@@ -695,14 +715,24 @@ impl CachedLayout {
         self.stretch.reset_magic_deltas();
         self.scissors.reset_magic_deltas();
         self.trigram.reset_magic_deltas();
-        if self.current_magic_rules.is_empty() { return; }
 
         let nk = self.magic.num_keys;
+
+        if self.current_magic_rules.is_empty() {
+            // Clear cached deltas
+            self.magic_bg_delta.clear();
+            self.magic_bg_delta.resize(nk * nk, 0);
+            self.magic_sg_delta.clear();
+            self.magic_sg_delta.resize(nk * nk, 0);
+            self.magic_tg_delta.clear();
+            self.magic_tg_delta.resize(nk * nk * nk, 0);
+            return;
+        }
+
         let bg_freq = self.magic.bg_freq_flat();
         let tg_freq = self.magic.tg_freq();
 
         // Build a lookup: for each (leader, output) pair, what magic_key steals it?
-        // This is the inverse of current_magic_rules keyed by (leader, output).
         let mut rule_lookup: Vec<Option<CacheKey>> = vec![None; nk * nk];
         for (&(magic_key, leader), &output) in &self.current_magic_rules {
             if output == EMPTY_KEY || leader >= nk || output >= nk { continue; }
@@ -710,70 +740,47 @@ impl CachedLayout {
         }
 
         // Compute effective bigram and skipgram frequency deltas.
-        // delta[a*nk+b] = effective_freq[a][b] - raw_freq[a][b]
-        let mut bg_delta: Vec<i64> = vec![0; nk * nk];
-        let mut sg_delta: Vec<i64> = vec![0; nk * nk];
+        self.magic_bg_delta.clear();
+        self.magic_bg_delta.resize(nk * nk, 0);
+        self.magic_sg_delta.clear();
+        self.magic_sg_delta.resize(nk * nk, 0);
 
         for (&(magic_key, leader), &output) in &self.current_magic_rules {
             if output == EMPTY_KEY || leader >= nk || output >= nk || magic_key >= nk {
                 continue;
             }
 
-            // Part 1: Full steal — bigram (leader→output) becomes (leader→magic)
             let full_freq = bg_freq[leader * nk + output];
             if full_freq != 0 {
-                bg_delta[leader * nk + output] -= full_freq;
-                bg_delta[leader * nk + magic_key] += full_freq;
+                self.magic_bg_delta[leader * nk + output] -= full_freq;
+                self.magic_bg_delta[leader * nk + magic_key] += full_freq;
             }
 
-            // Part 2: Partial steal — trigram (leader→output→C) redirects
-            // bigram (output→C) to (magic→C), but ONLY for the portion of
-            // (output→C) that comes from trigrams starting with this leader.
-            // If another rule ALSO does a full steal of (output→C), that rule
-            // claims all of bg_freq[output][C]. We must not double-count:
-            // the partial steal only applies to trigram-context occurrences
-            // that aren't already claimed by another rule's full steal.
             for c in 0..nk {
                 let tg_count = tg_freq[leader][output][c];
                 if tg_count == 0 { continue; }
-
-                // Check if another rule does a full steal of (output→C).
-                // If so, that rule already redirected ALL of bg[output][C]
-                // including the tg[leader][output][C] portion. Skip.
-                if rule_lookup[output * nk + c].is_some() {
-                    continue;
-                }
-
-                bg_delta[output * nk + c] -= tg_count;
-                bg_delta[magic_key * nk + c] += tg_count;
+                if rule_lookup[output * nk + c].is_some() { continue; }
+                self.magic_bg_delta[output * nk + c] -= tg_count;
+                self.magic_bg_delta[magic_key * nk + c] += tg_count;
             }
 
-            // Part 3: Skipgram steal — trigram (Z→leader→output) redirects
-            // skipgram (Z→output) to (Z→magic). Same dedup logic.
             for z in 0..nk {
                 let tg_count = tg_freq[z][leader][output];
                 if tg_count == 0 { continue; }
-
-                // Check if another rule does a full steal of (Z→output).
-                // If so, that rule already redirected ALL of sg[Z][output]
-                // including this portion. Skip.
-                // Note: a full steal of (Z→output) means rule (_, Z)→output.
-                if rule_lookup[z * nk + output].is_some() {
-                    continue;
-                }
-
-                sg_delta[z * nk + output] -= tg_count;
-                sg_delta[z * nk + magic_key] += tg_count;
+                if rule_lookup[z * nk + output].is_some() { continue; }
+                self.magic_sg_delta[z * nk + output] -= tg_count;
+                self.magic_sg_delta[z * nk + magic_key] += tg_count;
             }
         }
 
         // Apply deltas to each analyzer using their position-based weight functions.
-        self.sfb.apply_magic_freq_deltas(&bg_delta, &sg_delta, &self.key_positions);
-        self.stretch.apply_magic_freq_deltas(&bg_delta, &self.key_positions);
-        self.scissors.apply_magic_freq_deltas(&bg_delta, &sg_delta, &self.key_positions);
+        self.sfb.apply_magic_freq_deltas(&self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
+        self.stretch.apply_magic_freq_deltas(&self.magic_bg_delta, &self.key_positions);
+        self.scissors.apply_magic_freq_deltas(&self.magic_bg_delta, &self.magic_sg_delta, &self.key_positions);
 
-        // Trigram analyzer: compute effective trigram deltas and apply.
-        let mut tg_delta: Vec<i64> = vec![0; nk * nk * nk];
+        // Trigram analyzer: compute effective trigram deltas and cache them.
+        self.magic_tg_delta.clear();
+        self.magic_tg_delta.resize(nk * nk * nk, 0);
         for (&(magic_key, leader), &output) in &self.current_magic_rules {
             if output == EMPTY_KEY || leader >= nk || output >= nk || magic_key >= nk {
                 continue;
@@ -782,18 +789,18 @@ impl CachedLayout {
             for z in 0..nk {
                 let freq = tg_freq[z][leader][output];
                 if freq == 0 { continue; }
-                tg_delta[z * nk * nk + leader * nk + output] -= freq;
-                tg_delta[z * nk * nk + leader * nk + magic_key] += freq;
+                self.magic_tg_delta[z * nk * nk + leader * nk + output] -= freq;
+                self.magic_tg_delta[z * nk * nk + leader * nk + magic_key] += freq;
             }
             // A→B→C becomes A→M→C
             for c in 0..nk {
                 let freq = tg_freq[leader][output][c];
                 if freq == 0 { continue; }
-                tg_delta[leader * nk * nk + output * nk + c] -= freq;
-                tg_delta[leader * nk * nk + magic_key * nk + c] += freq;
+                self.magic_tg_delta[leader * nk * nk + output * nk + c] -= freq;
+                self.magic_tg_delta[leader * nk * nk + magic_key * nk + c] += freq;
             }
         }
-        self.trigram.apply_magic_tg_deltas(&tg_delta, &self.key_positions);
+        self.trigram.apply_magic_tg_deltas(&self.magic_tg_delta, &self.key_positions);
     }
 
     /// Full recompute of trigram frequencies from scratch. Use after out-of-order
