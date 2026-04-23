@@ -2041,13 +2041,18 @@ impl TrigramCache {
         keys: &[usize],
         tg_freq: &[Vec<Vec<i64>>],
     ) -> i64 {
-        if self.weighted_scores_initialized {
-            let score_delta = self.compute_replace_delta_fast(pos, old_key, new_key);
-            self.score() + score_delta
-        } else {
-            let score_delta = self.compute_replace_delta_score_only(pos, old_key, new_key, keys, None, tg_freq);
-            self.score() + score_delta
-        }
+        // Need full per-type delta to correctly account for the
+        // -max_trigram_weight * total_freq offset term in score().
+        let delta = self.compute_replace_delta(pos, old_key, new_key, keys, None, tg_freq);
+        let weighted_delta = delta.inroll_freq * self.inroll_weight
+            + delta.outroll_freq * self.outroll_weight
+            + delta.alternate_freq * self.alternate_weight
+            + delta.redirect_freq * self.redirect_weight
+            + delta.onehandin_freq * self.onehandin_weight
+            + delta.onehandout_freq * self.onehandout_weight;
+        let total_freq_delta = delta.inroll_freq + delta.outroll_freq + delta.alternate_freq
+            + delta.redirect_freq + delta.onehandin_freq + delta.onehandout_freq;
+        self.score() + weighted_delta - self.max_trigram_weight * total_freq_delta
     }
 
     /// Swap keys at two positions. Returns the new score.
@@ -3519,10 +3524,13 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        // Expected: 10*1 + 20*2 + 30*3 + 40*(-4) + 50*5 + 60*6
-        //         = 10 + 40 + 90 - 160 + 250 + 360 = 590
-        // (redirect weight is negated internally: positive config value = penalty)
-        assert_eq!(cache.score(), 590);
+        // Raw weighted sum: 10*1 + 20*2 + 30*3 + 40*(-4) + 50*5 + 60*6 = 590
+        // score() applies an offset: -max_trigram_weight * total_freq
+        //   max_trigram_weight = max(1,2,3,-4,5,6) = 6
+        //   total_freq = 10+20+30+40+50+60 = 210
+        //   offset = -6 * 210 = -1260
+        // Expected score = 590 - 1260 = -670
+        assert_eq!(cache.score(), -670);
     }
 
     #[test]
@@ -3565,9 +3573,11 @@ mod tests {
 
         // redirect=-20 in config → redirect_weight = -(-20) = 20 (negated in set_weights)
         // onehandout=-5 in config → onehandout_weight = -5 (not negated, it's a reward)
-        // Expected: 100*10 + 100*10 + 100*10 + 100*20 + 100*5 + 100*(-5)
-        //         = 1000 + 1000 + 1000 + 2000 + 500 - 500 = 5000
-        assert_eq!(cache.score(), 5000);
+        // Raw: 100*10 + 100*10 + 100*10 + 100*20 + 100*5 + 100*(-5) = 5000
+        // Offset: max_weight = max(10,10,10,20,5,-5) = 20, total_freq = 600
+        //   = -20 * 600 = -12000
+        // Expected score = 5000 - 12000 = -7000
+        assert_eq!(cache.score(), -7000);
     }
 
     #[test]
@@ -3609,9 +3619,11 @@ mod tests {
         cache.set_weights(&weights);
 
         // redirect=5 in config → redirect_weight = -5 (negated in set_weights)
-        // Expected: 50*2 + (-10)*3 + 30*4 + (-20)*(-5) + 10*6 + 0*7
-        //         = 100 - 30 + 120 + 100 + 60 + 0 = 350
-        assert_eq!(cache.score(), 350);
+        // Raw: 50*2 + (-10)*3 + 30*4 + (-20)*(-5) + 10*6 + 0*7 = 350
+        // Offset: max = max(2,3,4,-5,6,7) = 7, total_freq = 50-10+30-20+10+0 = 60
+        //   = -7 * 60 = -420
+        // Expected score = 350 - 420 = -70
+        assert_eq!(cache.score(), -70);
     }
 
     #[test]
@@ -3647,8 +3659,11 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        // Expected: 42*10 = 420
-        assert_eq!(cache.score(), 420);
+        // Raw: 42 * 10 = 420
+        // Offset: max = max(10,20,30,-40,50,60) = 60, total_freq = 42
+        //   = -60 * 42 = -2520
+        // Expected score = 420 - 2520 = -2100
+        assert_eq!(cache.score(), -2100);
     }
 
     // ==================== compute_replace_delta tests ====================
@@ -4328,7 +4343,8 @@ mod tests {
 
         // Test that replace_key with apply=true mutates internal state
         // Validates: Requirement 5.2
-        let fingers = vec![LP, RI];
+        // Uses 3 positions so trigram combos can form.
+        let fingers = vec![LP, LI, RI];
         let mut cache = TrigramCache::new(&fingers, 4);
 
         let weights = Weights {
@@ -4353,21 +4369,21 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        let keys = vec![0, 1];
+        let keys = vec![0, 1, 3];
 
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),  // old_key trigram
-            (2, 1, 0, 200),  // new_key trigram
+            (0, 1, 3, 100),  // old_key trigram: 0→1→3
+            (2, 1, 3, 200),  // new_key trigram: 2→1→3
         ]);
 
-        // Initial score should be 0
+        // Initial score should be 0 (key 2 isn't placed yet)
         assert_eq!(cache.score(), 0);
 
-        // Replace key 0 with key 2 (apply=true)
+        // Replace key 0 at pos 0 with key 2 (apply=true)
         cache.replace_key(0, 0, 2, &keys, None, &tg_freq);
         let new_score = cache.score();
 
-        // Score should be updated
+        // Score should be updated (the new trigram 2→1→3 should now contribute)
         assert_ne!(new_score, 0);
 
         // Subsequent call to score() should return the same value
@@ -4380,7 +4396,8 @@ mod tests {
 
         // Test that replace_key with apply=false does NOT mutate internal state
         // Validates: Requirement 5.3
-        let fingers = vec![LP, RI];
+        // Uses 3 positions so trigram combos can form.
+        let fingers = vec![LP, LI, RI];
         let mut cache = TrigramCache::new(&fingers, 4);
 
         let weights = Weights {
@@ -4405,14 +4422,14 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        let keys = vec![0, 1];
+        let keys = vec![0, 1, 3];
 
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),  // old_key trigram
-            (2, 1, 0, 200),  // new_key trigram
+            (0, 1, 3, 100),  // old_key trigram
+            (2, 1, 3, 200),  // new_key trigram
         ]);
 
-        // Initial score should be 0
+        // Initial score should be 0 (key 2 not placed)
         let initial_score = cache.score();
         assert_eq!(initial_score, 0);
 
@@ -4476,9 +4493,10 @@ mod tests {
     fn test_replace_key_apply_false_returns_score_plus_delta() {
         use crate::weights::{FingerWeights, Weights};
 
-        // Test that replace_key with apply=false returns score() + delta
+        // Test that replace_key with apply=false returns the correct speculative score.
         // Validates: Requirement 5.3
-        let fingers = vec![LP, RI];
+        // Uses 3 positions so trigram combos can form.
+        let fingers = vec![LP, LI, RI];
         let mut cache = TrigramCache::new(&fingers, 4);
 
         let weights = Weights {
@@ -4503,24 +4521,21 @@ mod tests {
         };
         cache.set_weights(&weights);
 
-        let keys = vec![0, 1];
+        let keys = vec![0, 1, 3];
 
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),
-            (2, 1, 0, 200),
+            (0, 1, 3, 100),
+            (2, 1, 3, 200),
         ]);
 
-        // Get initial score
-        let initial_score = cache.score();
-
-        // Compute expected score delta
-        let score_delta = cache.compute_replace_delta_score_only(0, 0, 2, &keys, None, &tg_freq);
-
-        // Replace key 0 with key 2 (apply=false)
+        // Speculative should equal the score after a real apply (on a clone).
         let speculative_score = cache.score_replace(0, 0, 2, &keys, &tg_freq);
 
-        // The speculative score should equal initial_score + score_delta
-        assert_eq!(speculative_score, initial_score + score_delta);
+        let mut clone = cache.clone();
+        clone.replace_key(0, 0, 2, &keys, None, &tg_freq);
+        let actual_score = clone.score();
+
+        assert_eq!(speculative_score, actual_score);
     }
 
     #[test]
@@ -4529,7 +4544,8 @@ mod tests {
 
         // Test that apply=true and apply=false return the same score value
         // (just one mutates state and the other doesn't)
-        let fingers = vec![LP, RI];
+        // Uses 3 positions so trigram combos can form.
+        let fingers = vec![LP, LI, RI];
         let mut cache1 = TrigramCache::new(&fingers, 4);
         let mut cache2 = TrigramCache::new(&fingers, 4);
 
@@ -4556,11 +4572,11 @@ mod tests {
         cache1.set_weights(&weights);
         cache2.set_weights(&weights);
 
-        let keys = vec![0, 1];
+        let keys = vec![0, 1, 3];
 
         let tg_freq = create_tg_freq(4, &[
-            (0, 1, 0, 100),
-            (2, 1, 0, 200),
+            (0, 1, 3, 100),
+            (2, 1, 3, 200),
         ]);
 
         // Replace with apply=false on cache1
