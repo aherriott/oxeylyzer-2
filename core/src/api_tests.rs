@@ -581,13 +581,6 @@ mod tests {
     }
 
     // ---- Invariant: swap_key matches full_recompute (after a single swap) ----
-    //
-    // KNOWN BUG: The trigram delta math (compute_replace_delta_flat +
-    // compute_swap_both_delta_flat) disagrees with full_recompute for some
-    // swap pairs. Drift is typically small (<1% of total score) but real.
-    // These tests are ignored until the delta math is reworked.
-    // See: investigation on sturdy layout swaps (0,1), (0,2), (1,2) drift
-    // while (3,4), (5,6), (0,10) do not.
 
     fn check_single_swap_matches_recompute(label: &str, a: &Analyzer, layout: &Layout) {
         let cache_tpl = fresh_cache(a, layout);
@@ -612,21 +605,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn swap_matches_recompute_non_magic() {
         let (a, layout) = non_magic_fixture();
         check_single_swap_matches_recompute("non_magic", &a, &layout);
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn swap_matches_recompute_magic_one() {
         let (a, layout) = magic_fixture();
         check_single_swap_matches_recompute("magic_one", &a, &layout);
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn swap_matches_recompute_random_magic() {
         let (a, layout) = random_magic_fixture();
         check_single_swap_matches_recompute("random_magic", &a, &layout);
@@ -654,21 +644,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn chain_matches_recompute_non_magic() {
         let (a, layout) = non_magic_fixture();
         check_chain_matches_recompute("non_magic", &a, &layout, 10);
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn chain_matches_recompute_magic_one() {
         let (a, layout) = magic_fixture();
         check_chain_matches_recompute("magic_one", &a, &layout, 10);
     }
 
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — see module-level comment"]
     fn chain_matches_recompute_random_magic() {
         let (a, layout) = random_magic_fixture();
         check_chain_matches_recompute("random_magic", &a, &layout, 10);
@@ -801,14 +788,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "exposes the trigram delta drift (speculative score_neighbor vs apply+score with active magic rules)"]
     fn score_neighbor_matches_apply_keyswap_magic_one() {
         let (a, layout) = magic_fixture();
         check_score_neighbor_matches_apply_keyswap("magic_one", &a, &layout);
     }
 
     #[test]
-    #[ignore = "exposes the trigram delta drift (speculative score_neighbor vs apply+score with active magic rules)"]
     fn score_neighbor_matches_apply_keyswap_random_magic() {
         let (a, layout) = random_magic_fixture();
         check_score_neighbor_matches_apply_keyswap("random_magic", &a, &layout);
@@ -817,7 +802,6 @@ mod tests {
     // ---- Invariant: update_for_keyswap matches full update() ----
 
     #[test]
-    #[ignore = "exposes the trigram delta drift"]
     fn update_for_keyswap_matches_full_update_random_magic() {
         let (a, layout) = random_magic_fixture();
 

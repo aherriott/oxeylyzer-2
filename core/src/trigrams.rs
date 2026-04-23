@@ -167,12 +167,6 @@ pub struct TrigramCache {
     /// This is added to the base score (computed from frequencies) to get the total score.
     magic_rule_score_delta: i64,
 
-    /// Cumulative score delta from key swaps since the last full frequency recompute.
-    /// `key_swap` cannot easily update per-type frequencies (it only has the total
-    /// weighted delta), so it accumulates into this field. Survives `reset_magic_deltas`
-    /// and `update()`, cleared only by `recompute_frequencies`.
-    swap_score_delta: i64,
-
     /// Pre-computed rule deltas for O(1) `add_rule` speculative scoring.
     /// Maps (leader, output, magic_key) -> score delta.
     rule_delta: HashMap<(CacheKey, CacheKey, CacheKey), i32>,
@@ -292,7 +286,6 @@ impl TrigramCache {
             active_rules: HashMap::default(),
             // Initialize magic rule score delta to zero
             magic_rule_score_delta: 0,
-            swap_score_delta: 0,
             // Initialize rule delta lookup table to empty (populated by init_rule_deltas)
             rule_delta: HashMap::default(),
         }
@@ -388,8 +381,7 @@ impl TrigramCache {
     /// Recompute per-type frequency totals from scratch using current key positions.
     /// Fixes drift from `replace_key_fast` when keys are cleared out of order.
     /// NOTE: Also resets `magic_rule_score_delta` since callers are expected to
-    /// re-apply magic rules via update() afterward. Also clears `swap_score_delta`
-    /// since the per-type frequencies now reflect all swaps.
+    /// re-apply magic rules via update() afterward.
     pub fn recompute_frequencies(&mut self, keys: &[usize], tg_flat: &[i64]) {
         self.inroll_freq = 0;
         self.outroll_freq = 0;
@@ -398,7 +390,6 @@ impl TrigramCache {
         self.onehandin_freq = 0;
         self.onehandout_freq = 0;
         self.magic_rule_score_delta = 0;
-        self.swap_score_delta = 0;
 
         let nk = self.num_keys;
         let nk2 = nk * nk;
@@ -687,13 +678,12 @@ impl TrigramCache {
         let rule_key = (magic_key, leader);
 
         // Check if there's an existing rule for this (magic_key, leader) pair.
-        // Prefer the stored delta (kept current by update_for_keyswap after swaps).
-        // Fall back to recomputing only if stored delta is absent.
-        let old_delta = if let Some(&(old_output, stored_delta)) = self.active_rules.get(&rule_key) {
+        // Stored deltas can become stale when keys move, so recompute.
+        let old_delta = if let Some(&(old_output, _stored_delta)) = self.active_rules.get(&rule_key) {
             if old_output == output {
                 return 0;
             }
-            stored_delta
+            self.compute_rule_delta(leader, old_output, magic_key, keys, key_positions, tg_freq)
         } else {
             0
         };
@@ -1449,7 +1439,22 @@ impl TrigramCache {
             + self.onehandout_freq * self.onehandout_weight
             - self.max_trigram_weight * total_freq
             + self.magic_rule_score_delta
-            + self.swap_score_delta
+    }
+
+    /// Compute the contribution a TrigramDelta would make to score() if applied.
+    /// Used by speculative paths to include the -max_trigram_weight * total_freq
+    /// offset correction consistently with score() math.
+    #[inline]
+    pub(crate) fn weighted_score_of_delta(&self, d: &TrigramDelta) -> i64 {
+        let weighted = d.inroll_freq * self.inroll_weight
+            + d.outroll_freq * self.outroll_weight
+            + d.alternate_freq * self.alternate_weight
+            + d.redirect_freq * self.redirect_weight
+            + d.onehandin_freq * self.onehandin_weight
+            + d.onehandout_freq * self.onehandout_weight;
+        let total_delta = d.inroll_freq + d.outroll_freq + d.alternate_freq
+            + d.redirect_freq + d.onehandin_freq + d.onehandout_freq;
+        weighted - self.max_trigram_weight * total_delta
     }
 
     pub fn combo_counts(&self) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
@@ -1940,7 +1945,7 @@ impl TrigramCache {
         self.apply_delta(&delta);
     }    /// Compute per-type frequency delta using flat trigram array.
     /// Returns a TrigramDelta with per-type breakdowns.
-    fn compute_replace_delta_flat_typed(
+    pub(crate) fn compute_replace_delta_flat_typed(
         &self,
         pos: usize,
         old_key: usize,
@@ -2044,15 +2049,7 @@ impl TrigramCache {
         // Need full per-type delta to correctly account for the
         // -max_trigram_weight * total_freq offset term in score().
         let delta = self.compute_replace_delta(pos, old_key, new_key, keys, None, tg_freq);
-        let weighted_delta = delta.inroll_freq * self.inroll_weight
-            + delta.outroll_freq * self.outroll_weight
-            + delta.alternate_freq * self.alternate_weight
-            + delta.redirect_freq * self.redirect_weight
-            + delta.onehandin_freq * self.onehandin_weight
-            + delta.onehandout_freq * self.onehandout_weight;
-        let total_freq_delta = delta.inroll_freq + delta.outroll_freq + delta.alternate_freq
-            + delta.redirect_freq + delta.onehandin_freq + delta.onehandout_freq;
-        self.score() + weighted_delta - self.max_trigram_weight * total_freq_delta
+        self.score() + self.weighted_score_of_delta(&delta)
     }
 
     /// Swap keys at two positions. Returns the new score.
@@ -2078,8 +2075,7 @@ impl TrigramCache {
     #[inline]
     /// Swap keys at two positions. Mutates running totals.
     /// Uses flat trigram array for cache-friendly access.
-    /// Does NOT update per-type frequency tracking (use `key_swap_full` for that,
-    /// or call `recompute_frequencies` later to rebuild per-type stats).
+    /// Properly updates per-type frequency tracking, so score() is valid after.
     pub fn key_swap(
         &mut self,
         pos_a: usize,
@@ -2093,13 +2089,21 @@ impl TrigramCache {
             return;
         }
 
-        let delta_a = self.compute_replace_delta_flat(pos_a, key_a, key_b, keys, Some(pos_b), tg_flat);
-        let delta_b = self.compute_replace_delta_flat(pos_b, key_b, key_a, keys, Some(pos_a), tg_flat);
-        let delta_both = self.compute_swap_both_delta_flat(pos_a, pos_b, key_a, key_b, keys, tg_flat);
+        // Compute typed per-type frequency deltas. The two single-position deltas
+        // use skip_pos to avoid double-counting trigrams that involve both positions;
+        // those are captured by the swap_both delta.
+        let delta_a = self.compute_replace_delta_flat_typed(
+            pos_a, key_a, key_b, keys, Some(pos_b), tg_flat,
+        );
+        let delta_b = self.compute_replace_delta_flat_typed(
+            pos_b, key_b, key_a, keys, Some(pos_a), tg_flat,
+        );
+        let delta_both = self.compute_swap_both_delta_flat_typed(
+            pos_a, pos_b, key_a, key_b, keys, tg_flat,
+        );
 
-        // Total weighted score delta for this swap. Accumulate into swap_score_delta
-        // (survives update() resets; only cleared by recompute_frequencies).
-        self.swap_score_delta += delta_a + delta_b + delta_both;
+        let combined = delta_a.combine(&delta_b).combine(&delta_both);
+        self.apply_delta(&combined);
     }
 
     /// Swap keys with full per-type frequency tracking. Slower but accurate for stats.
@@ -2305,6 +2309,87 @@ impl TrigramCache {
         }
 
         sd
+    }
+
+    /// Fast swap-both delta using flat trigram array, returns per-type delta.
+    /// Used by key_swap to correctly update per-type frequencies (needed for
+    /// the -max_trigram_weight * total_freq offset in score()).
+    pub(crate) fn compute_swap_both_delta_flat_typed(
+        &self,
+        pos_a: usize,
+        pos_b: usize,
+        key_a: usize,
+        key_b: usize,
+        keys: &[usize],
+        tg: &[i64],
+    ) -> TrigramDelta {
+        let nk = self.num_keys;
+        let nk2 = nk * nk;
+        let ka_valid = key_a < nk;
+        let kb_valid = key_b < nk;
+        let mut delta = TrigramDelta::default();
+
+        // Case 1: pos_a is first, pos_b is second or third
+        for combo in &self.trigram_combos_per_key[pos_a] {
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
+            if pb != pos_b && pc != pos_b { continue; }
+            let ok2 = keys[pb];
+            let ok3 = keys[pc];
+            let nk1 = key_b;
+            let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
+            let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
+            if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
+            let of = if ka_valid { tg[key_a * nk2 + ok2 * nk + ok3] } else { 0 };
+            let nf = if kb_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
+            let fd = nf - of;
+            if fd != 0 { delta.add_typed(combo.trigram_type, fd); }
+        }
+
+        // Case 2: pos_b is first, pos_a is second or third
+        for combo in &self.trigram_combos_per_key[pos_b] {
+            let pb = combo.pos_b;
+            let pc = combo.pos_c;
+            if pb != pos_a && pc != pos_a { continue; }
+            let ok2 = keys[pb];
+            let ok3 = keys[pc];
+            let nk1 = key_a;
+            let nk2v = if pb == pos_a { key_b } else if pb == pos_b { key_a } else { keys[pb] };
+            let nk3 = if pc == pos_a { key_b } else if pc == pos_b { key_a } else { keys[pc] };
+            if ok2 >= nk || ok3 >= nk || nk2v >= nk || nk3 >= nk { continue; }
+            let of = if kb_valid { tg[key_b * nk2 + ok2 * nk + ok3] } else { 0 };
+            let nf = if ka_valid { tg[nk1 * nk2 + nk2v * nk + nk3] } else { 0 };
+            let fd = nf - of;
+            if fd != 0 { delta.add_typed(combo.trigram_type, fd); }
+        }
+
+        // Case 3: pos_a is second (middle), pos_b is third (end), neither first
+        for combo in &self.trigram_combos_mid[pos_a] {
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
+            if pa == pos_a || pc != pos_b || pa == pos_b { continue; }
+            let fk = keys[pa];
+            if fk >= nk { continue; }
+            let of = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
+            let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
+            let fd = nf - of;
+            if fd != 0 { delta.add_typed(combo.trigram_type, fd); }
+        }
+
+        // Case 4: pos_b is second (middle), pos_a is third (end), neither first
+        for combo in &self.trigram_combos_mid[pos_b] {
+            let pa = combo.pos_a;
+            let pc = combo.pos_c;
+            if pa == pos_b || pc != pos_a || pa == pos_a { continue; }
+            let fk = keys[pa];
+            if fk >= nk { continue; }
+            let of = if ka_valid && kb_valid { tg[fk * nk2 + key_b * nk + key_a] } else { 0 };
+            let nf = if ka_valid && kb_valid { tg[fk * nk2 + key_a * nk + key_b] } else { 0 };
+            let fd = nf - of;
+            if fd != 0 { delta.add_typed(combo.trigram_type, fd); }
+        }
+
+        delta
     }
 
     /// Compute the correction needed for trigrams involving both swap positions.

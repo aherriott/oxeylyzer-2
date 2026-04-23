@@ -291,10 +291,27 @@ impl CachedLayout {
         for (&magic_char, magic_key_def) in layout.magic.iter() {
             let magic_key = analyzer_data.char_mapping().get_u(magic_char);
 
-            // Record initial rules
+            // Record initial rules, with conflict resolution: if another magic key
+            // already maps (leader → output), the later rule wins (the earlier rule
+            // is silently dropped). This matches the invariant enforced by
+            // replace_rule_no_update at runtime.
             for (leading_str, output_str) in magic_key_def.rules().iter() {
                 let leader = analyzer_data.char_mapping().get_u(leading_str.chars().next().unwrap_or(' '));
                 let output = analyzer_data.char_mapping().get_u(output_str.chars().next().unwrap_or(' '));
+
+                if output != EMPTY_KEY {
+                    let mut key_to_clear = None;
+                    for (&(other_magic, other_leader), &other_output) in &current_magic_rules {
+                        if other_leader == leader && other_output == output && other_magic != magic_key {
+                            key_to_clear = Some((other_magic, other_leader));
+                            break;
+                        }
+                    }
+                    if let Some(conflicting) = key_to_clear {
+                        current_magic_rules.remove(&conflicting);
+                    }
+                }
+
                 current_magic_rules.insert((magic_key, leader), output);
             }
 
@@ -594,6 +611,17 @@ impl CachedLayout {
     pub fn score_neighbor(&mut self, neighbor: Neighbor) -> i64 {
         match neighbor {
             Neighbor::KeySwap(PosPair(a, b)) => {
+                // When magic rules are active, a keyswap changes the magic-rule
+                // contribution (rules re-map different trigrams depending on key
+                // positions). The fast speculative path below doesn't account for
+                // this. Fall back to apply-score-revert when rules exist.
+                if !self.current_magic_rules.is_empty() {
+                    self.swap_key(a, b);
+                    let s = self.score();
+                    self.swap_key(a, b);
+                    return s;
+                }
+
                 let key_a = self.keys[a];
                 let key_b = self.keys[b];
                 let bg_freq = self.magic.bg_freq_flat();
@@ -604,10 +632,14 @@ impl CachedLayout {
                 let stretch = self.stretch.score_swap(a, b, key_a, key_b, &self.keys, bg_freq);
                 let scissors = self.scissors.score_swap(a, b, key_a, key_b, &self.keys, bg_freq, sg_freq);
 
-                let tg_a = self.trigram.compute_replace_delta_flat(a, key_a, key_b, &self.keys, Some(b), tg_flat);
-                let tg_b = self.trigram.compute_replace_delta_flat(b, key_b, key_a, &self.keys, Some(a), tg_flat);
-                let tg_both = self.trigram.compute_swap_both_delta_flat(a, b, key_a, key_b, &self.keys, tg_flat);
-                let trigram = self.trigram.score() + tg_a + tg_b + tg_both;
+                // Compute typed per-type frequency deltas. We need the per-type breakdown
+                // (not just the weighted sum) because score() applies an offset of
+                // -max_trigram_weight * total_freq, which depends on the per-type totals.
+                let tg_delta_a = self.trigram.compute_replace_delta_flat_typed(a, key_a, key_b, &self.keys, Some(b), tg_flat);
+                let tg_delta_b = self.trigram.compute_replace_delta_flat_typed(b, key_b, key_a, &self.keys, Some(a), tg_flat);
+                let tg_delta_both = self.trigram.compute_swap_both_delta_flat_typed(a, b, key_a, key_b, &self.keys, tg_flat);
+                let tg_delta = tg_delta_a.combine(&tg_delta_b).combine(&tg_delta_both);
+                let trigram = self.trigram.score() + self.trigram.weighted_score_of_delta(&tg_delta);
 
                 let fu_delta = if self.finger_usage_weight != 0 {
                     let fi_a = self.fingers[a] as usize;
@@ -656,14 +688,17 @@ impl CachedLayout {
 
     /// Recompute magic deltas. Call after _no_update mutations to make score() valid.
     pub fn update(&mut self) {
-        if self.current_magic_rules.is_empty() { return; }
-        let bg_freq = self.magic.bg_freq_flat();
-        let sg_freq = self.magic.sg_freq_flat();
-        let tg_freq = self.magic.tg_freq();
+        // Always reset magic deltas. If all rules have just been cleared, this
+        // wipes stale contributions from previously-active rules. If rules exist,
+        // they'll be re-added below.
         self.sfb.reset_magic_deltas();
         self.stretch.reset_magic_deltas();
         self.scissors.reset_magic_deltas();
         self.trigram.reset_magic_deltas();
+        if self.current_magic_rules.is_empty() { return; }
+        let bg_freq = self.magic.bg_freq_flat();
+        let sg_freq = self.magic.sg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
         for (&(magic_key, leader), &output) in &self.current_magic_rules {
             if output == EMPTY_KEY { continue; }
             self.sfb.add_rule(leader, output, magic_key, &self.keys, &self.key_positions, bg_freq, sg_freq, tg_freq, true);
@@ -805,10 +840,8 @@ impl CachedLayout {
     /// Swap keys at two positions. score() valid after.
     #[inline]
     pub fn swap_key(&mut self, pos_a: CachePos, pos_b: CachePos) {
-        let key_a = self.keys[pos_a];
-        let key_b = self.keys[pos_b];
         self.swap_key_no_update(pos_a, pos_b);
-        self.update_for_keyswap(key_a, key_b);
+        self.update();
     }
 
     /// Swap keys — no magic delta recompute. score() INVALID until update().
@@ -1609,11 +1642,6 @@ mod magic_rule_integration_tests {
     ///
     /// Test that conflicting rule operations don't corrupt the internal state.
     #[test]
-    #[ignore = "pre-existing bug: layout constructed with two conflicting rules \
-               (same leader+output on different magic keys) ends up with both in \
-               current_magic_rules with no conflict resolution at construction, \
-               which produces an inconsistent baseline score that conflict-resolving \
-               replace_rule() operations cannot reproduce"]
     fn test_conflicting_rules_state_consistency() {
         let keyboard = vec![
             PhysicalKey::xy(0.0, 0.0),
@@ -1657,6 +1685,7 @@ mod magic_rule_integration_tests {
         cache.replace_rule(magic_key1_id, leader_a, EMPTY_KEY);
         cache.replace_rule(magic_key2_id, leader_a, EMPTY_KEY);
         let baseline_score = cache.score();
+        let baseline_rules = cache.magic_rule_count();
 
         // Apply and conflict multiple times
         for _ in 0..5 {
@@ -1669,8 +1698,11 @@ mod magic_rule_integration_tests {
         cache.replace_rule(magic_key1_id, leader_a, EMPTY_KEY);
         cache.replace_rule(magic_key2_id, leader_a, EMPTY_KEY);
         let final_score = cache.score();
+        let final_rules = cache.magic_rule_count();
 
         // Should return to baseline
+        assert_eq!(baseline_rules, 0, "baseline should have 0 rules");
+        assert_eq!(final_rules, 0, "final should have 0 rules");
         assert_eq!(
             final_score, baseline_score,
             "After clearing all rules, score should return to baseline"
@@ -1683,8 +1715,6 @@ mod magic_rule_integration_tests {
     ///
     /// Test that key swap speculative scoring (apply=false) returns the same score as actual application.
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — speculative KeySwap \
-               computation ignores how magic rule contributions change when keys move"]
     fn test_key_swap_speculative_vs_actual() {
         let layout = create_layout_with_magic();
         let weights = create_test_weights();
@@ -1714,8 +1744,6 @@ mod magic_rule_integration_tests {
     ///
     /// Test that key swap speculative scoring works with the 6-position layout used in property tests.
     #[test]
-    #[ignore = "pre-existing drift in trigram delta math — speculative KeySwap \
-               computation ignores how magic rule contributions change when keys move"]
     fn test_key_swap_speculative_vs_actual_6pos() {
         // Use the same layout as the property tests
         let keyboard = vec![
@@ -2680,7 +2708,6 @@ mod pbt_total_score_preservation {
         /// For key swaps, swapping back returns to the original score.
         /// Key swap is its own inverse: swap(a, b) followed by swap(a, b) = identity.
         #[test]
-        #[ignore = "pre-existing drift in trigram delta math exposed by random swaps"]
         fn prop_key_swap_reversibility(
             swaps in proptest::collection::vec(arb_key_swap(), 1..=10),
             text_pattern in prop_oneof![
@@ -2814,7 +2841,6 @@ mod pbt_total_score_preservation {
         /// For magic rule reversibility, see prop_magic_rule_reversibility which handles the
         /// conflict detection properly.
         #[test]
-        #[ignore = "pre-existing drift in trigram delta math exposed by random swaps"]
         fn prop_mixed_operations_reversibility(
             swaps in proptest::collection::vec(arb_key_swap(), 0..=8),
             text_pattern in prop_oneof![
@@ -2856,9 +2882,6 @@ mod pbt_total_score_preservation {
         /// For any operation, speculative scoring (apply=false) should return the same
         /// score as actually applying the operation.
         #[test]
-        #[ignore = "pre-existing drift: speculative score_neighbor disagrees with apply \
-                   when magic rules are active (speculative ignores position-dependent \
-                   magic rule contribution changes)"]
         fn prop_speculative_scoring_consistency(
             operations in arb_operation_sequence(5),
             text_pattern in prop_oneof![

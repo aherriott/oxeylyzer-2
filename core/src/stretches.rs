@@ -384,11 +384,10 @@ impl StretchCache {
     ) -> i64 {
         let rule_key = (magic_key, leader);
 
-        // Prefer the stored delta (kept current by update_for_keyswap after swaps).
-        // Fall back to recomputing only if stored delta is absent.
-        let old_delta = if let Some(&(old_output, stored_delta)) = self.active_rules.get(&rule_key) {
+        // Stored deltas can become stale when keys move, so recompute.
+        let old_delta = if let Some(&(old_output, _stored_delta)) = self.active_rules.get(&rule_key) {
             if old_output == output { return 0; }
-            stored_delta
+            self.compute_rule_delta(leader, old_output, magic_key, keys, key_positions, bg_freq, tg_freq)
         } else {
             0
         };
