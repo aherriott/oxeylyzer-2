@@ -367,10 +367,20 @@ impl SFCache {
     }
 
     #[inline]
+    pub fn sf_bigram_weight_pub(&self, p_a: usize, p_b: usize) -> i64 {
+        self.sf_bigram_weight(p_a, p_b)
+    }
+
+    #[inline]
     fn sf_skipgram_weight(&self, p_a: usize, p_b: usize) -> i64 {
         if let Some((finger, dist)) = self.is_same_finger(p_a, p_b) {
             dist * self.sfs_finger_weights[finger]
         } else { 0 }
+    }
+
+    #[inline]
+    pub fn sf_skipgram_weight_pub(&self, p_a: usize, p_b: usize) -> i64 {
+        self.sf_skipgram_weight(p_a, p_b)
     }
 
     // ==================== Lower Bound ====================

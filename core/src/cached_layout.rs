@@ -677,15 +677,7 @@ impl CachedLayout {
                     + (self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale) + fu_delta
             }
             Neighbor::MagicRule(rule) => {
-                // TODO: speculative magic scoring for better perf.
-                // For now, apply-score-revert is the only reliable approach.
-                let revert = self.get_revert_neighbor(neighbor);
-                self.replace_rule(rule.magic_key, rule.leader, rule.output);
-                let s = self.score();
-                if let Neighbor::MagicRule(rev) = revert {
-                    self.replace_rule(rev.magic_key, rev.leader, rev.output);
-                }
-                s
+                self.score_magic_rule_speculative(rule.magic_key, rule.leader, rule.output)
             }
         }
     }
@@ -696,6 +688,170 @@ impl CachedLayout {
             Neighbor::KeySwap(PosPair(a, b)) => self.swap_key(a, b),
             Neighbor::MagicRule(rule) => self.replace_rule(rule.magic_key, rule.leader, rule.output),
         }
+    }
+
+    /// Speculative score for changing one magic rule. No state mutation.
+    ///
+    /// Rebuilds the full magic delta arrays for the hypothetical rule set
+    /// (current rules with one change) and scores them. This is equivalent
+    /// to what update() computes but without mutating any state.
+    fn score_magic_rule_speculative(&self, magic_key: CacheKey, leader: CacheKey, new_output: CacheKey) -> i64 {
+        let nk = self.magic.num_keys;
+        let bg_freq = self.magic.bg_freq_flat();
+        let tg_freq = self.magic.tg_freq();
+        let key = (magic_key, leader);
+        let old_output = self.current_magic_rules.get(&key).copied().unwrap_or(EMPTY_KEY);
+
+        // Early return if no change
+        if old_output == new_output { return self.score(); }
+
+        // Build hypothetical rule set
+        let mut hyp_rules: Vec<(CacheKey, CacheKey, CacheKey)> = Vec::new(); // (magic, leader, output)
+        for (&(mk, l), &o) in &self.current_magic_rules {
+            if o == EMPTY_KEY { continue; }
+            if mk == magic_key && l == leader { continue; } // skip the rule we're changing
+            // Handle conflict: if new rule would conflict, skip the conflicting rule
+            if new_output != EMPTY_KEY && l == leader && o == new_output && mk != magic_key {
+                continue;
+            }
+            hyp_rules.push((mk, l, o));
+        }
+        if new_output != EMPTY_KEY && new_output < nk {
+            hyp_rules.push((magic_key, leader, new_output));
+        }
+
+        // Build rule_lookup for dedup
+        let mut rule_lookup: Vec<Option<CacheKey>> = vec![None; nk * nk];
+        for &(mk, l, o) in &hyp_rules {
+            if l >= nk || o >= nk { continue; }
+            rule_lookup[l * nk + o] = Some(mk);
+        }
+
+        // Compute bg/sg deltas (same logic as update())
+        let mut bg_delta: Vec<i64> = vec![0; nk * nk];
+        let mut sg_delta: Vec<i64> = vec![0; nk * nk];
+
+        for &(mk, l, o) in &hyp_rules {
+            if l >= nk || o >= nk || mk >= nk { continue; }
+
+            let full_freq = bg_freq[l * nk + o];
+            if full_freq != 0 {
+                bg_delta[l * nk + o] -= full_freq;
+                bg_delta[l * nk + mk] += full_freq;
+            }
+
+            for c in 0..nk {
+                let tg_count = tg_freq[l][o][c];
+                if tg_count == 0 { continue; }
+                if rule_lookup[o * nk + c].is_some() { continue; }
+                bg_delta[o * nk + c] -= tg_count;
+                bg_delta[mk * nk + c] += tg_count;
+            }
+
+            for z in 0..nk {
+                let tg_count = tg_freq[z][l][o];
+                if tg_count == 0 { continue; }
+                if rule_lookup[z * nk + o].is_some() { continue; }
+                sg_delta[z * nk + o] -= tg_count;
+                sg_delta[z * nk + mk] += tg_count;
+            }
+        }
+
+        // Compute tg deltas
+        let nk2 = nk * nk;
+        let mut tg_delta: Vec<i64> = vec![0; nk * nk2];
+        for &(mk, l, o) in &hyp_rules {
+            if l >= nk || o >= nk || mk >= nk { continue; }
+            for z in 0..nk {
+                let freq = tg_freq[z][l][o];
+                if freq == 0 { continue; }
+                tg_delta[z * nk2 + l * nk + o] -= freq;
+                tg_delta[z * nk2 + l * nk + mk] += freq;
+            }
+            for c in 0..nk {
+                let freq = tg_freq[l][o][c];
+                if freq == 0 { continue; }
+                tg_delta[l * nk2 + o * nk + c] -= freq;
+                tg_delta[l * nk2 + mk * nk + c] += freq;
+            }
+        }
+
+        // Score the hypothetical deltas against each analyzer's weight functions
+        let mut sfb_magic: i64 = 0;
+        let mut stretch_magic: i64 = 0;
+        let mut scissors_magic: i64 = 0;
+
+        for a in 0..nk {
+            let pos_a = match self.key_positions.get(a).copied().flatten() {
+                Some(p) => p,
+                None => continue,
+            };
+            for b in 0..nk {
+                let bg_d = bg_delta[a * nk + b];
+                let sg_d = sg_delta[a * nk + b];
+                if bg_d == 0 && sg_d == 0 { continue; }
+                let pos_b = match self.key_positions.get(b).copied().flatten() {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if bg_d != 0 {
+                    sfb_magic += bg_d * self.sfb.sf_bigram_weight_pub(pos_a, pos_b);
+                    stretch_magic += bg_d * self.stretch.stretch_bigram_weight_pub(pos_a, pos_b);
+                    scissors_magic += bg_d * self.scissors.scissors_bigram_weight_pub(pos_a, pos_b);
+                }
+                if sg_d != 0 {
+                    sfb_magic += sg_d * self.sfb.sf_skipgram_weight_pub(pos_a, pos_b);
+                    scissors_magic += sg_d * self.scissors.scissors_skipgram_weight_pub(pos_a, pos_b);
+                }
+            }
+        }
+
+        // Trigram magic delta
+        let np = self.trigram.num_positions();
+        let mut trigram_magic: i64 = 0;
+        for a in 0..nk {
+            let pos_a = match self.key_positions.get(a).copied().flatten() {
+                Some(p) if p < np => p,
+                _ => continue,
+            };
+            for b in 0..nk {
+                let pos_b = match self.key_positions.get(b).copied().flatten() {
+                    Some(p) if p < np => p,
+                    _ => continue,
+                };
+                for c in 0..nk {
+                    let d = tg_delta[a * nk2 + b * nk + c];
+                    if d == 0 { continue; }
+                    let pos_c = match self.key_positions.get(c).copied().flatten() {
+                        Some(p) if p < np => p,
+                        _ => continue,
+                    };
+                    trigram_magic += d * self.trigram.weight_at_positions(pos_a, pos_b, pos_c);
+                }
+            }
+        }
+
+        // Base scores (without magic) + hypothetical magic deltas
+        let base_sfb = self.sfb.score() - self.sfb.magic_delta();
+        let base_stretch = self.stretch.score() - self.stretch.magic_delta();
+        let base_scissors = self.scissors.score() - self.scissors.magic_delta();
+        let base_trigram = self.trigram.score() - self.trigram.magic_delta();
+
+        // Magic penalty for hypothetical rules
+        let mut regular = 0i64;
+        let mut repeats = 0i64;
+        for &(_mk, l, o) in &hyp_rules {
+            if o == l { repeats += 1; } else { regular += 1; }
+        }
+        let hyp_penalty = -(regular * self.magic_rule_penalty + repeats * self.magic_repeat_penalty) * self.magic_penalty_scale;
+
+        let fu = self.finger_usage_score * self.finger_usage_weight * self.finger_usage_scale;
+
+        base_sfb + sfb_magic
+            + base_stretch + stretch_magic
+            + base_scissors + scissors_magic
+            + base_trigram + trigram_magic
+            + hyp_penalty + fu
     }
 
     /// Recompute magic deltas. Call after _no_update mutations to make score() valid.

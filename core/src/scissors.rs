@@ -855,6 +855,11 @@ impl ScissorsCache {
         }
     }
 
+    #[inline]
+    pub fn scissors_bigram_weight_pub(&self, p_a: usize, p_b: usize) -> i64 {
+        self.scissors_bigram_weight(p_a, p_b)
+    }
+
     /// Compute the weighted score for a scissor skipgram pair.
     /// Returns severity * weight if the positions form a scissor, 0 otherwise.
     ///
@@ -875,6 +880,11 @@ impl ScissorsCache {
         } else {
             0
         }
+    }
+
+    #[inline]
+    pub fn scissors_skipgram_weight_pub(&self, p_a: usize, p_b: usize) -> i64 {
+        self.scissors_skipgram_weight(p_a, p_b)
     }
 
     // ==================== Lower Bound ====================

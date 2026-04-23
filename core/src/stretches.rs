@@ -261,6 +261,11 @@ impl StretchCache {
         if dist > 0 { dist * self.stretch_weight } else { 0 }
     }
 
+    #[inline]
+    pub fn stretch_bigram_weight_pub(&self, p_a: usize, p_b: usize) -> i64 {
+        self.stretch_bigram_weight(p_a, p_b)
+    }
+
     // ==================== Lower Bound ====================
 
     /// Compute a lower bound on the remaining stretch penalty from unplaced keys.

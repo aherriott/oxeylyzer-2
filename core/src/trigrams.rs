@@ -835,6 +835,20 @@ impl TrigramCache {
         self.magic_rule_score_delta
     }
 
+    /// Get the raw trigram weight for a triple of positions.
+    #[inline]
+    pub fn weight_at_positions(&self, pos_a: CachePos, pos_b: CachePos, pos_c: CachePos) -> i64 {
+        let fa = self.fingers[pos_a];
+        let fb = self.fingers[pos_b];
+        let fc = self.fingers[pos_c];
+        self.get_weight(TRIGRAMS[fa * 100 + fb * 10 + fc])
+    }
+
+    #[inline]
+    pub fn num_positions(&self) -> usize {
+        self.num_positions
+    }
+
     /// Initialize pre-computed weighted scores for O(1) speculative scoring.
     ///
     /// For each position and hypothetical key, computes the total weighted score
