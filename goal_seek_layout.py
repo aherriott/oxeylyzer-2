@@ -36,7 +36,7 @@ STATE_FILE = "goal_seek_state.json"
 SAVE_DIR = "./layouts/goalseed-gen"  # where gen --save writes .dof files
 BEST_DOF_DIR = "./layouts/goalseed-best"  # permanent storage for top 3
 
-LOWER_IS_BETTER = ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout"]
+LOWER_IS_BETTER = ["sfbs", "sfs", "stretches", "redirect", "onehandin", "onehandout", "finger_balance"]
 HIGHER_IS_BETTER = ["inroll", "outroll", "alternate"]
 ALL_METRICS = LOWER_IS_BETTER + HIGHER_IS_BETTER
 
@@ -57,6 +57,7 @@ class LayoutMetrics:
     redirect: float = 0.0
     onehandin: float = 0.0
     onehandout: float = 0.0
+    finger_balance: float = 0.0  # std dev of finger usage from ideal 10% (lower = better)
     magic_rules: int = 0
 
 
@@ -123,6 +124,7 @@ def run_repl(commands: str, timeout: int = 300) -> str:
 
 def parse_analyze_output(output: str, name: str) -> LayoutMetrics:
     m = LayoutMetrics(name=name)
+    parsing_finger_use = False
     for line in output.split("\n"):
         line = line.strip()
         if mat := re.match(r"score:\s+(-?[\d,]+)", line):
@@ -145,6 +147,22 @@ def parse_analyze_output(output: str, name: str) -> LayoutMetrics:
             m.onehandin = float(mat.group(1))
         elif mat := re.match(r"Onehand Out:\s+([\d.]+)%", line):
             m.onehandout = float(mat.group(1))
+        elif line.strip().startswith("finger usage:"):
+            # Next line has the 10 comma-separated percentages
+            parsing_finger_use = True
+        elif parsing_finger_use and "," in line:
+            # Parse "  10.23, 8.45, 12.34, ..." — 10 values: LP LR LM LI LT RT RI RM RR RP
+            parts = [p.strip() for p in line.strip().split(",")]
+            try:
+                finger_pcts = [float(p) for p in parts if p]
+                if len(finger_pcts) == 10:
+                    # Balance = std dev from ideal uniform (10% each)
+                    ideal = 10.0
+                    variance = sum((f - ideal) ** 2 for f in finger_pcts) / len(finger_pcts)
+                    m.finger_balance = variance ** 0.5
+            except ValueError:
+                pass
+            parsing_finger_use = False
     return m
 
 
@@ -380,6 +398,7 @@ METRIC_TO_WEIGHT = {
     "inroll": ["inroll"],
     "outroll": ["outroll"],
     "alternate": ["alternate"],
+    "finger_balance": ["finger_usage"],
 }
 
 
@@ -388,8 +407,9 @@ def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetr
     """
     Directed weight adjustment based on which metrics miss the target.
     - Missed metrics: bump their weight up by step_size
-    - Metrics winning by >50% margin: reduce weight slightly (but keep floor of 1)
-    - Add small random noise to all weights to avoid getting stuck
+    - Metrics winning by >50% margin: reduce weight slightly
+    - Normalize so total tunable weight stays near a target sum (prevents inflation)
+    - Add small random noise to avoid getting stuck
     """
     ws = WeightSet(**asdict(base))
     comps = beats_target(metrics, target)
@@ -417,10 +437,20 @@ def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetr
                 miss_ratio = abs(margin_pct)
                 bump = max(1, int(step_size * (1 + miss_ratio)))
                 setattr(ws, wname, current + bump)
-            elif margin_pct > 0.5:
-                # Winning by >50% — reduce weight slightly (floor at 1 so metric keeps pull)
-                reduction = max(1, int(step_size * 0.3))
+            elif margin_pct > 0.2:
+                # Winning by >20% — reduce weight to free budget for missed metrics
+                reduction = max(1, int(current * 0.15))
                 setattr(ws, wname, max(1, current - reduction))
+
+    # Normalize: rescale tunable weights so their sum stays near TARGET_SUM.
+    # This prevents runaway inflation while preserving the ratios.
+    TARGET_SUM = 120  # roughly the sum of the initial default weights
+    total = sum(max(0, getattr(ws, n)) for n in TUNABLE)
+    if total > TARGET_SUM * 1.5:
+        scale = TARGET_SUM / total
+        for name in TUNABLE:
+            val = getattr(ws, name)
+            setattr(ws, name, max(0, round(val * scale)))
 
     # Small random noise on all tunable weights (±1) to avoid exact cycles
     for name in TUNABLE:
@@ -561,31 +591,46 @@ def tier_label(fitness: float) -> str:
     return "sturdy✗"
 
 
-def adaptive_gen_time(fitness: float) -> int:
+def adaptive_gen_time(fitness: float, best_metrics: LayoutMetrics = None,
+                      targets: dict = None) -> int:
     """
-    Scale gen time based on how close we are to beating all 3 targets.
+    Scale gen time continuously based on how close we are to beating targets.
 
-    Tier 3 (sturdy✗):           GEN_TIME × 1.0  (120s)
-    Tier 2 (sturdy✓ gallium✗):  GEN_TIME × 1.5  (180s)
-    Tier 1 (sturdy✓ gallium✓):  GEN_TIME × 2.5  (300s)
-    Tier 0 (ALL 3 ✓✓✓):         GEN_TIME × 4.0  (480s) — maximize margin
+    Uses the win ratio against the current bottleneck target:
+      0/10 wins → 1.0× base (120s)
+      5/10 wins → 1.5× base (180s)
+      7/10 wins → 2.0× base (240s)
+      8/10 wins → 3.0× base (360s)
+      10/10 sturdy → 3.5× base (420s)
+      10/10 sturdy+gallium → 4.0× base (480s)
+      ALL 3 → 5.0× base (600s)
     """
-    if fitness < 0:
-        return int(GEN_TIME * 4.0)
-    if fitness < 1000:
-        return int(GEN_TIME * 4.0)
-    if fitness < 2000:
-        return int(GEN_TIME * 2.5)
-    if fitness < 3000:
-        return int(GEN_TIME * 1.5)
-    return GEN_TIME
+    if best_metrics is None or targets is None:
+        return GEN_TIME
+
+    s_wins, s_total = win_count(best_metrics, targets["sturdy"])
+    g_wins, _ = win_count(best_metrics, targets["gallium"])
+    c_wins, _ = win_count(best_metrics, targets["canary"])
+
+    if s_wins == s_total and g_wins == s_total and c_wins == s_total:
+        return int(GEN_TIME * 5.0)  # ALL 3 — maximize margin
+    if s_wins == s_total and g_wins == s_total:
+        return int(GEN_TIME * 4.0)  # sturdy+gallium done, working on canary
+    if s_wins == s_total:
+        return int(GEN_TIME * 3.5)  # sturdy done, working on gallium
+
+    # Scale continuously based on sturdy win ratio
+    ratio = s_wins / s_total  # 0.0 to 1.0
+    # Map: 0→1.0×, 0.55→1.5×, 0.78→2.0×, 0.89→3.0×
+    multiplier = 1.0 + ratio * ratio * 3.0  # quadratic: slow start, fast finish
+    return int(GEN_TIME * multiplier)
 
 
 def print_vs_target(m: LayoutMetrics, target: LayoutMetrics, target_name: str):
     comps = beats_target(m, target)
     wins = sum(1 for _, _, b in comps.values() if b)
     margin = total_margin(m, target)
-    print(f"    vs {target_name}: {wins}/9 wins, margin={margin:+.1f}")
+    print(f"    vs {target_name}: {wins}/{len(comps)} wins, margin={margin:+.1f}")
     for metric in ALL_METRICS:
         val, tval, beats = comps[metric]
         marker = "✓" if beats else "✗"
@@ -606,7 +651,7 @@ def main():
     print("=" * 70)
     print("GOAL SEEK: Beat sturdy → gallium → canary, maximize margin")
     print("=" * 70)
-    print(f"Gen time per trial: {GEN_TIME}s base (scales {GEN_TIME}–{GEN_TIME*4}s by tier), top {TOP_N} per trial")
+    print(f"Gen time per trial: {GEN_TIME}s base (scales {GEN_TIME}–{GEN_TIME*5}s by win ratio), top {TOP_N} per trial")
     print()
 
     # Build
@@ -635,7 +680,7 @@ def main():
             return
         print(f"  {name:12s}: sfbs={m.sfbs:.3f}% sfs={m.sfs:.3f}% stretch={m.stretches:.3f} "
               f"inroll={m.inroll:.1f}% outroll={m.outroll:.1f}% alt={m.alternate:.1f}% "
-              f"redir={m.redirect:.1f}%")
+              f"redir={m.redirect:.1f}% fbal={m.finger_balance:.2f}")
     print()
 
     # Load or init state
@@ -666,7 +711,7 @@ def main():
     try:
         for trial in range(start_trial, 10000):
             phase = tier_label(best_fitness)
-            gen_time = adaptive_gen_time(best_fitness)
+            gen_time = adaptive_gen_time(best_fitness, last_best_metrics, targets)
             print(f"{'=' * 70}")
             print(f"TRIAL {trial} [{phase}] | fitness={best_fitness:.4f}, temp={temperature:.3f}, gen_time={gen_time}s")
             print(f"{'=' * 70}")
@@ -675,12 +720,12 @@ def main():
                 ws = best_weights
             elif last_best_metrics is not None:
                 # Determine which target is the current bottleneck
-                s_w, _ = win_count(last_best_metrics, targets["sturdy"])
-                if s_w < 9:
+                s_w, s_t = win_count(last_best_metrics, targets["sturdy"])
+                if s_w < s_t:
                     bottleneck_target = targets["sturdy"]
-                elif win_count(last_best_metrics, targets["gallium"])[0] < 9:
+                elif win_count(last_best_metrics, targets["gallium"])[0] < s_t:
                     bottleneck_target = targets["gallium"]
-                elif win_count(last_best_metrics, targets["canary"])[0] < 9:
+                elif win_count(last_best_metrics, targets["canary"])[0] < s_t:
                     bottleneck_target = targets["canary"]
                 else:
                     bottleneck_target = targets["sturdy"]  # maximize margin vs sturdy
@@ -738,25 +783,25 @@ def main():
                 metrics = analyze_layout(dof_name)
                 fitness = compute_fitness(metrics, targets)
 
-                s_wins, _ = win_count(metrics, targets["sturdy"])
+                s_wins, s_total = win_count(metrics, targets["sturdy"])
                 g_wins, _ = win_count(metrics, targets["gallium"])
                 c_wins, _ = win_count(metrics, targets["canary"])
 
-                print(f"\n  #{rank}: S={s_wins}/9 G={g_wins}/9 C={c_wins}/9 "
+                print(f"\n  #{rank}: S={s_wins}/{s_total} G={g_wins}/{s_total} C={c_wins}/{s_total} "
                       f"fitness={fitness:.4f} [{tier_label(fitness)}]")
 
                 # Show details for the current bottleneck target
-                if s_wins < 9:
+                if s_wins < s_total:
                     print_vs_target(metrics, targets["sturdy"], "sturdy")
-                elif g_wins < 9:
+                elif g_wins < s_total:
                     print_vs_target(metrics, targets["gallium"], "gallium")
-                elif c_wins < 9:
+                elif c_wins < s_total:
                     print_vs_target(metrics, targets["canary"], "canary")
                 else:
                     for tname in TARGETS:
                         m_val = total_margin(metrics, targets[tname])
-                        w, _ = win_count(metrics, targets[tname])
-                        print(f"    vs {tname}: {w}/9, margin={m_val:+.1f}")
+                        w, t = win_count(metrics, targets[tname])
+                        print(f"    vs {tname}: {w}/{t}, margin={m_val:+.1f}")
 
                 log_result(trial, ws, metrics, fitness, s_wins, g_wins, c_wins)
 

@@ -3,29 +3,26 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "p r s c m  ' &mag u a j",
-      "t n l d b  y h e o i",
-      "v q x g w  k f z . ,"
+      "j g r b f  q z &mag w ,",
+      "t s n d h  x a e m i",
+      "v y l p k  ' o u c ."
     ]
   },
   "magic": {
     "mag": {
-      "a": ".",
-      "d": "g",
-      "e": "u",
-      "i": ",",
-      "j": "i",
-      "l": "s",
-      "m": "b",
-      "n": ".",
+      ",": ",",
+      ".": ".",
+      "a": "a",
+      "g": "s",
+      "i": "i",
+      "n": "l",
       "o": "a",
-      "p": "t",
-      "r": "n",
-      "s": "l",
-      "t": "p",
-      "u": "e",
-      "x": "x",
-      "z": "e"
+      "p": "h",
+      "q": "q",
+      "r": "l",
+      "s": "y",
+      "y": "s",
+      "z": "z"
     }
   },
   "name": "gen-7"

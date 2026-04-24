@@ -1,0 +1,43 @@
+{
+    "board": "colstag",
+    "fingering": "traditional",
+    "layers": {
+        "main": [
+            "&mag m l p q  x b e a ,",
+            "h t r c y  g s u o i",
+            "k v n d w  z f ' . j"
+        ]
+    },
+    "magic": {
+        "mag": {
+            "'": "e",
+            ",": "i",
+            ".": "a",
+            "a": ".",
+            "b": "s",
+            "c": "y",
+            "d": "y",
+            "e": "'",
+            "f": "e",
+            "g": "s",
+            "i": ",",
+            "j": "i",
+            "l": "r",
+            "m": "t",
+            "n": "l",
+            "o": "a",
+            "p": "y",
+            "q": "u",
+            "r": "n",
+            "s": "e",
+            "t": "m",
+            "u": "e",
+            "v": "m",
+            "w": "d",
+            "x": "i",
+            "y": "p",
+            "z": "e"
+        }
+    },
+    "name": "oxey-v72"
+}

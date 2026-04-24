@@ -1,0 +1,29 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "c u y ' ,  j b d v x",
+      "g e i o a  f n t s l",
+      "w z &mag . q  p h k m r"
+    ]
+  },
+  "magic": {
+    "mag": {
+      ".": ".",
+      "a": "a",
+      "e": "e",
+      "j": "j",
+      "l": "y",
+      "m": "s",
+      "o": "a",
+      "q": "q",
+      "r": "l",
+      "s": "m",
+      "u": "e",
+      "x": "x",
+      "z": "e"
+    }
+  },
+  "name": "gen-8"
+}

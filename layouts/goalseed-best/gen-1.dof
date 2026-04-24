@@ -3,40 +3,31 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "&mag m l p q  x b e a ,",
-      "h t r c y  g s u o i",
-      "k v n d w  z f ' . j"
+      "j a u &mag z  g p m l y",
+      "i o e n b  d c t r s",
+      ", . ' h x  w f k q v"
     ]
   },
   "magic": {
     "mag": {
-      "'": "e",
-      ",": "i",
-      ".": "a",
       "a": ".",
-      "b": "s",
-      "c": "y",
-      "d": "y",
+      "c": "c",
       "e": "'",
-      "f": "e",
-      "g": "s",
-      "i": ",",
-      "j": "i",
-      "l": "r",
-      "m": "t",
-      "n": "l",
+      "f": "f",
+      "g": "g",
+      "i": "i",
+      "j": "j",
+      "l": "l",
+      "m": "m",
       "o": "a",
-      "p": "y",
-      "q": "u",
-      "r": "n",
-      "s": "e",
-      "t": "m",
+      "p": "p",
+      "q": "q",
+      "r": "l",
+      "s": "y",
       "u": "e",
-      "v": "m",
-      "w": "d",
-      "x": "i",
-      "y": "p",
-      "z": "e"
+      "v": "v",
+      "w": "w",
+      "y": "s"
     }
   },
   "name": "gen-1"
