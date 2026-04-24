@@ -64,7 +64,7 @@ class LayoutMetrics:
 @dataclass
 class WeightSet:
     # Seeded from t12 victory weights (beat sturdy on all 9)
-    sfbs: int = 39
+    sfbs: int = 70
     sfs: int = 6
     stretches: int = 23
     sft: int = 5
@@ -444,7 +444,7 @@ def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetr
 
     # Normalize: rescale tunable weights so their sum stays near TARGET_SUM.
     # This prevents runaway inflation while preserving the ratios.
-    TARGET_SUM = 120  # roughly the sum of the initial default weights
+    TARGET_SUM = 200  # roughly the sum of the initial default weights
     total = sum(max(0, getattr(ws, n)) for n in TUNABLE)
     if total > TARGET_SUM * 1.5:
         scale = TARGET_SUM / total

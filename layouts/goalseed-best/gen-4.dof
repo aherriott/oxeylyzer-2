@@ -3,27 +3,28 @@
   "fingering": "traditional",
   "layers": {
     "main": [
-      "c u y ' ,  j b d v x",
-      "g e i o a  f n t s l",
-      "w z &mag . q  p h k m r"
+      "r m t h b  , ' y &mag w",
+      "l s d n f  a o i e g",
+      "x v k p z  q . u j c"
     ]
   },
   "magic": {
     "mag": {
+      "'": "'",
       ".": ".",
       "a": "a",
-      "e": "e",
-      "j": "j",
-      "l": "y",
       "m": "s",
-      "o": "a",
+      "n": "f",
+      "o": "u",
+      "p": "h",
       "q": "q",
       "r": "l",
       "s": "m",
-      "u": "e",
+      "u": "i",
+      "v": "v",
       "x": "x",
-      "z": "e"
+      "y": "i"
     }
   },
-  "name": "gen-8"
+  "name": "gen-4"
 }

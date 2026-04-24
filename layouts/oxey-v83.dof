@@ -1,0 +1,34 @@
+{
+    "board": "colstag",
+    "fingering": "traditional",
+    "layers": {
+        "main": [
+            "v n f g w  k z u o j",
+            "t r s d y  l m e a i",
+            "b x &mag c p  ' h , q ."
+        ]
+    },
+    "magic": {
+        "mag": {
+            "'": "m",
+            ".": ".",
+            "c": "y",
+            "d": "y",
+            "e": ",",
+            "g": "g",
+            "i": "v",
+            "j": "j",
+            "k": "k",
+            "m": "m",
+            "n": "n",
+            "o": "a",
+            "p": "p",
+            "q": "u",
+            "r": "n",
+            "t": "t",
+            "u": "t",
+            "z": "z"
+        }
+    },
+    "name": "oxey-v83"
+}

@@ -1008,13 +1008,15 @@ impl CachedLayout {
             + self.scissors.magic_delta()
             + self.trigram.magic_delta();
 
+        let nk = self.magic.num_keys;
+
         for pos_a in 0..np {
             let key_a = self.keys[pos_a];
-            if key_a == EMPTY_KEY { continue; }
+            if key_a == EMPTY_KEY || key_a >= nk { continue; }
 
             for pos_b in (pos_a + 1)..np {
                 let key_b = self.keys[pos_b];
-                if key_b == EMPTY_KEY { continue; }
+                if key_b == EMPTY_KEY || key_b >= nk { continue; }
 
                 // SFB, stretch, scissors: O(nk) each via speculative methods
                 let new_sfb = self.sfb.speculative_magic_delta_for_swap(
