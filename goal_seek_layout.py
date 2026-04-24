@@ -384,7 +384,7 @@ METRIC_TO_WEIGHT = {
 
 
 def directed_perturb(base: WeightSet, metrics: LayoutMetrics, target: LayoutMetrics,
-                     step_size: int = 3) -> WeightSet:
+                     step_size: int = 5) -> WeightSet:
     """
     Directed weight adjustment based on which metrics miss the target.
     - Missed metrics: bump their weight up by step_size
@@ -661,6 +661,7 @@ def main():
     print(f"Temperature: {temperature:.3f}\n")
 
     last_best_metrics = None  # metrics from the best layout of the previous trial
+    last_trial_weights = best_weights  # weights used in the previous trial
 
     try:
         for trial in range(start_trial, 10000):
@@ -684,8 +685,10 @@ def main():
                 else:
                     bottleneck_target = targets["sturdy"]  # maximize margin vs sturdy
 
-                # Use directed perturbation based on feedback
-                ws = directed_perturb(best_weights, last_best_metrics, bottleneck_target)
+                # Use directed perturbation based on feedback from the LAST TRIAL's
+                # weights and metrics (not the global best). This ensures the feedback
+                # loop is coherent: we see what the last weights produced and adjust.
+                ws = directed_perturb(last_trial_weights, last_best_metrics, bottleneck_target)
                 print(f"  (directed perturbation vs {bottleneck_target.name})")
             else:
                 ws = perturb_weights(best_weights, temperature)
@@ -784,6 +787,7 @@ def main():
             # Save feedback for next trial's directed perturbation
             if trial_best_metrics is not None:
                 last_best_metrics = trial_best_metrics
+            last_trial_weights = ws
 
             # Keep .dof files that are in the top 3
             top3_names = {e[1] for e in top3.entries}

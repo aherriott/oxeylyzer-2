@@ -1,5 +1,5 @@
 {
-  "trial": 1,
+  "trial": 5,
   "best_fitness": 3000.2261327664596,
   "best_weights": {
     "sfbs": 39,
@@ -20,7 +20,7 @@
     "magic_rule_penalty": 1,
     "magic_repeat_penalty": 0
   },
-  "temperature": 0.095,
+  "temperature": 0.09885738095000002,
   "best_layout_name": "gen-5",
   "top3": [
     {
@@ -70,25 +70,25 @@
       }
     },
     {
-      "fitness": 3000.432436054894,
-      "name": "gen-6",
+      "fitness": 3000.427911222646,
+      "name": "gen-1",
       "weights": {
-        "sfbs": 39,
+        "sfbs": 45,
         "sfs": 6,
-        "stretches": 23,
+        "stretches": 22,
         "sft": 5,
-        "inroll": 3,
-        "outroll": 2,
-        "alternate": 0,
-        "redirect": 16,
-        "onehandin": 1,
-        "onehandout": 0,
+        "inroll": 6,
+        "outroll": 3,
+        "alternate": 2,
+        "redirect": 19,
+        "onehandin": 2,
+        "onehandout": 2,
         "full_scissors": 5,
         "half_scissors": 1,
         "full_scissors_skip": 2,
         "half_scissors_skip": 1,
-        "finger_usage": 19,
-        "magic_rule_penalty": 1,
+        "finger_usage": 20,
+        "magic_rule_penalty": 0,
         "magic_repeat_penalty": 0
       }
     }
