@@ -1,0 +1,34 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "c s r p v  ' k u a b",
+      "g l i t d  y h e o n",
+      "w x j m q  f &mag , . z"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "a": ".",
+      "c": "t",
+      "d": "v",
+      "e": ",",
+      "i": "r",
+      "l": "s",
+      "m": "p",
+      "n": "b",
+      "o": "a",
+      "p": "t",
+      "q": "q",
+      "r": "i",
+      "s": "l",
+      "t": "i",
+      "u": "e",
+      "v": "i",
+      "w": "c",
+      "x": "x"
+    }
+  },
+  "name": "gen-9"
+}

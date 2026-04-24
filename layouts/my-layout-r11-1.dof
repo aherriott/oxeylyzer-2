@@ -1,0 +1,21 @@
+{
+    "name": "my-layout-r11-1",
+    "board": "colstag",
+    "layers": {
+        "main": [
+            "&mag h a z q  m g n r y",
+            "p e o i ,  c d t l s",
+            "k j ' u .  f w b x v"
+        ]
+    },
+    "fingering": "traditional",
+    "magic": {
+        "mag": {
+            "'": "a", "a": "'", "b": "b", "c": "c", "d": "g",
+            "e": "h", "f": "f", "g": "g", "h": "e", "i": "z",
+            "j": "e", "l": "l", "m": "m", "n": "t", "o": "a",
+            "q": "u", "r": "l", "s": "y", "t": "h", "u": "i",
+            "v": "y", "w": "w", "x": "x", "y": "s", "z": "z"
+        }
+    }
+}

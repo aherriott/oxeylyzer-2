@@ -1,0 +1,41 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "b k l v z  y w o u q",
+      "&mag t r s m  p c e i a",
+      "h d n f x  j g ' , ."
+    ]
+  },
+  "magic": {
+    "mag": {
+      ",": ",",
+      ".": ".",
+      "a": ".",
+      "c": "y",
+      "e": "o",
+      "f": "f",
+      "g": "y",
+      "h": "b",
+      "i": "u",
+      "j": "j",
+      "k": "k",
+      "l": "l",
+      "m": "s",
+      "n": "l",
+      "o": "e",
+      "p": "e",
+      "q": "q",
+      "r": "n",
+      "s": "m",
+      "t": "r",
+      "u": "i",
+      "v": "v",
+      "x": "x",
+      "y": "p",
+      "z": "z"
+    }
+  },
+  "name": "gen-5"
+}

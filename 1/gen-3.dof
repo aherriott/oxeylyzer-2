@@ -1,0 +1,34 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      ". u o &mag j  w g y n k",
+      "i e a l m  d p s r t",
+      ", x ' h z  b c f q v"
+    ]
+  },
+  "magic": {
+    "mag": {
+      ".": ",",
+      "c": "c",
+      "d": "g",
+      "e": "x",
+      "f": "y",
+      "i": ",",
+      "k": "k",
+      "n": "n",
+      "o": "a",
+      "q": "q",
+      "r": "n",
+      "s": "y",
+      "t": "r",
+      "u": "e",
+      "v": "v",
+      "w": "w",
+      "x": "e",
+      "y": "s"
+    }
+  },
+  "name": "gen-3"
+}

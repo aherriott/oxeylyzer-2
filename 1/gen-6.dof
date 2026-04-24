@@ -1,0 +1,34 @@
+{
+  "board": "colstag",
+  "fingering": "traditional",
+  "layers": {
+    "main": [
+      "j p e . '  c &mag t n k",
+      "i s u o a  m d l r h",
+      ", f y z q  w g v x b"
+    ]
+  },
+  "magic": {
+    "mag": {
+      "a": ".",
+      "e": "y",
+      "f": "f",
+      "h": "b",
+      "i": ",",
+      "j": "i",
+      "k": "b",
+      "l": "t",
+      "n": "n",
+      "o": "a",
+      "p": "s",
+      "q": "u",
+      "r": "n",
+      "s": "p",
+      "t": "l",
+      "u": "e",
+      "y": "e",
+      "z": "a"
+    }
+  },
+  "name": "gen-6"
+}

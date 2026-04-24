@@ -29,7 +29,7 @@ CONFIG = "./analyzer-config.toml"
 CONFIG_BAK = "./analyzer-config.toml.bak"
 LAYOUT_DIR = "./layouts"
 GEN_LAYOUT = "my-layout"
-GEN_TIME = 1200  # seconds per gen run (20 minutes)
+GEN_TIME = 120  # base seconds per gen run — scales up as fitness improves
 TOP_N = 10       # parse top N from gen
 LOG_FILE = "goal_seek_results.csv"
 STATE_FILE = "goal_seek_state.json"
@@ -561,6 +561,26 @@ def tier_label(fitness: float) -> str:
     return "sturdy✗"
 
 
+def adaptive_gen_time(fitness: float) -> int:
+    """
+    Scale gen time based on how close we are to beating all 3 targets.
+
+    Tier 3 (sturdy✗):           GEN_TIME × 1.0  (120s)
+    Tier 2 (sturdy✓ gallium✗):  GEN_TIME × 1.5  (180s)
+    Tier 1 (sturdy✓ gallium✓):  GEN_TIME × 2.5  (300s)
+    Tier 0 (ALL 3 ✓✓✓):         GEN_TIME × 4.0  (480s) — maximize margin
+    """
+    if fitness < 0:
+        return int(GEN_TIME * 4.0)
+    if fitness < 1000:
+        return int(GEN_TIME * 4.0)
+    if fitness < 2000:
+        return int(GEN_TIME * 2.5)
+    if fitness < 3000:
+        return int(GEN_TIME * 1.5)
+    return GEN_TIME
+
+
 def print_vs_target(m: LayoutMetrics, target: LayoutMetrics, target_name: str):
     comps = beats_target(m, target)
     wins = sum(1 for _, _, b in comps.values() if b)
@@ -586,7 +606,7 @@ def main():
     print("=" * 70)
     print("GOAL SEEK: Beat sturdy → gallium → canary, maximize margin")
     print("=" * 70)
-    print(f"Gen time per trial: {GEN_TIME}s, top {TOP_N} per trial")
+    print(f"Gen time per trial: {GEN_TIME}s base (scales {GEN_TIME}–{GEN_TIME*4}s by tier), top {TOP_N} per trial")
     print()
 
     # Build
@@ -645,8 +665,9 @@ def main():
     try:
         for trial in range(start_trial, 10000):
             phase = tier_label(best_fitness)
+            gen_time = adaptive_gen_time(best_fitness)
             print(f"{'=' * 70}")
-            print(f"TRIAL {trial} [{phase}] | fitness={best_fitness:.4f}, temp={temperature:.3f}")
+            print(f"TRIAL {trial} [{phase}] | fitness={best_fitness:.4f}, temp={temperature:.3f}, gen_time={gen_time}s")
             print(f"{'=' * 70}")
 
             if trial == start_trial and not state:
@@ -677,13 +698,13 @@ def main():
             if save_dir.exists():
                 for f in save_dir.glob("*.dof"):
                     f.unlink()
-            print(f"Running gen my-layout -t {GEN_TIME} --save {SAVE_DIR}...")
+            print(f"Running gen my-layout -t {gen_time} --save {SAVE_DIR}...")
             gen_start = time.time()
 
             try:
                 gen_output = run_repl(
-                    f"gen {GEN_LAYOUT} -t {GEN_TIME} -n {TOP_N} -s {SAVE_DIR}\nq\n",
-                    timeout=GEN_TIME + 120,
+                    f"gen {GEN_LAYOUT} -t {gen_time} -n {TOP_N} -s {SAVE_DIR}\nq\n",
+                    timeout=gen_time + 120,
                 )
             except subprocess.TimeoutExpired:
                 print("  gen timed out, skipping")

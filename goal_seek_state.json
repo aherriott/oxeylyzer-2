@@ -1,6 +1,6 @@
 {
-  "trial": 18,
-  "best_fitness": 3000.160984242495,
+  "trial": 1,
+  "best_fitness": 3000.2261327664596,
   "best_weights": {
     "sfbs": 39,
     "sfs": 6,
@@ -20,12 +20,12 @@
     "magic_rule_penalty": 1,
     "magic_repeat_penalty": 0
   },
-  "temperature": 0.11250892098042892,
-  "best_layout_name": "gen-9",
+  "temperature": 0.095,
+  "best_layout_name": "gen-5",
   "top3": [
     {
-      "fitness": 3000.160984242495,
-      "name": "gen-9",
+      "fitness": 3000.2261327664596,
+      "name": "gen-5",
       "weights": {
         "sfbs": 39,
         "sfs": 6,
@@ -47,47 +47,47 @@
       }
     },
     {
-      "fitness": 3000.2714695625814,
+      "fitness": 3000.4033392996616,
       "name": "gen-7",
       "weights": {
-        "sfbs": 38,
-        "sfs": 9,
-        "stretches": 21,
+        "sfbs": 39,
+        "sfs": 6,
+        "stretches": 23,
         "sft": 5,
         "inroll": 3,
-        "outroll": 6,
+        "outroll": 2,
         "alternate": 0,
-        "redirect": 19,
+        "redirect": 16,
         "onehandin": 1,
-        "onehandout": 1,
+        "onehandout": 0,
         "full_scissors": 5,
         "half_scissors": 1,
         "full_scissors_skip": 2,
         "half_scissors_skip": 1,
-        "finger_usage": 20,
-        "magic_rule_penalty": 0,
+        "finger_usage": 19,
+        "magic_rule_penalty": 1,
         "magic_repeat_penalty": 0
       }
     },
     {
-      "fitness": 3000.2773642073284,
-      "name": "gen-1",
+      "fitness": 3000.432436054894,
+      "name": "gen-6",
       "weights": {
-        "sfbs": 40,
-        "sfs": 9,
-        "stretches": 24,
+        "sfbs": 39,
+        "sfs": 6,
+        "stretches": 23,
         "sft": 5,
         "inroll": 3,
-        "outroll": 5,
-        "alternate": 3,
-        "redirect": 20,
-        "onehandin": 0,
-        "onehandout": 1,
+        "outroll": 2,
+        "alternate": 0,
+        "redirect": 16,
+        "onehandin": 1,
+        "onehandout": 0,
         "full_scissors": 5,
         "half_scissors": 1,
         "full_scissors_skip": 2,
         "half_scissors_skip": 1,
-        "finger_usage": 20,
+        "finger_usage": 19,
         "magic_rule_penalty": 1,
         "magic_repeat_penalty": 0
       }
